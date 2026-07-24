@@ -40,8 +40,12 @@ export interface RedelegateFormProps {
   /** Existing weight at the destination cluster — the cap check stacks
    *  the incoming amount on top of this. */
   dstExistingWeightBps: number;
-  /** Per-cluster cap (§23.6). */
+  /** Per-cluster AGGREGATE cap (§23.6). */
   capBps: number | null;
+  /** The chain-authoritative ENFORCED per-wallet cap (issue #44). Optional —
+   *  omitted / null falls back to the `DELEGATION_PER_WALLET_CAP_BPS` floor via
+   *  `bindingPerClusterCapBps` (never "unlimited"). */
+  perWalletBps?: number | null;
   amountStr: string;
   onAmountChange: (next: string) => void;
   /** Open the destination picker. The parent handles cluster picking
@@ -105,6 +109,7 @@ export function RedelegateForm({
   dstCluster,
   dstExistingWeightBps,
   capBps,
+  perWalletBps,
   amountStr,
   onAmountChange,
   onPickDestination,
@@ -134,15 +139,25 @@ export function RedelegateForm({
 
   const exceedsSource = moveBps > srcWeightBps;
   const totalAtDstAfter = dstExistingWeightBps + moveBps;
-  // Fail-CLOSED: the WP §16.7 per-wallet cap (5000 bps) ALWAYS applies — the
-  // chain enforces it (0x0213 PerWalletCapExceeded) even when the queryable
-  // AGGREGATE cap (`capBps`, from lyth_getDelegationCap) is disabled/null on v2.
-  // The old guard gated solely on `capBps`, so a null aggregate cap stood it
-  // down and let guaranteed-revert tx through. The binding cap is the
-  // per-wallet floor, tightened by a future-active aggregate cap when present.
-  const bindingCapBps = bindingPerClusterCapBps(capBps);
-  const exceedsDstCap = exceedsPerClusterCap(dstExistingWeightBps, moveBps, capBps);
-  const dstAtCap = destinationAtPerClusterCap(dstExistingWeightBps, capBps);
+  // Fail-CLOSED: the enforced per-wallet cap ALWAYS applies — the chain-
+  // authoritative `perWalletBps` (issue #44) when live, else the WP §16.7 5000
+  // floor — and the chain enforces it (0x0213 PerWalletCapExceeded) even when the
+  // queryable AGGREGATE cap (`capBps`) is disabled/null on v2. The old guard
+  // gated solely on `capBps`, so a null aggregate cap stood it down and let
+  // guaranteed-revert tx through. The binding cap is the per-wallet cap,
+  // tightened by a future-active aggregate cap when present.
+  const bindingCapBps = bindingPerClusterCapBps(capBps, perWalletBps);
+  const exceedsDstCap = exceedsPerClusterCap(
+    dstExistingWeightBps,
+    moveBps,
+    capBps,
+    perWalletBps,
+  );
+  const dstAtCap = destinationAtPerClusterCap(
+    dstExistingWeightBps,
+    capBps,
+    perWalletBps,
+  );
 
   const amountIsZero = movePercent === null || moveBps === 0;
   const dstChosen = dstCluster !== null;

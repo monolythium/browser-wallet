@@ -207,6 +207,29 @@ describe("native LYTH fee display math", () => {
     expect(estimate(20_000n)).toBeGreaterThan(estimate(10_000n));
   });
 
+  it("displays the chain's actual 21000-unit charge, not the 30000 admission limit (B2-4)", () => {
+    // mono-core charges NATIVE_TRANSFER_EXECUTION_UNITS = 21000 for a plain
+    // transfer (executor.rs); the tx is signed with a 30000 limit purely as the
+    // admission ceiling (unused units are never charged). The Send headline must
+    // show the 21000-based DEDUCTION the user will actually pay, while the Max /
+    // insufficient-funds RESERVATION covers the 30000-limit worst case. Assert
+    // both against the chain cost model — never understate.
+    const perUnit = 3_000_000_000n; // base 2e9 + priority 1e9 (floor), Normal 1x
+    const chargeFee = computeEstimatedFeeLythoshi(
+      { ...fee, executionUnitLimitHex: "0x5208" }, // 21000 = units charged
+      10_000n,
+    );
+    const reserveFee = computeEstimatedFeeLythoshi(fee, 10_000n); // 30000 limit
+    if (chargeFee === null || reserveFee === null) {
+      throw new Error("unexpected null fee");
+    }
+    expect(chargeFee).toBe(perUnit * 21_000n); // 63_000_000_000_000n
+    expect(reserveFee).toBe(perUnit * 30_000n); // 90_000_000_000_000n
+    // Displayed charge is strictly LESS than the reserved worst case: the display
+    // never overstates the deduction; the reservation never under-reserves.
+    expect(chargeFee).toBeLessThan(reserveFee);
+  });
+
   it("uses the native-transfer fallback execution-unit limit when omitted", () => {
     // executionUnitLimitHex null → 21000 fallback; priority at the floor so the
     // clamp is a no-op and only the fallback-units path is under test.

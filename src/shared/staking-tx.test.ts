@@ -16,6 +16,7 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
+  encodeSetAutoCompoundCalldata,
 } from "@monolythium/core-sdk";
 import {
   DELEGATION_PRECOMPILE,
@@ -28,6 +29,9 @@ import {
   encodeDelegate,
   encodeRedelegate,
   encodeUndelegate,
+  encodeSetAutoCompound,
+  autoCompoundTxRequest,
+  AUTO_COMPOUND_UNIT_LIMIT_HEX,
   percentToBps,
 } from "./staking-tx.js";
 
@@ -117,6 +121,41 @@ describe("encodeClaimRewards", () => {
   it("equals the SDK claim() encoder + carries the chain claim() selector", () => {
     expect(encodeClaimRewards()).toBe(encodeClaimCalldata());
     expect(encodeClaimRewards().startsWith(computeSelector("claim()"))).toBe(true);
+  });
+});
+
+describe("encodeSetAutoCompound", () => {
+  it("equals the SDK encoder + carries the chain setAutoCompound(bool) selector 0x86593454", () => {
+    for (const enabled of [true, false]) {
+      const data = encodeSetAutoCompound(enabled);
+      expect(data).toBe(encodeSetAutoCompoundCalldata(enabled));
+      expect(data.startsWith(computeSelector("setAutoCompound(bool)"))).toBe(true);
+      expect(data.startsWith("0x86593454")).toBe(true);
+      // selector + a single bool word (right-aligned 0/1).
+      expect(data).toHaveLength(2 + 8 + 64);
+    }
+  });
+
+  it("encodes true vs false distinctly (last byte 1 vs 0)", () => {
+    const on = encodeSetAutoCompound(true);
+    const off = encodeSetAutoCompound(false);
+    expect(on).not.toBe(off);
+    expect(on.endsWith("1")).toBe(true);
+    expect(off.endsWith("0")).toBe(true);
+  });
+});
+
+describe("autoCompoundTxRequest — the submit shape (non-payable 0x100A call)", () => {
+  it("targets 0x100A with value 0 + the setAutoCompound calldata + a clear opKind", () => {
+    for (const enabled of [true, false]) {
+      const req = autoCompoundTxRequest(enabled, "0x10F2C");
+      expect(req.to).toBe(DELEGATION_PRECOMPILE);
+      expect(req.valueWeiHex).toBe("0x0"); // non-payable — no fund transfer
+      expect(req.chainIdHex).toBe("0x10F2C");
+      expect(req.data).toBe(encodeSetAutoCompound(enabled));
+      expect(req.executionUnitLimitHex).toBe(AUTO_COMPOUND_UNIT_LIMIT_HEX);
+      expect(req.opKind).toBe("set-auto-compound");
+    }
   });
 });
 

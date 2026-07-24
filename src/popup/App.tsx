@@ -35,7 +35,7 @@ import "./themes.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Networks, Bridge,
+  Home, Networks,
   ReqConnect, ReqAuthenticate,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -46,6 +46,7 @@ import { Send } from "./pages/Send";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
+import { Names } from "./pages/Names";
 import { Theme } from "./pages/Theme";
 import { DisplayPreferences } from "./pages/DisplayPreferences";
 import { LanguageSettings } from "./pages/LanguageSettings";
@@ -167,7 +168,6 @@ type Screen =
   | "agent-policy"
   | "delegations"
   | "cluster-detail"
-  | "bridge"
   | "mrv-native"
   | "approval"
   | "connected-sites"
@@ -176,6 +176,7 @@ type Screen =
   | "multisig-list"
   | "security"
   | "features"
+  | "names"
   | "theme"
   | "display-preferences"
   | "language-settings"
@@ -223,8 +224,7 @@ const TESTNET_FALLBACK: ChainEntry = {
   name: "Monolythium Testnet",
   // Bootstrap-window rpc. Mirrors TESTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
-  // live endpoint. Points at operator-2 after the regenesis in which
-  // operator-1's bls.key was destroyed; see networks.ts docstring.
+  // live endpoint (that defaults list is SDK-registry-ordered).
   rpc: "http://192.0.2.1:8545",
   builtin: true,
   official: true,
@@ -233,7 +233,7 @@ const TESTNET_FALLBACK: ChainEntry = {
 };
 
 /** While a broadcast tx is still pending, reconcile this often (ms). The chain
- *  produces BLS fast blocks well under a second, so a tx is typically included
+ *  produces fast blocks well under a second, so a tx is typically included
  *  within ~1s; poll at 1.5s so a confirm surfaces near the chain's real speed.
  *  This poll lives at the App level (not the Activity tab) so it runs on EVERY
  *  screen while the popup is open — a tx sent from Send/Home flips without
@@ -256,6 +256,9 @@ export default function App() {
   // popup matches the pre-v5 experience exactly. Flip on via Settings →
   // Features.
   const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
+  // §22.8 name registration — gated behind REGISTRY (name resolution stays on
+  // always; only the register/manage page is flag-gated).
+  const registryEnabled = useFeature("REGISTRY");
   const developerMode = useFeature("DEVELOPER_MODE");
   // Custom chains only exist where the strict connect-src allows their RPC:
   // never in a hardened (production) build, and even in a dev build only under
@@ -1570,7 +1573,6 @@ export default function App() {
           onOpenReceive={() => setScreen("receive")}
           onOpenSend={() => setScreen("send")}
           onOpenStake={() => setScreen("stake")}
-          onOpenBridge={() => setScreen("bridge")}
           // "New wallet" from the VaultPicker
           // dropdown routes through navigateTo so the screen stack
           // pushes "home" and NewWalletFlow's onCancel returns the
@@ -1588,6 +1590,7 @@ export default function App() {
               <>
                 <SetupHealthChip
                   vaultId={activeVaultSummary.id}
+                  chainIdHex={activeChain.chainId}
                   onOpenSecurity={() => navigateTo("security")}
                 />
                 <UnifiedOnboardingHintBar
@@ -1732,6 +1735,12 @@ export default function App() {
 
       {screen === "features" && (
         <Features onBack={navigateBack} />
+      )}
+
+      {/* §22.8 Names — register / manage `.mono` names. Gated behind REGISTRY;
+         reached from the main menu (which only shows the row when enabled). */}
+      {screen === "names" && registryEnabled && (
+        <Names chainIdHex={activeChain.chainId} onBack={navigateBack} />
       )}
 
       {/* Theme page. Reached from the Display & Preferences hub via navigateTo,
@@ -1916,6 +1925,7 @@ export default function App() {
           {...(agentCommerceEnabled
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
+          {...(registryEnabled ? { onOpenNames: () => navigateTo("names") } : {})}
           onSettings={() => navigateTo("settings")}
           // Display & Preferences — the same hub the Settings page routes to.
           // navigateTo pushes "main-menu" so back returns here.
@@ -2104,6 +2114,7 @@ export default function App() {
       {screen === "multisig-governance" && activeVaultSummary !== null && (
         <MultisigGovernance
           vaultId={activeVaultSummary.id}
+          chainId={activeChainId}
           onBack={() => setScreen("settings")}
         />
       )}
@@ -2172,13 +2183,6 @@ export default function App() {
             setClusterDetailEntrySource(null);
             setScreen(target);
           }}
-        />
-      )}
-
-      {screen === "bridge" && (
-        <Bridge
-          indexer={indexerSnapshot}
-          onBack={() => setScreen("home")}
         />
       )}
 

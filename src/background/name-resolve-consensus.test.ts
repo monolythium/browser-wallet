@@ -25,7 +25,10 @@ vi.mock("./networks.js", () => ({
   verifyOperatorGenesis: async () => true,
 }));
 
-import { testnetResolveNameConsensus } from "./tx-mldsa.js";
+import {
+  testnetResolveNameConsensus,
+  testnetReverseNameConsensus,
+} from "./tx-mldsa.js";
 
 // Two distinct, well-formed owner addresses. The consensus decodes the
 // returned `mono…` bech32m back to a lowercased 0x, so the round-trip is exact.
@@ -161,5 +164,99 @@ describe("testnetResolveNameConsensus (P5-002 quorum)", () => {
     const r = await testnetResolveNameConsensus("alice.mono");
     expect(r.status).toBe("insufficient");
     expect(r.addr0x).toBeNull();
+  });
+});
+
+// A lyth_nameOf response: a `*.mono` name on a hit, null on a miss.
+function nameOfResponse(name: string | null) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { address: "mono1x", name, block: "latest" },
+    }),
+  };
+}
+
+describe("testnetReverseNameConsensus (Phase 5 reverse quorum)", () => {
+  const originalFetch = globalThis.fetch;
+  const ADDR = "0x" + "33".repeat(20);
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("confirmed-hit when all operators agree on the same name", async () => {
+    installFetchPerUrl({
+      "http://op-a.test": async () => nameOfResponse("alice.mono"),
+      "http://op-b.test": async () => nameOfResponse("alice.mono"),
+      "http://op-c.test": async () => nameOfResponse("alice.mono"),
+    });
+    const r = await testnetReverseNameConsensus(ADDR);
+    expect(r.status).toBe("confirmed-hit");
+    expect(r.name).toBe("alice.mono");
+    expect(r.agreeing).toBe(3);
+  });
+
+  it("confirmed-miss when all operators agree there is no reverse name", async () => {
+    installFetchPerUrl({
+      "http://op-a.test": async () => nameOfResponse(null),
+      "http://op-b.test": async () => nameOfResponse(null),
+      "http://op-c.test": async () => nameOfResponse(null),
+    });
+    const r = await testnetReverseNameConsensus(ADDR);
+    expect(r.status).toBe("confirmed-miss");
+    expect(r.name).toBeNull();
+  });
+
+  it("FAIL-CLOSED: disagreement when one operator returns a DIFFERENT name (the rogue mislabel)", async () => {
+    installFetchPerUrl({
+      "http://op-a.test": async () => nameOfResponse("alice.mono"),
+      "http://op-b.test": async () => nameOfResponse("alice.mono"),
+      "http://op-c.test": async () => nameOfResponse("attacker.mono"), // rogue
+    });
+    const r = await testnetReverseNameConsensus(ADDR);
+    expect(r.status).toBe("disagreement");
+    expect(r.name).toBeNull();
+  });
+
+  it("FAIL-CLOSED: disagreement on a name-vs-miss split", async () => {
+    installFetchPerUrl({
+      "http://op-a.test": async () => nameOfResponse("alice.mono"),
+      "http://op-b.test": async () => nameOfResponse(null),
+      "http://op-c.test": async () => nameOfResponse("alice.mono"),
+    });
+    const r = await testnetReverseNameConsensus(ADDR);
+    expect(r.status).toBe("disagreement");
+    expect(r.name).toBeNull();
+  });
+
+  it("FAIL-CLOSED: a LONE operator asserting a name is insufficient (no single-op say-so)", async () => {
+    installFetchPerUrl({
+      "http://op-a.test": async () => nameOfResponse("attacker.mono"), // only responder
+      "http://op-b.test": async () => {
+        throw new TypeError("network down");
+      },
+      "http://op-c.test": async () => rpcErrorResponse(-32603, "operator down"),
+    });
+    const r = await testnetReverseNameConsensus(ADDR);
+    expect(r.status).toBe("insufficient");
+    expect(r.name).toBeNull();
+    expect(r.agreeing).toBe(1);
+  });
+
+  it("does NOT count a malformed / non-`*.mono` value toward the quorum", async () => {
+    installFetchPerUrl({
+      "http://op-a.test": async () => nameOfResponse("Alice.MONO"), // invalid casing → not a valid name
+      "http://op-b.test": async () => nameOfResponse("alice.mono"),
+      "http://op-c.test": async () => {
+        throw new TypeError("network down");
+      },
+    });
+    // Only op-b gives a valid answer → below the quorum of 2 → insufficient.
+    const r = await testnetReverseNameConsensus(ADDR);
+    expect(r.status).toBe("insufficient");
+    expect(r.name).toBeNull();
   });
 });

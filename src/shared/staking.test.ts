@@ -8,8 +8,17 @@ import {
   formatWeightBpsPercent,
   isPerWalletCapRevert,
   isWalletTotalCapRevert,
+  isTooManyDelegationsRevert,
+  isInactiveClusterRevert,
+  isNoClaimableRewardsRevert,
+  isRewardEscrowUnderfundedRevert,
+  classifyDelegationRevert,
   preflightDelegationVerdict,
   PER_WALLET_CAP_REVERT_MESSAGE,
+  TOO_MANY_DELEGATIONS_REVERT_MESSAGE,
+  INACTIVE_CLUSTER_REVERT_MESSAGE,
+  NO_CLAIMABLE_REWARDS_REVERT_MESSAGE,
+  REWARD_ESCROW_UNDERFUNDED_REVERT_MESSAGE,
   resolveClusterLabel,
   walletTotalHeadroomBps,
   WALLET_TOTAL_CAP_REVERT_MESSAGE,
@@ -84,6 +93,71 @@ describe("per-wallet delegation cap (WP §16.7, 0x0213 pre-flight)", () => {
     expect(isWalletTotalCapRevert("execution reverted", null)).toBe(false);
     expect(isWalletTotalCapRevert(null, 0x0213)).toBe(false); // doesn't steal the per-wallet code
     expect(isWalletTotalCapRevert(null, null)).toBe(false);
+  });
+});
+
+const base44 = {
+  action: "delegate" as const,
+  dstExistingWeightBps: 0,
+  totalDelegatedBps: 0,
+  moveBps: 1000,
+  capBps: null,
+};
+
+describe("chain-authoritative perWalletBps (issue #44 — lyth_getDelegationCap)", () => {
+  // The chain now exposes the ENFORCED per-wallet cap as `perWalletBps`; the
+  // wallet threads it through `bindingPerClusterCapBps` as an optional trailing
+  // arg. Absent/null/out-of-range MUST fail closed to DELEGATION_PER_WALLET_CAP_BPS
+  // (5000), NEVER to "unlimited"; a live tighten below the floor MUST be honored.
+  it("binding cap: a live perWalletBps tighter than the 5000 floor is honored", () => {
+    expect(bindingPerClusterCapBps(null, 4000)).toBe(4000);
+  });
+
+  it("binding cap: an absent/null live perWalletBps falls back to the 5000 floor (never unlimited)", () => {
+    expect(bindingPerClusterCapBps(null, undefined)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+    expect(bindingPerClusterCapBps(null, null)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+  });
+
+  it("binding cap: an out-of-range live perWalletBps fails closed to 5000 in both directions", () => {
+    expect(bindingPerClusterCapBps(null, 0)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+    expect(bindingPerClusterCapBps(null, 20000)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+  });
+
+  it("binding cap: min() of aggregate and live per-wallet — the tighter dial wins either way", () => {
+    expect(bindingPerClusterCapBps(3000, 4000)).toBe(3000); // aggregate tighter
+    expect(bindingPerClusterCapBps(6000, 4000)).toBe(4000); // per-wallet tighter
+  });
+
+  it("binding cap: a disabled/null aggregate still never lifts a live per-wallet floor", () => {
+    expect(bindingPerClusterCapBps(null, 4000)).toBe(4000);
+  });
+
+  it("exceedsPerClusterCap: a live per-wallet cap tightens the guard below the 5000 floor", () => {
+    // 4000 existing + 1 > live cap 4000 → over, even though it is under 5000.
+    expect(exceedsPerClusterCap(4000, 1, null, 4000)).toBe(true);
+    expect(exceedsPerClusterCap(3000, 1000, null, 4000)).toBe(false); // == 4000, at cap not over
+  });
+
+  it("destinationAtPerClusterCap: honors a live per-wallet cap tighter than the floor", () => {
+    expect(destinationAtPerClusterCap(4000, null, 4000)).toBe(true);
+    expect(destinationAtPerClusterCap(3999, null, 4000)).toBe(false);
+  });
+
+  it("dualCapHeadroomBps: a live per-wallet cap bounds the cluster headroom term", () => {
+    expect(dualCapHeadroomBps(null, 0, 0, 4000)).toBe(4000); // live 4000 < 5000 floor
+    expect(dualCapHeadroomBps(null, 3000, 0, 4000)).toBe(1000); // 4000 − 3000
+  });
+
+  it("preflightDelegationVerdict: blocks using a live per-wallet cap tighter than 5000", () => {
+    expect(
+      preflightDelegationVerdict({ ...base44, dstExistingWeightBps: 4000, moveBps: 1, perWalletBps: 4000 }),
+    ).toEqual({ ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE });
+  });
+
+  it("preflightDelegationVerdict: a live per-wallet cap does NOT falsely block a move within it", () => {
+    expect(
+      preflightDelegationVerdict({ ...base44, dstExistingWeightBps: 3000, moveBps: 500, perWalletBps: 4000 }),
+    ).toEqual({ ok: true });
   });
 });
 
@@ -184,6 +258,111 @@ describe("preflightDelegationVerdict (on-submit dual-cap block)", () => {
       moveBps: 5000,
     });
     expect(v).toEqual({ ok: true });
+  });
+
+  it("blocks (max-10) a delegate to a NEW cluster when already at 10 delegations", () => {
+    const v = preflightDelegationVerdict({
+      ...base,
+      dstExistingWeightBps: 0, // NEW row
+      currentDelegationCount: 10,
+    });
+    expect(v).toEqual({
+      ok: false,
+      message: TOO_MANY_DELEGATIONS_REVERT_MESSAGE,
+    });
+  });
+
+  it("max-10 blocks a redelegate to a NEW cluster at the cap (chain rejects before freeing the source)", () => {
+    const v = preflightDelegationVerdict({
+      ...base,
+      action: "redelegate",
+      dstExistingWeightBps: 0,
+      currentDelegationCount: 10,
+    });
+    expect(v).toEqual({
+      ok: false,
+      message: TOO_MANY_DELEGATIONS_REVERT_MESSAGE,
+    });
+  });
+
+  it("max-10 EXEMPTS a top-up of an existing cluster (no new row is opened)", () => {
+    const v = preflightDelegationVerdict({
+      ...base,
+      dstExistingWeightBps: 1000, // existing row → chain does not count it
+      moveBps: 1000, // 2000 < 5000 per-cluster cap
+      currentDelegationCount: 10,
+    });
+    expect(v).toEqual({ ok: true });
+  });
+
+  it("max-10 allows a NEW cluster while under 10 delegations", () => {
+    expect(
+      preflightDelegationVerdict({
+        ...base,
+        dstExistingWeightBps: 0,
+        currentDelegationCount: 9,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("max-10 is skipped when the count is omitted (caller doesn't know it)", () => {
+    // base omits currentDelegationCount → no count block; other caps still run.
+    expect(preflightDelegationVerdict(base)).toEqual({ ok: true });
+  });
+});
+
+describe("delegation revert classification (0x02NN → user message)", () => {
+  it("isTooManyDelegationsRevert: matches 0x0206 code / name / hex, ignores others", () => {
+    expect(isTooManyDelegationsRevert(null, 0x0206)).toBe(true);
+    expect(isTooManyDelegationsRevert("TooManyDelegations", null)).toBe(true);
+    expect(isTooManyDelegationsRevert("reverted: 0x0206", null)).toBe(true);
+    expect(isTooManyDelegationsRevert("execution reverted", 0x0213)).toBe(false);
+    expect(isTooManyDelegationsRevert(null, null)).toBe(false);
+  });
+
+  it("isInactiveClusterRevert: matches 0x020B code / name / hex", () => {
+    expect(isInactiveClusterRevert(null, 0x020b)).toBe(true);
+    expect(isInactiveClusterRevert("DelegationToInactiveCluster", null)).toBe(true);
+    expect(isInactiveClusterRevert("reverted: 0x020b", null)).toBe(true);
+    expect(isInactiveClusterRevert(null, 0x0206)).toBe(false);
+  });
+
+  it("isNoClaimableRewardsRevert: matches 0x020D code / name / hex", () => {
+    expect(isNoClaimableRewardsRevert(null, 0x020d)).toBe(true);
+    expect(isNoClaimableRewardsRevert("NoClaimableRewards", null)).toBe(true);
+    expect(isNoClaimableRewardsRevert(null, 0x0214)).toBe(false);
+  });
+
+  it("isRewardEscrowUnderfundedRevert: matches 0x0214 code / name / hex (retryable)", () => {
+    expect(isRewardEscrowUnderfundedRevert(null, 0x0214)).toBe(true);
+    expect(isRewardEscrowUnderfundedRevert("RewardEscrowUnderfunded", null)).toBe(
+      true,
+    );
+    expect(isRewardEscrowUnderfundedRevert(null, 0x020d)).toBe(false);
+  });
+
+  it("classifyDelegationRevert maps each known 0x02NN to its message, else null", () => {
+    expect(classifyDelegationRevert(null, 0x0213)).toBe(
+      PER_WALLET_CAP_REVERT_MESSAGE,
+    );
+    expect(classifyDelegationRevert(null, 0x0205)).toBe(
+      WALLET_TOTAL_CAP_REVERT_MESSAGE,
+    );
+    expect(classifyDelegationRevert(null, 0x0206)).toBe(
+      TOO_MANY_DELEGATIONS_REVERT_MESSAGE,
+    );
+    expect(classifyDelegationRevert(null, 0x020b)).toBe(
+      INACTIVE_CLUSTER_REVERT_MESSAGE,
+    );
+    expect(classifyDelegationRevert(null, 0x020d)).toBe(
+      NO_CLAIMABLE_REWARDS_REVERT_MESSAGE,
+    );
+    expect(classifyDelegationRevert(null, 0x0214)).toBe(
+      REWARD_ESCROW_UNDERFUNDED_REVERT_MESSAGE,
+    );
+    // Unmapped code / bare reason → null (caller keeps the raw node reason).
+    expect(classifyDelegationRevert("execution reverted", null)).toBeNull();
+    expect(classifyDelegationRevert(null, 0x0204)).toBeNull();
   });
 });
 

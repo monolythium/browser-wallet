@@ -1,11 +1,7 @@
 // Popup-side helpers for talking to the background service worker.
 // All calls go through chrome.runtime.sendMessage with `{ kind: "popup", ... }`.
 
-import type {
-  WalletBridgeRouteDisclosure,
-  WalletBridgeRouteReadiness,
-  WalletTokenBalance,
-} from "../shared/token-balances.js";
+import type { WalletTokenBalance } from "../shared/token-balances.js";
 import { legacyChainFeeSuggestionWeiToLythoshi } from "../shared/chain-units.js";
 import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
@@ -14,9 +10,6 @@ import type { TxOpKind } from "../shared/notifications.js";
 import type { WalletAuthRequestV1 } from "../shared/wallet-auth.js";
 import type { CurrencyCode } from "../shared/iso4217.js";
 export type {
-  WalletBridgeDisclosureValue,
-  WalletBridgeRouteDisclosure,
-  WalletBridgeRouteReadiness,
   WalletMrcHolder,
   WalletMrcHoldersResponse,
   WalletTokenBalance,
@@ -252,6 +245,9 @@ const COALESCED_POPUP_OPS = new Set<string>([
   "wallet-balance",
   "wallet-activity-get",
   "wallet-indexer-snapshot",
+  // #B3-2 indexer-off fallback: an idempotent read fired automatically by the
+  // empty-state effect; coalesce so multiple mounts don't double-scan txFeed.
+  "wallet-activity-txfeed",
 ]);
 
 function send<T>(op: string, payload?: unknown): Promise<T> {
@@ -519,15 +515,12 @@ export interface WalletAddressActivityRow {
 
 export interface WalletIndexerSnapshot {
   tokenBalances: WalletTokenBalance[];
-  bridgeRouteDisclosure?: WalletBridgeRouteDisclosure;
-  bridgeRouteDisclosures?: WalletBridgeRouteDisclosure[];
-  bridgeRouteReadiness?: WalletBridgeRouteReadiness | null;
   mrcAccount: MrcAccountLookupResponse | null;
   nativeAgentState?: import("../shared/native-agent-state.js").NativeAgentStateResponse | null;
   addressLabel: WalletAddressLabel | null;
   delegationHistory: WalletDelegationHistoryRow[];
   addressActivity: WalletAddressActivityRow[];
-  errors: Partial<Record<"tokenBalances" | "mrcHolders" | "mrcAccount" | "nativeAgentState" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
+  errors: Partial<Record<"tokenBalances" | "mrcHolders" | "mrcAccount" | "nativeAgentState" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
 }
 
 export async function bgWalletIndexerSnapshot(
@@ -560,6 +553,43 @@ export async function bgWalletActivityGet(
   | { ok: false; reason?: string }
 > {
   return send("wallet-activity-get", { address, chainIdHex });
+}
+
+/** #16(b) "load more" — fetch the NEXT (older) page of the confirmed
+ *  address-activity timeline, cursor-driven. Read-only + additive: the SW does
+ *  NOT cache/reconcile these rows; the popup appends them (deduped) below the
+ *  cached window. Returns the mapped confirmed rows + the next keyset cursor
+ *  (null → timeline exhausted, hide "load more"). A transient/operator error
+ *  returns `ok:false` — never a fabricated "no more pages". */
+export async function bgWalletActivityPage(
+  address: string,
+  chainIdHex: string,
+  cursor: string,
+): Promise<
+  | {
+      ok: true;
+      rows: import("../shared/activity.js").ConfirmedRow[];
+      nextCursor: string | null;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-page", { address, chainIdHex, cursor });
+}
+
+/** #B3-2 indexer-OFF fallback — fetch recent activity from the GLOBAL
+ *  `lyth_txFeed` (served by a block scan even on indexer-OFF operators),
+ *  FILTERED to this address + mapped to confirmed rows. The popup fires this
+ *  ONLY when the per-address timeline is empty for a benign reason (indexer
+ *  disabled / genuinely empty) — never on a transient error. `ok:false` or an
+ *  empty `rows` → the popup keeps the honest empty state (no fabrication). */
+export async function bgWalletActivityTxFeed(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; rows: import("../shared/activity.js").ConfirmedRow[] }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-txfeed", { address, chainIdHex });
 }
 
 /** Dismiss a TERMINAL (dropped/expired) pending row from the activity list.
@@ -636,6 +666,110 @@ export async function bgWalletResolveName(
   | { ok: false; reason?: string }
 > {
   return send("wallet-resolve-name", { name, chainIdHex });
+}
+
+// ── §22.8 name-registry (0x110E) write bridges ───────────────────────────────
+
+/** Read-only cost quote for a name registration (validates + prices; no submit).
+ *  `invalid:true` distinguishes a name-format rejection from a transport error. */
+export async function bgWalletNameQuote(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      canonical: string;
+      category: string;
+      parentName: string | null;
+      costLythoshiHex: string;
+      feeUnitLythoshiHex: string;
+    }
+  | { ok: false; reason?: string; invalid?: boolean; invalidReason?: string }
+> {
+  return send("wallet-name-quote", { name, chainIdHex });
+}
+
+/** Register a Human/Agent `.mono` name — value == the exact U-curve cost. */
+export async function bgWalletNameRegister(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      txHash: string;
+      via?: string;
+      canonical: string;
+      category: string;
+      costLythoshiHex: string;
+    }
+  | { ok: false; reason?: string; code?: number }
+> {
+  return send("wallet-name-register", { name, chainIdHex });
+}
+
+/** Propose transferring an owned name to a recipient (free; opens a 24h window). */
+export async function bgWalletNamePropose(
+  name: string,
+  recipientAddr0x: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; txHash: string; via?: string; canonical: string }
+  | { ok: false; reason?: string; code?: number }
+> {
+  return send("wallet-name-propose", { name, recipientAddr0x, chainIdHex });
+}
+
+/** Accept a pending transfer — the recipient re-pays the full U-curve cost. */
+export async function bgWalletNameAccept(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; txHash: string; via?: string; canonical: string; costLythoshiHex: string }
+  | { ok: false; reason?: string; code?: number }
+> {
+  return send("wallet-name-accept", { name, chainIdHex });
+}
+
+export interface OwnedNameRow {
+  name: string;
+  category: string;
+  addedAt: number;
+  status: "owned" | "transferred" | "not-found" | "unknown";
+}
+
+/** Best-effort owned-names list (local ledger reconciled against the chain).
+ *  There is no on-chain owned-names reader, so this only ever lists names
+ *  registered/accepted from this wallet — never a fabricated set. */
+export async function bgWalletNamesOwned(
+  chainIdHex: string,
+): Promise<
+  | { ok: true; names: OwnedNameRow[] }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-names-owned", { chainIdHex });
+}
+
+/** Best-effort "does the active address have a `.mono` name" for the onboarding
+ *  nudge. Biased to `hasName: true` on any uncertainty (never falsely nags a
+ *  name-owner). Always resolves `ok: true`. */
+export async function bgWalletHasName(
+  chainIdHex: string,
+): Promise<{ ok: true; hasName: boolean }> {
+  return send("wallet-has-name", { chainIdHex });
+}
+
+/** §22.8 reverse-resolve an address → its canonical `*.mono` name, QUORUM-checked
+ *  (mirrors forward-resolve) and cache-backed. Display-only. Returns
+ *  `name: null` on a confirmed miss, a quorum disagreement, or any error — the
+ *  caller then shows the bech32m address (never a single-operator name). */
+export async function bgWalletReverseName(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; name: string | null; cached?: boolean; status?: string }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-reverse-name", { address, chainIdHex });
 }
 
 // Indexer-status polling for the §28.2.1 staleness banner.
@@ -836,7 +970,7 @@ export type NativeAgentStateOutcome =
  *
  *  This is intentionally NOT per-RPC-endpoint attribution. The chain
  *  method is keyed on consensus authority index; mapping the wallet's
- *  RPC operators back to BLS validator slots would require chaining
+ *  RPC operators back to ML-DSA-65 authority slots would require chaining
  *  `lyth_resolveOperatorAuthority` + `lyth_clusterStatus.members[]`
  *  per row, which is deferred to a future commit. */
 export async function bgChainSigningActivity(args?: {
@@ -949,9 +1083,9 @@ export async function bgWalletOperatorStatus(): Promise<
  * Read the active chain's current block number. Used by the popup's
  * chain-health poll to drive the LIVE / STALLED / OFFLINE state machine —
  * the popup compares blockHex across ticks, sets STALLED if it doesn't
- * advance for 30+ seconds, OFFLINE if a tick errors. The service worker
+ * advance for 15+ seconds, OFFLINE if a tick errors. The service worker
  * shares its operator cache with `bgWalletOperatorStatus` so the operator
- * probe doesn't re-run on every 8s health tick.
+ * probe doesn't re-run on every 5s health tick.
  */
 export async function bgWalletChainBlockNumber(): Promise<
   { ok: true; blockHex: string; operator: string | null }
@@ -1993,6 +2127,24 @@ export async function bgMultisigImportProposal(args: {
   return send("multisig-import-proposal", args);
 }
 
+/** Phase 9 commit 3 — the native `0x40` multisig submit path (spend FROM a monom
+ *  account). DEV-GATED + e2e-UNVERIFIED: the SW refuses it unless DEVELOPER_MODE
+ *  is on. It builds the base-sighash witness envelope + broadcasts via the
+ *  fan-out; it NEVER routes through the single-key plaintext path. c3 wires the
+ *  fully-local (self-only) roster; external-member collection is deferred. */
+export async function bgNativeMultisigSend(args: {
+  vaultId: string;
+  to: string;
+  valueWeiHex?: string;
+  dataHex?: string;
+  chainIdHex: string;
+}): Promise<
+  | { ok: true; txHash: string; via: string; monom: string }
+  | { ok: false; reason?: string }
+> {
+  return send("native-multisig-send", args);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Staking + delegation reads (§23 whitepaper)
 // ─────────────────────────────────────────────────────────────────────
@@ -2144,61 +2296,6 @@ export async function bgStakingAutovoteSeed(): Promise<
   { ok: true; seedHex: string } | { ok: false; reason: string }
 > {
   return send("staking-autovote-seed");
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// v5 wiring — bridge circuit-breaker / drain health reads (§20/§25.2).
-//
-// Disclosure-only. The SDK exposes NO live bridge quote/submit primitive
-// (BRIDGE_QUOTE_API_BLOCKED_REASON / BRIDGE_SUBMIT_API_BLOCKED_REASON),
-// so these enrich the static `BridgeRouteDisclosure` rows with live
-// pause posture + remaining drain headroom; there is no send path.
-// ────────────────────────────────────────────────────────────────────────────
-
-/** Convenience re-export of the typed outcome the SW returns for
- *  `bridge-health`. */
-export type BridgeHealthOutcome =
-  import("../shared/chain-readiness.js").ChainOutcome<
-    import("@monolythium/core-sdk").BridgeHealthResponse
-  >;
-
-/** Convenience re-export of the typed outcome the SW returns for
- *  `bridge-drain-status`. */
-export type BridgeDrainStatusOutcome =
-  import("../shared/chain-readiness.js").ChainOutcome<
-    import("@monolythium/core-sdk").BridgeDrainStatus
-  >;
-
-/** Read a page of bridge-record circuit-breaker / pause posture (MB-2
- *  `lyth_bridgeHealth`). The popup branches on
- *  `outcome.kind === "live"` before showing any live-data badge; a
- *  not-deployed operator collapses to `mock-not-deployed` with an empty
- *  records page so the disclosure panel keeps rendering. */
-export async function bgReadBridgeHealth(
-  cursor?: string | null,
-  limit?: number,
-): Promise<
-  | { ok: true; outcome: BridgeHealthOutcome }
-  | { ok: false; reason?: string }
-> {
-  const payload: { cursor?: string | null; limit?: number } = {};
-  if (cursor !== undefined) payload.cursor = cursor;
-  if (limit !== undefined) payload.limit = limit;
-  return send("bridge-health", payload);
-}
-
-/** Read the live per-route drain bucket for one `(bridgeId,
- *  wrappedAsset)` pair (MB-2 `lyth_bridgeDrainStatus`). `remaining` is
- *  the chain-computed `cap - drained` clamped at 0; `"0x0"` means "no
- *  per-asset cap" (the bridge default applies). */
-export async function bgReadBridgeDrainStatus(
-  bridgeId: string,
-  wrappedAsset: string,
-): Promise<
-  | { ok: true; outcome: BridgeDrainStatusOutcome }
-  | { ok: false; reason?: string }
-> {
-  return send("bridge-drain-status", { bridgeId, wrappedAsset });
 }
 
 // ────────────────────────────────────────────────────────────────────────────

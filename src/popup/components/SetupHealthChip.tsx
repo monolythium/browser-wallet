@@ -22,6 +22,7 @@ import {
   bgSlhDsaBackupGet,
   bgTwoTierGetState,
   bgVaultsList,
+  bgWalletHasName,
 } from "../bg.js";
 import { FEATURE_FLAGS } from "../../shared/two-tier-features.js";
 import { isBackupComplete } from "../../shared/slh-dsa-backup.js";
@@ -62,11 +63,14 @@ async function saveRecoveryNagEntry(
 
 export interface SetupHealthChipProps {
   vaultId: string;
+  /** Active chain — used for the best-effort `.mono` name check. */
+  chainIdHex: string;
   onOpenSecurity: () => void;
 }
 
 export function SetupHealthChip({
   vaultId,
+  chainIdHex,
   onOpenSecurity,
 }: SetupHealthChipProps) {
   const [health, setHealth] = useState<SetupHealth | null>(null);
@@ -77,13 +81,15 @@ export function SetupHealthChip({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [backupR, passkeyR, featuresR, vaultsR, nagMap] = await Promise.all([
-        bgSlhDsaBackupGet(vaultId),
-        bgPasskeyGetState(vaultId),
-        bgTwoTierGetState(),
-        bgVaultsList(),
-        loadRecoveryNagMap(),
-      ]);
+      const [backupR, passkeyR, featuresR, vaultsR, hasNameR, nagMap] =
+        await Promise.all([
+          bgSlhDsaBackupGet(vaultId),
+          bgPasskeyGetState(vaultId),
+          bgTwoTierGetState(),
+          bgVaultsList(),
+          bgWalletHasName(chainIdHex),
+          loadRecoveryNagMap(),
+        ]);
       if (cancelled) return;
       const hasSlhDsaBackup =
         backupR.ok && backupR.backup !== null && isBackupComplete(backupR.backup);
@@ -96,6 +102,10 @@ export function SetupHealthChip({
         vaultsR.vaults.some(
           (v) => v.id === vaultId && v.kind === "multisig",
         );
+      // The `.mono` name step applies only when REGISTRY is enabled. The
+      // has-name check is biased to `true` (don't nag) on any uncertainty.
+      const nameApplicable = featuresR.ok && featuresR.state.REGISTRY.enabled;
+      const hasMonoName = hasNameR.ok ? hasNameR.hasName : true;
       setNagEntry(nagMap[vaultId]);
       setHealth(
         computeSetupHealth({
@@ -103,6 +113,8 @@ export function SetupHealthChip({
           hasPasskey,
           hasAnyFeatureEnabled,
           isMultisigVault,
+          nameApplicable,
+          hasMonoName,
           // Dismissal flags don't affect health — pass anything.
           dismissed: {
             slhDsaBackupPermanently: false,
@@ -116,7 +128,7 @@ export function SetupHealthChip({
     return () => {
       cancelled = true;
     };
-  }, [vaultId]);
+  }, [vaultId, chainIdHex]);
 
   if (health === null) return null;
   // All-3 configured wins regardless; else honour the per-vault snooze/dismiss.

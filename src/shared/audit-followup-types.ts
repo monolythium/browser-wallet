@@ -35,8 +35,8 @@
 //
 // Whitepaper alignment:
 //  - lyth_previewTransactionHooks → §15 (spending policy hook gate)
-//  - lyth_signingActivity         → §21.4 (BLS block-tier finality)
-//                                   + MD-CORE-0004 reserved-status
+//  - lyth_signingActivity         → ML-DSA-65 aggregate-cert signing
+//                                   participation + MD-CORE-0004 reserved-status
 //  - lyth_getServiceProbe         → §29.5 (operator availability)
 //  - lyth_upcomingDuties          → §21.4 + §23 (delegator
 //                                   transparency for committee

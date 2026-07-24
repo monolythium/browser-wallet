@@ -50,6 +50,14 @@ export const ACTIVITY_ROLLING_WINDOW = 100;
  *  legacy `evictExpiredPending` shim + its tests. */
 export const PENDING_TTL_MS = 5 * 60 * 1000;
 
+/** D6: a broadcast is fanned out to several operators, so a persisted pending row
+ *  means the fleet ADMITTED the tx (≥1 operator accepted). If it still isn't
+ *  included after this window, surface an honest "broadcast · waiting for
+ *  inclusion" state (the X1 stuck-tx condition) — not a false failure, not an
+ *  infinite silent pending. Earlier than PENDING_SLOW_MS; resolves to confirmed
+ *  the moment inclusion lands. ~20s ≫ normal inclusion, well short of "slow". */
+export const ADMITTED_INCLUSION_WINDOW_MS = 20 * 1000;
+
 /** A pending row past this age (with no terminal receipt/indexer verdict) is
  *  flagged "taking longer than usual" — a hint, not a removal. */
 export const PENDING_SLOW_MS = 3 * 60 * 1000;
@@ -230,10 +238,21 @@ export interface PendingTxRow {
 /** Pending-row lifecycle (display/state). Primary terminal verdict is a receipt
  *  or an indexer match (handled in the SW poll); these are the *time/nonce*
  *  states for a row that has neither yet. */
-export type PendingLifecycle = "pending" | "slow" | "dropped" | "expired";
+export type PendingLifecycle =
+  | "pending"
+  | "awaiting-inclusion"
+  | "slow"
+  | "dropped"
+  | "expired";
 
 function isPendingLifecycle(v: unknown): v is PendingLifecycle {
-  return v === "pending" || v === "slow" || v === "dropped" || v === "expired";
+  return (
+    v === "pending" ||
+    v === "awaiting-inclusion" ||
+    v === "slow" ||
+    v === "dropped" ||
+    v === "expired"
+  );
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -377,6 +396,12 @@ export type ActivityRow = PendingTxRow | ConfirmedRow;
 export interface ActivityCache {
   confirmed: ConfirmedRow[];
   lastFetchedAtMs: number;
+  /** Keyset cursor for the NEXT (older) page of the `lyth_getAddressActivity`
+   *  timeline, surfaced from the page-1 envelope's `nextCursor` (#16(b)). Null
+   *  (or absent on a legacy cache) when the timeline is exhausted — the popup's
+   *  "load more" affordance is hidden. Stored in the cache so it survives the
+   *  30 s read-through window (a cache-hit poll keeps the same affordance). */
+  nextCursor?: string | null;
 }
 
 /** Persisted shape under `mono.activity.pending.<addr>.<chain>`. Always a
@@ -654,7 +679,17 @@ export function validateActivityCache(input: unknown): ActivityCache | null {
     const row = validateActivityRow(raw);
     if (row && row.kind !== "pending_tx") confirmed.push(row);
   }
-  return { confirmed, lastFetchedAtMs: r.lastFetchedAtMs };
+  // Optional pagination cursor (#16(b)): tolerate a string or null; a legacy
+  // cache (no field) or a malformed value degrades to "no more pages".
+  const nextCursor =
+    typeof r.nextCursor === "string" || r.nextCursor === null
+      ? r.nextCursor
+      : undefined;
+  return {
+    confirmed,
+    lastFetchedAtMs: r.lastFetchedAtMs,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  };
 }
 
 /** Validate the pending-row cache shape. Returns null on any failure. */
@@ -1015,6 +1050,9 @@ export function classifyStalePending(
   const age = now - row.broadcastedAtMs;
   if (age >= PENDING_ABSOLUTE_CAP_MS) return { status: "expired" };
   if (age >= PENDING_SLOW_MS) return { status: "slow" };
+  // D6: admitted (the fan-out broadcast succeeded) but not yet included past the
+  // window → honest "waiting for inclusion", not a silent pending.
+  if (age >= ADMITTED_INCLUSION_WINDOW_MS) return { status: "awaiting-inclusion" };
   return { status: "pending" };
 }
 
@@ -1392,6 +1430,28 @@ export function confirmedRowDedupKey(r: ConfirmedRow): string {
   return base;
 }
 
+/** Append a freshly-fetched OLDER activity page onto the rows already shown,
+ *  dropping any row already present (keyed by {@link confirmedRowDedupKey}) so a
+ *  cursor overlap between page N and page N+1 — or an event surfaced on both the
+ *  address-activity and delegation-history streams — never double-renders. The
+ *  incoming page keeps its incoming order; `mergeActivityNewestFirst` sorts the
+ *  combined list at render, so appended (older) rows fall to the bottom. Pure —
+ *  drives the popup's "load more" (#16(b) pagination). */
+export function dedupeAppendConfirmed(
+  existing: readonly ConfirmedRow[],
+  incoming: readonly ConfirmedRow[],
+): ConfirmedRow[] {
+  const seen = new Set(existing.map(confirmedRowDedupKey));
+  const out: ConfirmedRow[] = [...existing];
+  for (const row of incoming) {
+    const k = confirmedRowDedupKey(row);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(row);
+  }
+  return out;
+}
+
 /** Build the cross-stream suppression key-set from delegation-history rows.
  *  Exposed for the SW handler / tests so they can drive mapAddressActivityToRows. */
 export function delegationKeySet(
@@ -1536,6 +1596,10 @@ export function mergeIndexerSnapshot(
   fresh: {
     activity: RawAddressActivity[];
     delegation: RawDelegationHistory[];
+    /** Page-1 `nextCursor` from the address-activity envelope (#16(b)); stored
+     *  on the cache to drive "load more". Absent → no cursor field is written
+     *  (byte-identical to the pre-pagination cache). */
+    nextCursor?: string | null;
   },
   now: number,
   prior?: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
@@ -1573,7 +1637,13 @@ export function mergeIndexerSnapshot(
   // doesn't blink out when applyLocalClaims retires the local copy.
   const withClaimAmounts = prior ? applyStickyClaimAmount(named, prior) : named;
 
-  return { confirmed: withClaimAmounts, lastFetchedAtMs: now };
+  return {
+    confirmed: withClaimAmounts,
+    lastFetchedAtMs: now,
+    // Conditional add: a caller that doesn't page (existing callers/tests) omits
+    // `nextCursor`, so the cache stays byte-identical to the pre-pagination shape.
+    ...(fresh.nextCursor !== undefined ? { nextCursor: fresh.nextCursor } : {}),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

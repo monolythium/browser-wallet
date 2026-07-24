@@ -150,7 +150,7 @@ export const FEATURE_META: Record<FeatureFlag, FeatureMeta> = {
   REGISTRY: {
     label: "Name registry",
     tagline:
-      "Hierarchical name resolution + registration UI — lookup available now, register flow in a future phase.",
+      "Hierarchical name resolution + registration UI — lookup and .mono registration both available now.",
   },
   AGENT_COMMERCE: {
     label: "Agent commerce (experimental)",

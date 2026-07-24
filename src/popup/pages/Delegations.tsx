@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
 import { hoverBg } from "../hover";
 import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
+import { AutoCompoundSection } from "../components/AutoCompoundSection";
 import {
   bgStakingClusterDirectory,
   bgStakingDelegations,
@@ -58,6 +59,7 @@ interface DelegationsProps {
 // Pending-rewards poll cadence — matches App.tsx BALANCE_POLL_MS (3 s) so the
 // wallet keeps one refresh rhythm.
 const REWARDS_POLL_MS = 3_000;
+
 
 export function Delegations({
   account,
@@ -269,6 +271,10 @@ export function Delegations({
             claimPending={claimSubmitting || claimInFlight}
           />
         )}
+
+        {/* §23 auto-compound — the explained section (single shared logic path
+            with the Delegate page). */}
+        <AutoCompoundSection rewards={rewards} isMock={rewardsMock} chainId={chainId} />
 
         {/* Claim result toast */}
         {claimResult !== null && (

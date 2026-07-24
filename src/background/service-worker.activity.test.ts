@@ -69,25 +69,6 @@ const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
   DETERMINISTIC_ADDRESS,
 );
 const TESTNET_CHAIN_ID_HEX = "0x10F2C";
-const DISCOVERY_ROUTE = {
-  routeId: "ccip-usdc-eth-mono",
-  bridge: "CCIP",
-  asset: "USDC",
-  sourceChain: "Ethereum",
-  destinationChain: "Mono",
-  verifier: {
-    model: "DON",
-    participantCount: 7,
-    threshold: 5,
-  },
-  drainCapAtomic: "100000000000",
-  finalityBlocks: 64,
-  cooldownSeconds: 86_400,
-  adminControl: "consensusOnly",
-  circuitBreaker: "armed",
-  insuranceAtomic: "50000000000",
-  lastIncidentDate: null,
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module mocks — installed before the SW is imported.
@@ -134,6 +115,12 @@ vi.mock("./tx-mldsa.js", () => ({
   testnetResolveNameConsensus: vi.fn(async (_name: string) => {
     if (resolveNameConsensusResult instanceof Error) throw resolveNameConsensusResult;
     return resolveNameConsensusResult;
+  }),
+  // Quorum reverse-resolution (wallet-reverse-name). Driven by
+  // `reverseNameConsensusResult` — set a status object, or an Error to throw.
+  testnetReverseNameConsensus: vi.fn(async (_addr: string) => {
+    if (reverseNameConsensusResult instanceof Error) throw reverseNameConsensusResult;
+    return reverseNameConsensusResult;
   }),
   // The DEFAULT (and only) submit path: `wallet-send-tx` plus the dApp
   // eth_sendTransaction / MRV / multisig paths all route here. It feeds
@@ -312,6 +299,15 @@ let resolveNameConsensusResult:
       detail: string;
     }
   | Error = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
+// Drives the mocked testnetReverseNameConsensus (wallet-reverse-name).
+let reverseNameConsensusResult:
+  | {
+      status: "confirmed-hit" | "confirmed-miss" | "disagreement" | "insufficient";
+      name: string | null;
+      agreeing: number;
+      detail: string;
+    }
+  | Error = { status: "confirmed-miss", name: null, agreeing: 2, detail: "" };
 
 // Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
@@ -427,6 +423,11 @@ vi.mock("./keystore-mldsa.js", () => ({
   writeMultisigMetaV4: vi.fn(async () => undefined),
   listVaultsV4: vi.fn(async () => []),
   selectActiveVaultV4: vi.fn(async () => undefined),
+  // native-multisig-send collects self-member base-sighash signatures via this;
+  // a dummy sig (wrong length/bytes) makes the fail-closed assemble refuse AFTER
+  // the nonce read, which is all the native-send SW tests need (the real
+  // signing + valid assembly is proven offline in native-multisig-tx.test.ts).
+  signWithVaultV4: vi.fn(async () => new Uint8Array(3309)),
 }));
 
 // Multisig approval verification (shared/multisig.js): keep everything real
@@ -510,6 +511,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
 });
 
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
+import { deriveNativeMultisigAddress } from "../shared/native-multisig.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
@@ -530,7 +532,17 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitMlDsaTx } from "./tx-mldsa.js";
+import { submitMlDsaTx, testnetResolveNameConsensus } from "./tx-mldsa.js";
+import { quoteNameCostLythoshi } from "../shared/name-registry.js";
+import {
+  STORAGE_KEY_NAME_LEDGER,
+  validateNameLedger,
+  getOwnedNames,
+} from "../shared/name-ledger.js";
+import {
+  STORAGE_KEY_REVERSE_NAME_CACHE,
+  validateReverseNameCache,
+} from "../shared/reverse-name-cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -730,6 +742,7 @@ beforeEach(() => {
   rpcErrors = {};
   submitFailure = null;
   resolveNameConsensusResult = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
+  reverseNameConsensusResult = { status: "confirmed-miss", name: null, agreeing: 2, detail: "" };
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   mockRejectAllPending.mockClear();
@@ -739,6 +752,9 @@ beforeEach(() => {
   // Reset to the non-null production-invariant default (see the declaration);
   // the cap gate is kept inert by policy.enabled=false below, not a null id.
   activePasskeyVaultId = "v1";
+  // Non-multisig active vault by default — the multisig-execute tests set this
+  // to a roster and it must not leak into later single-signer submit paths.
+  multisigMetaForTest = null;
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -1537,119 +1553,6 @@ describe("wallet-indexer-snapshot", () => {
     });
   });
 
-  it("passes through bridge route disclosures from token-balance envelopes", async () => {
-    rpcResponses["lyth_getTokenBalances"] = {
-      tokenBalances: [
-        {
-          tokenId: "0xbridged",
-          balance: "9",
-          updatedAtBlock: 125,
-          bridgeRouteDisclosure: {
-            trustModel: "committee",
-            liquidityFloor: "1000",
-          },
-        },
-      ],
-      bridgeRouteDisclosures: [
-        {
-          trust: { threshold: "5/7" },
-          liquidity: { available: "900" },
-        },
-      ],
-    };
-    rpcResponses["lyth_getAddressLabel"] = null;
-    rpcResponses["lyth_getDelegationHistory"] = [];
-    rpcResponses["lyth_getAddressActivity"] = [];
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-indexer-snapshot",
-      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
-    })) as {
-      ok: true;
-      snapshot: {
-        tokenBalances: Array<{
-          tokenId: string;
-          bridgeRouteDisclosure?: Record<string, unknown>;
-        }>;
-        bridgeRouteDisclosures: Array<Record<string, unknown>>;
-      };
-    };
-
-    expect(r.ok).toBe(true);
-    expect(r.snapshot.tokenBalances[0]?.bridgeRouteDisclosure).toEqual({
-      trustModel: "committee",
-      liquidityFloor: "1000",
-    });
-    expect(r.snapshot.bridgeRouteDisclosures).toEqual([
-      {
-        trust: { threshold: "5/7" },
-        liquidity: { available: "900" },
-      },
-    ]);
-  });
-
-  it("merges discovery-only bridge route catalogue responses into the snapshot", async () => {
-    rpcResponses["lyth_getTokenBalances"] = [];
-    rpcResponses["lyth_bridgeRoutes"] = {
-      selection: {
-        selected: null,
-        candidates: [],
-        blockedReasons: ["bridge route selection requires transfer intent"],
-      },
-      routeSelectionReady: false,
-      quoteReady: false,
-      submitReady: false,
-      blockedReasons: ["bridge route selection requires transfer intent"],
-      warnings: [],
-      routes: [DISCOVERY_ROUTE],
-      bridgeRouteDisclosures: [DISCOVERY_ROUTE],
-      source: {
-        address: null,
-        routeCount: 1,
-        globalRouteIndexAvailable: true,
-        routeDisclosureSource: "indexer.bridgeRouteDisclosures",
-      },
-    };
-    rpcResponses["lyth_getAddressLabel"] = null;
-    rpcResponses["lyth_getDelegationHistory"] = [];
-    rpcResponses["lyth_getAddressActivity"] = [];
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-indexer-snapshot",
-      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
-    })) as {
-      ok: true;
-      snapshot: {
-        bridgeRouteDisclosures: Array<Record<string, unknown>>;
-        bridgeRouteReadiness: {
-          routeSelectionReady: boolean;
-          quoteReady: boolean;
-          submitReady: boolean;
-          blockedReasons: string[];
-          warnings: string[];
-        } | null;
-        errors: Record<string, string>;
-      };
-    };
-
-    expect(r.ok).toBe(true);
-    expect(r.snapshot.bridgeRouteDisclosures).toEqual([DISCOVERY_ROUTE]);
-    expect(r.snapshot.bridgeRouteReadiness).toEqual({
-      routeSelectionReady: false,
-      quoteReady: false,
-      submitReady: false,
-      blockedReasons: ["bridge route selection requires transfer intent"],
-      warnings: [],
-    });
-    expect(r.snapshot.errors.bridgeRoutes).toBeUndefined();
-    expect(rpcCalls).toContainEqual({
-      method: "lyth_bridgeRoutes",
-      params: [],
-    });
-  });
-
   it("caps operator-returned activity + delegation arrays at the requested limit (P5-005)", async () => {
     // A rogue/buggy operator echoes far more rows than the wallet asked for.
     const overActivity = Array.from({ length: 45 }, (_, i) => ({
@@ -1845,8 +1748,11 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     });
     const firstFetchCount = rpcCalls.length;
-    expect(firstFetchCount).toBe(6); // tokenBalances + bridgeRoutes + nativeAgentState + addressLabel + delegationHistory + addressActivity
+    expect(firstFetchCount).toBe(5); // tokenBalances + nativeAgentState + addressLabel + delegationHistory + addressActivity
     expect(rpcCalls.some((c) => c.method === "lyth_mrcAccount")).toBe(false);
+    // Phase 10 — the retired bridge surface must never be probed on a snapshot.
+    expect(rpcCalls.some((c) => c.method === "lyth_bridgeRoutes")).toBe(false);
+    expect(rpcCalls.some((c) => c.method === "lyth_bridgeHealth")).toBe(false);
     // Second call immediately after — cache is fresh, should NOT hit RPC.
     await dispatchPopup({
       kind: "popup",
@@ -7986,5 +7892,778 @@ describe("incoming-poll alarm (Option 1: active-scope, low-cadence)", () => {
     const hist = storageLocal[histKey] as { entries: Array<{ kind: string }> };
     expect(hist.entries).toHaveLength(1);
     expect(hist.entries[0]!.kind).toBe("receive");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 — cross-path nonce unification (submitTrackedTx + the tracker)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("nonce unification — submitTrackedTx", () => {
+  const NONCE_FROM = "0x00000000000000000000000000000000000000aa";
+  const NONCE_CHAIN = "0x10f2c";
+  const NONCE_KEY = `${NONCE_FROM.toLowerCase()}:${NONCE_CHAIN.toLowerCase()}`;
+  const PENDING_NONCE_STORE_KEY = "mono.nonce.pending";
+  const REQ = {
+    to: "0x0000000000000000000000000000000000000001",
+    value: "0x0",
+    gas: "0x7530",
+    maxFeePerGas: "0x3b9aca00",
+    maxPriorityFeePerGas: "0x3b9aca00",
+    chainIdHex: NONCE_CHAIN,
+  } as const;
+
+  function lastSignedNonce(): string | undefined {
+    const last = submitMlDsaCalls[submitMlDsaCalls.length - 1];
+    return last?.nonce as string | undefined;
+  }
+  function recordedNonce(): number | undefined {
+    const map = storageSession[PENDING_NONCE_STORE_KEY] as
+      | Record<string, { nonce: number; ts: number }>
+      | undefined;
+    return map?.[NONCE_KEY]?.nonce;
+  }
+  async function tracked(preferredNonceHex?: string) {
+    const { submitTrackedTx } = await import("./service-worker.js");
+    return submitTrackedTx({ ...REQ }, "v1", {
+      from: NONCE_FROM,
+      chainIdHex: NONCE_CHAIN,
+      ...(preferredNonceHex !== undefined ? { preferredNonceHex } : {}),
+    });
+  }
+
+  it("signs the tracker nonce and advances across consecutive (mixed-path) sends", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 5; // committed stays 5
+    submitMlDsaCalls.length = 0;
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x5");
+    expect(recordedNonce()).toBe(5);
+    // 2nd send before the 1st commits: committed still 5, tracker → 6.
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x6");
+    // 3rd (a different logical path would hit the SAME helper): → 7.
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x7");
+    expect(recordedNonce()).toBe(7);
+    expect(submitMlDsaCalls).toHaveLength(3); // one submit per logical tx
+  });
+
+  it("records ONCE per logical tx (the fan-out is inside submitMlDsaTx)", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 0;
+    submitMlDsaCalls.length = 0;
+    await tracked();
+    // One submitTrackedTx → one submitMlDsaTx chokepoint call (which fans out to
+    // N operators internally) → one recorded nonce, never per-operator.
+    expect(submitMlDsaCalls).toHaveLength(1);
+    expect(recordedNonce()).toBe(0);
+  });
+
+  it("a FAILED submit does not record → the nonce is reused (no gap)", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 5;
+    submitMlDsaCalls.length = 0;
+    submitFailure = new Error("broadcast rejected");
+    await expect(tracked()).rejects.toThrow(/broadcast rejected/);
+    expect(recordedNonce()).toBeUndefined(); // nothing reserved
+    submitFailure = null;
+    // The next send re-picks the SAME committed nonce (5), not a gapped 6.
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x5");
+  });
+
+  it("honors an explicit preferredNonceHex (dApp-supplied nonce)", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 5;
+    submitMlDsaCalls.length = 0;
+    await tracked("0x9");
+    expect(lastSignedNonce()).toBe("0x9"); // explicit, not the tracker's 5/6
+    expect(recordedNonce()).toBe(9);
+  });
+
+  it("fail-safe: nextNonceHex falls back to committed when the entry is stale/absent", async () => {
+    const { nextNonceHex } = await import("./service-worker.js");
+    rpcResponses["lyth_getTransactionCount"] = 5;
+    // absent entry → committed
+    expect(await nextNonceHex(NONCE_FROM, NONCE_CHAIN)).toBe("0x5");
+    // stale entry (past the 5-min TTL) → ignored, committed wins
+    storageSession[PENDING_NONCE_STORE_KEY] = {
+      [NONCE_KEY]: { nonce: 99, ts: Date.now() - 10 * 60 * 1000 },
+    };
+    expect(await nextNonceHex(NONCE_FROM, NONCE_CHAIN)).toBe("0x5");
+  });
+
+  it("clear-on-commit: a fresh entry is superseded once committed advances past it", async () => {
+    const { nextNonceHex, recordSubmittedNonce } = await import("./service-worker.js");
+    await recordSubmittedNonce(NONCE_FROM, NONCE_CHAIN, "0x5"); // fresh entry = 5
+    rpcResponses["lyth_getTransactionCount"] = 8; // committed jumped to 8
+    expect(await nextNonceHex(NONCE_FROM, NONCE_CHAIN)).toBe("0x8"); // committed dominates
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §22.8 name-registry (0x110E) submit handlers — quote / register / propose /
+// accept. Exercises the real SDK encoders + cost curve (the harness spreads the
+// actual SDK), the Phase-3 submitTrackedTx routing, and the fail-safe pre-checks.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("name-registry (0x110E) submit handlers", () => {
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  // 1e9 — the chain base-price floor (config.rs INITIAL_BASE_PRICE); the name
+  // cost fee-unit tracks it.
+  const BASE_PRICE = "0x3b9aca00";
+  const NAME_REGISTRY_ADDR_SUFFIX = "110e";
+
+  function seedNameFeeAndNonce(nonce: number | string = "0x0") {
+    rpcResponses["lyth_getTransactionCount"] = nonce;
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: BASE_PRICE,
+      basePricePerExecutionUnitLythoshi: BASE_PRICE,
+      priorityTipLythoshi: "0x0",
+      source: "test",
+    };
+  }
+  function hexOfUtf8(s: string): string {
+    return Array.from(new TextEncoder().encode(s))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  const expectedCost = (cat: "human" | "agent", len: number) =>
+    "0x" + quoteNameCostLythoshi(cat, len, BigInt(BASE_PRICE)).toString(16);
+
+  it("wallet-name-quote returns the category + exact cost for a valid human name", async () => {
+    seedNameFeeAndNonce();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-quote",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; category?: string; canonical?: string; costLythoshiHex?: string };
+    expect(r.ok).toBe(true);
+    expect(r.category).toBe("human");
+    expect(r.canonical).toBe("alice.mono");
+    expect(r.costLythoshiHex).toBe(expectedCost("human", 5));
+  });
+
+  it("wallet-name-quote rejects a forbidden-prefix name (no fabricated price)", async () => {
+    seedNameFeeAndNonce();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-quote",
+      payload: { name: "0xfoo.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; invalid?: boolean; costLythoshiHex?: string };
+    expect(r.ok).toBe(false);
+    expect(r.invalid).toBe(true);
+    expect(r.costLythoshiHex).toBeUndefined();
+  });
+
+  it("wallet-name-register submits to 0x110E with value == the quoted cost (WYSIWYS) via the tracker", async () => {
+    seedNameFeeAndNonce("0x7"); // committed nonce 7
+    // default consensus = confirmed-miss => name available
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; txHash?: string; costLythoshiHex?: string };
+    expect(r.ok).toBe(true);
+    expect(r.txHash).toBe(SUBMITTED_TX_HASH);
+    expect(submitMlDsaCalls.length).toBe(1);
+    const tx = submitMlDsaCalls[0] as { to: string; value: string; data: string; nonce: string };
+    expect(tx.to.toLowerCase().endsWith(NAME_REGISTRY_ADDR_SUFFIX)).toBe(true);
+    expect(tx.value).toBe(expectedCost("human", 5));
+    expect(r.costLythoshiHex).toBe(expectedCost("human", 5));
+    expect(tx.nonce).toBe("0x7"); // tracker picked the committed nonce
+    // WYSIWYS: the calldata that signs carries the previewed name.
+    expect(tx.data.includes(hexOfUtf8("alice.mono"))).toBe(true);
+  });
+
+  it("wallet-name-register blocks a taken name (confirmed-hit) with no wasted-fee submit", async () => {
+    seedNameFeeAndNonce();
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: "0x" + "11".repeat(20),
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect((r.reason ?? "").toLowerCase()).toContain("already registered");
+    expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("wallet-name-register requires the caller to own the agent parent", async () => {
+    seedNameFeeAndNonce();
+    // Name-aware: the agent name is free (miss), the parent is owned by someone else.
+    const mock = vi.mocked(testnetResolveNameConsensus);
+    mock.mockImplementation(async (name: string) =>
+      name.startsWith("bot.agent")
+        ? { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" }
+        : { status: "confirmed-hit", addr0x: "0x" + "22".repeat(20), agreeing: 2, detail: "" },
+    );
+    try {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: "wallet-name-register",
+        payload: { name: "bot.agent.alice.mono", chainIdHex: CHAIN },
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      expect((r.reason ?? "").toLowerCase()).toContain("parent");
+      expect(submitMlDsaCalls.length).toBe(0);
+    } finally {
+      // Restore the factory behavior (reads the module-level driver, throwing on
+      // an Error value) so the override doesn't leak into later tests.
+      mock.mockImplementation(async (_n: string) => {
+        if (resolveNameConsensusResult instanceof Error) throw resolveNameConsensusResult;
+        return resolveNameConsensusResult;
+      });
+    }
+  });
+
+  it("wallet-name-propose submits a FREE (value 0) transfer for an owned name", async () => {
+    seedNameFeeAndNonce("0x3");
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: DETERMINISTIC_ADDRESS.toLowerCase(),
+      agreeing: 2,
+      detail: "",
+    };
+    const recipient = "0x" + "cd".repeat(20);
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-propose",
+      payload: { name: "alice.mono", recipientAddr0x: recipient, chainIdHex: CHAIN },
+    })) as { ok: boolean; txHash?: string };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(1);
+    const tx = submitMlDsaCalls[0] as { to: string; value: string; data: string };
+    expect(tx.to.toLowerCase().endsWith(NAME_REGISTRY_ADDR_SUFFIX)).toBe(true);
+    expect(tx.value).toBe("0x0"); // propose is free
+    expect(tx.data.includes(hexOfUtf8("alice.mono"))).toBe(true);
+    expect(tx.data.includes("cd".repeat(20))).toBe(true); // recipient in calldata
+  });
+
+  it("wallet-name-propose blocks a name the caller does not own", async () => {
+    seedNameFeeAndNonce();
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: "0x" + "99".repeat(20), // someone else
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-propose",
+      payload: { name: "alice.mono", recipientAddr0x: "0x" + "cd".repeat(20), chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect((r.reason ?? "").toLowerCase()).toContain("own");
+    expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("wallet-name-propose rejects an invalid recipient address", async () => {
+    seedNameFeeAndNonce();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-propose",
+      payload: { name: "alice.mono", recipientAddr0x: "not-an-address", chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("wallet-name-accept re-charges the FULL registration cost as value (recipient pays)", async () => {
+    seedNameFeeAndNonce("0x4");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-accept",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; costLythoshiHex?: string };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(1);
+    const tx = submitMlDsaCalls[0] as { to: string; value: string; data: string };
+    expect(tx.to.toLowerCase().endsWith(NAME_REGISTRY_ADDR_SUFFIX)).toBe(true);
+    // The accept fee equals a fresh registration of the same name (finding #2).
+    expect(tx.value).toBe(expectedCost("human", 5));
+    expect(r.costLythoshiHex).toBe(expectedCost("human", 5));
+    expect(tx.data.includes(hexOfUtf8("alice.mono"))).toBe(true);
+  });
+
+  it("a failed submit records no nonce (no gap) and surfaces honestly", async () => {
+    seedNameFeeAndNonce("0x2");
+    submitFailure = Object.assign(new Error("upstream unavailable"), { code: -32045 });
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBeTruthy();
+    // No nonce reserved on failure — the next tx reuses the committed nonce.
+    const { nextNonceHex } = await import("./service-worker.js");
+    expect(await nextNonceHex(DETERMINISTIC_ADDRESS, CHAIN)).toBe("0x2");
+  });
+
+  it("rejects name ops on a non-Monolythium chain", async () => {
+    seedNameFeeAndNonce();
+    for (const op of ["wallet-name-quote", "wallet-name-register", "wallet-name-accept"]) {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op,
+        payload: { name: "alice.mono", chainIdHex: "0x1" },
+      })) as { ok: boolean };
+      expect(r.ok).toBe(false);
+    }
+    expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("a successful registration records the name in the local ledger", async () => {
+    seedNameFeeAndNonce("0x1"); // default consensus = miss (available)
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    const ledger = validateNameLedger(storageLocal[STORAGE_KEY_NAME_LEDGER]);
+    expect(ledger).not.toBeNull();
+    expect(getOwnedNames(ledger!, DETERMINISTIC_ADDRESS).map((e) => e.name)).toContain(
+      "alice.mono",
+    );
+  });
+
+  it("wallet-names-owned marks a ledger name owned when the chain agrees", async () => {
+    storageLocal[STORAGE_KEY_NAME_LEDGER] = {
+      [DETERMINISTIC_ADDRESS.toLowerCase()]: [
+        { name: "alice.mono", category: "human", addedAt: 1 },
+      ],
+    };
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: DETERMINISTIC_ADDRESS.toLowerCase(),
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-names-owned",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; names?: { name: string; status: string }[] };
+    expect(r.ok).toBe(true);
+    expect(r.names).toHaveLength(1);
+    expect(r.names![0]!.status).toBe("owned");
+  });
+
+  it("wallet-names-owned marks a name transferred away when the owner differs", async () => {
+    storageLocal[STORAGE_KEY_NAME_LEDGER] = {
+      [DETERMINISTIC_ADDRESS.toLowerCase()]: [
+        { name: "alice.mono", category: "human", addedAt: 1 },
+      ],
+    };
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: "0x" + "77".repeat(20),
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-names-owned",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; names?: { status: string }[] };
+    expect(r.ok).toBe(true);
+    expect(r.names![0]!.status).toBe("transferred");
+  });
+
+  it("wallet-names-owned returns an empty list when the ledger is empty (no fabrication)", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-names-owned",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; names?: unknown[] };
+    expect(r.ok).toBe(true);
+    expect(r.names).toEqual([]);
+  });
+
+  // ── wallet-has-name (onboarding nudge signal; biased HARD to not-nagging) ──
+  it("has-name: true when the ledger already has a name (no reverse lookup needed)", async () => {
+    storageLocal[STORAGE_KEY_NAME_LEDGER] = {
+      [DETERMINISTIC_ADDRESS.toLowerCase()]: [
+        { name: "alice.mono", category: "human", addedAt: 1 },
+      ],
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.ok).toBe(true);
+    expect(r.hasName).toBe(true);
+  });
+
+  it("has-name: false only when the ledger is empty AND the reverse resolve confirms no name", async () => {
+    rpcResponses["lyth_nameOf"] = { address: "mono1x", name: null, block: "latest" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.ok).toBe(true);
+    expect(r.hasName).toBe(false);
+  });
+
+  it("has-name: true when the reverse resolve returns a name (registered elsewhere)", async () => {
+    rpcResponses["lyth_nameOf"] = { address: "mono1x", name: "bob.mono", block: "latest" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.hasName).toBe(true);
+  });
+
+  it("has-name: true (do not nag) when the reverse resolve errors/unsupported", async () => {
+    rpcErrors["lyth_nameOf"] = { code: -32601, message: "method not found" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.hasName).toBe(true);
+  });
+
+  it("has-name: true (do not nag) on a non-Monolythium chain", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: "0x1" },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.hasName).toBe(true);
+  });
+});
+
+// ── wallet-reverse-name (quorum reverse .mono display; fail-closed to bech32m) ──
+describe("wallet-reverse-name (quorum reverse-resolve)", () => {
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const ADDR = "0x" + "ab".repeat(20);
+
+  const call = (address = ADDR, chainIdHex = CHAIN) =>
+    dispatchPopup({
+      kind: "popup",
+      op: "wallet-reverse-name",
+      payload: { address, chainIdHex },
+    }) as Promise<{ ok: boolean; name?: string | null; cached?: boolean; status?: string }>;
+
+  it("returns + caches the quorum-agreed name on a confirmed hit", async () => {
+    reverseNameConsensusResult = {
+      status: "confirmed-hit",
+      name: "alice.mono",
+      agreeing: 3,
+      detail: "",
+    };
+    const r = await call();
+    expect(r.ok).toBe(true);
+    expect(r.name).toBe("alice.mono");
+    const cache = validateReverseNameCache(storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE]);
+    expect(cache![ADDR.toLowerCase()]!.name).toBe("alice.mono");
+  });
+
+  it("caches a confirmed miss as null (no re-query churn)", async () => {
+    reverseNameConsensusResult = { status: "confirmed-miss", name: null, agreeing: 3, detail: "" };
+    const r = await call();
+    expect(r.name).toBeNull();
+    const cache = validateReverseNameCache(storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE]);
+    expect(cache![ADDR.toLowerCase()]!.name).toBeNull();
+  });
+
+  it("shows NO name (null) and does NOT cache when the quorum disagrees (anti-mislabel)", async () => {
+    reverseNameConsensusResult = { status: "disagreement", name: null, agreeing: 3, detail: "a:x;b:y" };
+    const r = await call();
+    expect(r.name).toBeNull();
+    expect(r.status).toBe("disagreement");
+    // transient — not cached
+    const cache = validateReverseNameCache(storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE]) ?? {};
+    expect(cache[ADDR.toLowerCase()]).toBeUndefined();
+  });
+
+  it("shows NO name on insufficient responders / error (fail-closed to bech32m)", async () => {
+    reverseNameConsensusResult = new Error("no operators");
+    const r = await call();
+    expect(r.ok).toBe(true);
+    expect(r.name).toBeNull();
+    expect(r.status).toBe("error");
+  });
+
+  it("serves from cache without re-querying (fast path)", async () => {
+    // Seed a cached name, then set consensus to a DIFFERENT name — the cache wins.
+    storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE] = {
+      [ADDR.toLowerCase()]: { name: "cached.mono", ts: Date.now() },
+    };
+    reverseNameConsensusResult = {
+      status: "confirmed-hit",
+      name: "different.mono",
+      agreeing: 3,
+      detail: "",
+    };
+    const r = await call();
+    expect(r.cached).toBe(true);
+    expect(r.name).toBe("cached.mono");
+  });
+
+  it("is testnet-gated", async () => {
+    const r = await call(ADDR, "0x1");
+    expect(r.ok).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-activity-page — #16(b) cursor-driven "load more"
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-activity-page", () => {
+  const activityRow = (block: number, amount: string) => ({
+    blockHeight: block,
+    txIndex: 0,
+    logIndex: 0,
+    kind: "transfer",
+    direction: "out",
+    counterparty: "0xdead",
+    tokenId: null,
+    amount,
+    cluster: null,
+    weightBps: null,
+    subKind: null,
+  });
+
+  async function page(cursor: unknown, chainIdHex = TESTNET_CHAIN_ID_HEX) {
+    return (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-page",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex, cursor },
+    })) as
+      | { ok: true; rows: Array<{ kind: string }>; nextCursor: string | null }
+      | { ok: false; reason?: string };
+  }
+
+  it("fetches the next page cursor-driven, maps rows, returns the next cursor", async () => {
+    rpcResponses["lyth_getAddressActivity"] = {
+      schemaVersion: 1,
+      address: DETERMINISTIC_ADDRESS,
+      limit: 30,
+      nextCursor: "0xnext",
+      activity: [activityRow(70, "1.5"), activityRow(69, "2.5")],
+    };
+    const r = await page("0xstart");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows).toHaveLength(2);
+    expect(r.rows[0]?.kind).toBe("tx_send");
+    expect(r.nextCursor).toBe("0xnext");
+    // The cursor is passed as the 3rd RPC param (address, limit, cursor).
+    const call = rpcCalls.find((c) => c.method === "lyth_getAddressActivity");
+    expect(call?.params[1]).toBe(30);
+    expect(call?.params[2]).toBe("0xstart");
+  });
+
+  it("returns nextCursor:null on a short (final) page → 'load more' hides", async () => {
+    rpcResponses["lyth_getAddressActivity"] = {
+      schemaVersion: 1,
+      address: DETERMINISTIC_ADDRESS,
+      limit: 30,
+      nextCursor: null,
+      activity: [activityRow(70, "1.5")],
+    };
+    const r = await page("0xstart");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.nextCursor).toBeNull();
+  });
+
+  it("surfaces a transient RPC error (never a fabricated 'no more pages')", async () => {
+    rpcErrors["lyth_getAddressActivity"] = { code: -32603, message: "operator down" };
+    const r = await page("0xstart");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("operator down");
+  });
+
+  it("rejects a missing cursor", async () => {
+    const r = await page(undefined);
+    expect(r.ok).toBe(false);
+  });
+
+  it("is testnet-gated", async () => {
+    const r = await page("0xstart", "0x1");
+    expect(r.ok).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-activity-txfeed — #B3-2 indexer-off fallback
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-activity-txfeed", () => {
+  const feedTx = (partial: Record<string, unknown>) => ({
+    txHash: "0x" + "ab".repeat(32),
+    blockHash: "0x" + "cd".repeat(32),
+    blockNumber: 90,
+    blockTimestamp: null,
+    txIndex: 0,
+    from: "0x" + "22".repeat(20),
+    to: DETERMINISTIC_ADDRESS,
+    nonce: 0,
+    value: "1000000000000000000",
+    executionUnitLimit: 21000,
+    maxExecutionFeeLythoshi: "0",
+    priorityTipLythoshi: "0",
+    fee: {},
+    input: "0x",
+    receipt: null,
+    ...partial,
+  });
+
+  async function fallback(chainIdHex = TESTNET_CHAIN_ID_HEX) {
+    return (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-txfeed",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex },
+    })) as { ok: true; rows: Array<{ kind: string }> } | { ok: false; reason?: string };
+  }
+
+  it("maps recent txs involving the address, drops the rest", async () => {
+    rpcResponses["lyth_txFeed"] = {
+      schemaVersion: 1,
+      latestHeight: 100,
+      limit: 50,
+      nextCursor: null,
+      transactions: [
+        feedTx({ from: "0x" + "22".repeat(20), to: DETERMINISTIC_ADDRESS }), // receive
+        feedTx({ from: DETERMINISTIC_ADDRESS, to: "0x" + "33".repeat(20), blockNumber: 91 }), // send
+        feedTx({ from: "0x" + "44".repeat(20), to: "0x" + "55".repeat(20), blockNumber: 92 }), // not ours
+      ],
+    };
+    const r = await fallback();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows).toHaveLength(2);
+    expect(r.rows.map((x) => x.kind).sort()).toEqual(["tx_receive", "tx_send"]);
+    // Called lyth_txFeed with the fallback limit, no cursor.
+    const call = rpcCalls.find((c) => c.method === "lyth_txFeed");
+    expect(call?.params[0]).toBe(50);
+  });
+
+  it("returns an empty list when no txFeed row involves the address (honest empty)", async () => {
+    rpcResponses["lyth_txFeed"] = {
+      schemaVersion: 1,
+      latestHeight: 100,
+      limit: 50,
+      nextCursor: null,
+      transactions: [feedTx({ from: "0x" + "44".repeat(20), to: "0x" + "55".repeat(20) })],
+    };
+    const r = await fallback();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows).toHaveLength(0);
+  });
+
+  it("returns ok:false on a txFeed RPC error (popup keeps the honest empty state)", async () => {
+    rpcErrors["lyth_txFeed"] = { code: -32601, message: "method not found" };
+    const r = await fallback();
+    expect(r.ok).toBe(false);
+  });
+
+  it("is testnet-gated", async () => {
+    const r = await fallback("0x1");
+    expect(r.ok).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// native-multisig-send — Phase 9 c3 dev-gated native submit path
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("native-multisig-send", () => {
+  const TWO_TIER_KEY = "mono.two-tier-features.v1";
+  const PK1 = "0x" + "11".repeat(1952);
+  const PK2 = "0x" + "22".repeat(1952);
+
+  function setDevMode(on: boolean) {
+    if (on) {
+      storageLocal[TWO_TIER_KEY] = { DEVELOPER_MODE: { enabled: true, firstSeenAt: 1 } };
+    } else {
+      delete storageLocal[TWO_TIER_KEY];
+    }
+  }
+
+  function selfMeta(threshold: number, selfCount: number): unknown {
+    return {
+      threshold,
+      proposals: [],
+      governance: [],
+      signers: [
+        { id: "s1", label: "A", address: "0x" + "01".repeat(20), pubkey: PK1, role: "self", vaultId: "v1" },
+        selfCount >= 2
+          ? { id: "s2", label: "B", address: "0x" + "02".repeat(20), pubkey: PK2, role: "self", vaultId: "v2" }
+          : { id: "s2", label: "B", address: "0x" + "02".repeat(20), pubkey: PK2, role: "external" },
+      ],
+    };
+  }
+
+  async function send(chainIdHex = TESTNET_CHAIN_ID_HEX) {
+    return (await dispatchPopup({
+      kind: "popup",
+      op: "native-multisig-send",
+      payload: { vaultId: "v", to: "0x" + "33".repeat(20), valueWeiHex: "0x64", chainIdHex },
+    })) as { ok: true; txHash: string; monom: string } | { ok: false; reason?: string };
+  }
+
+  afterEach(() => {
+    setDevMode(false);
+    multisigMetaForTest = null;
+  });
+
+  it("REFUSES when DEVELOPER_MODE is off (server-side gate — not just hidden UI)", async () => {
+    setDevMode(false);
+    const r = await send();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("Developer mode");
+  });
+
+  it("is testnet-gated even with DEVELOPER_MODE on", async () => {
+    setDevMode(true);
+    const r = await send("0x1");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("Monolythium Testnet");
+  });
+
+  it("refuses a non-multisig vault", async () => {
+    setDevMode(true);
+    multisigMetaForTest = null;
+    const r = await send();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("not a multisig");
+  });
+
+  it("refuses fewer than `threshold` local (self) signers (fail-closed)", async () => {
+    setDevMode(true);
+    multisigMetaForTest = selfMeta(2, 1); // 1 self + 1 external, threshold 2
+    const r = await send();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("local (self) signer");
+  });
+
+  it("sources the nonce from the MONOM account (not the executor / a member)", async () => {
+    setDevMode(true);
+    multisigMetaForTest = selfMeta(2, 2); // 2 self, threshold 2
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    const expectedMonom = deriveNativeMultisigAddress(2, [hexToBytes(PK1), hexToBytes(PK2)]);
+    // The send fails after the nonce read (unseeded fee / dummy self-sigs), but the
+    // nonce read already happened and MUST target the derived monom account — the
+    // point of this test (nonce = monom, never the executor / a member).
+    const r = await send();
+    const nonceCall = rpcCalls.find((c) => c.method === "lyth_getTransactionCount");
+    expect(nonceCall?.params[0]).toBe(expectedMonom);
+    expect(r.ok).toBe(false);
   });
 });

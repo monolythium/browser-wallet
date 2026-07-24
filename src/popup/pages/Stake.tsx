@@ -35,6 +35,7 @@ import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
 import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
+import { AutoCompoundSection } from "../components/AutoCompoundSection";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
 import type { DelegationRejection } from "../components/DelegationRejectedBanner";
@@ -78,11 +79,10 @@ import {
   type AutovoteResult,
 } from "../../shared/autovote";
 import {
-  isPerWalletCapRevert,
-  isWalletTotalCapRevert,
+  bindingPerClusterCapBps,
+  classifyDelegationRevert,
+  DELEGATION_PER_WALLET_CAP_BPS,
   preflightDelegationVerdict,
-  PER_WALLET_CAP_REVERT_MESSAGE,
-  WALLET_TOTAL_CAP_REVERT_MESSAGE,
 } from "../../shared/staking";
 
 type Step =
@@ -274,6 +274,13 @@ export function Stake({
   // Delegation context state.
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
   const [capBps, setCapBps] = useState<number | null>(null);
+  // The chain-authoritative enforced per-wallet cap (issue #44). Unlike the
+  // display aggregate `capBps` (which stays null until a LIVE read), this is a
+  // real protocol floor, so it is NEVER null — it seeds at the
+  // DELEGATION_PER_WALLET_CAP_BPS fallback and adopts the live value when read.
+  const [perWalletBps, setPerWalletBps] = useState<number>(
+    DELEGATION_PER_WALLET_CAP_BPS,
+  );
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
@@ -401,7 +408,12 @@ export function Stake({
       // F-3.8/#25: only adopt a LIVE cap; a via:"mock" (offline) read carries a
       // fabricated 50% launch cap that must not render as real (capBps stays
       // null → cap badge hidden; the 0x100A precompile enforces the true cap).
-      if (capR.ok) setCapBps(capBpsFromCapResult(capR));
+      if (capR.ok) {
+        setCapBps(capBpsFromCapResult(capR));
+        // The per-wallet cap resolver NEVER nulls (unlike the display aggregate)
+        // — a mock/offline read still binds the 5000 floor (issue #44).
+        setPerWalletBps(perWalletBpsFromCapResult(capR));
+      }
       if (balR.ok) {
         const parsedBalance = parseHexQuantity(balR.balanceHex);
         if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
@@ -470,7 +482,13 @@ export function Stake({
     const input = {
       clusters,
       targetTotalBps: autovoteTargetBps,
-      capBps,
+      // The PREVIEW must bind the per-cluster cap exactly as the submit
+      // pre-flight does: the raw aggregate cap is disabled (null) on testnet, so
+      // passing it straight through would let a mode concentrate the whole target
+      // on one cluster — which the submit guard (bindingPerClusterCapBps → 50%
+      // floor) then rejects. Bind it here so the preview never promises an
+      // allocation the submit path refuses.
+      capBps: bindingPerClusterCapBps(capBps, perWalletBps),
       seed: autovoteSeed,
       // §23.6 launch minimum diversification = 2 (Phase 12). The wallet
       // can tighten this as the chain reports phase transitions via
@@ -484,7 +502,7 @@ export function Stake({
           ? pickMaxDiversity(input)
           : pickMaxDecentralization(input);
     setAutovotePlan(plan);
-  }, [entryMode, autovoteTargetBps, clusters, capBps, autovoteSeed]);
+  }, [entryMode, autovoteTargetBps, clusters, capBps, perWalletBps, autovoteSeed]);
 
   // Existing weight in the selected cluster.
   const existingWeightBps = useMemo(() => {
@@ -588,6 +606,9 @@ export function Stake({
             ?.weightBps ?? 0;
         let totalBps = delegations?.totalBps ?? 0;
         let freshCapBps = capBps;
+        let freshPerWalletBps = perWalletBps;
+        // Distinct clusters currently held — drives the max-10 pre-flight (0x0206).
+        let currentDelegationCount = delegations?.rows.length ?? 0;
         try {
           const [freshDel, freshCap] = await Promise.all([
             bgStakingDelegations(account.addr),
@@ -598,8 +619,12 @@ export function Stake({
               freshDel.data.rows.find((row) => row.cluster === dstClusterId)
                 ?.weightBps ?? 0;
             totalBps = freshDel.data.totalBps;
+            currentDelegationCount = freshDel.data.rows.length;
           }
-          if (freshCap.ok) freshCapBps = capBpsFromCapResult(freshCap);
+          if (freshCap.ok) {
+            freshCapBps = capBpsFromCapResult(freshCap);
+            freshPerWalletBps = perWalletBpsFromCapResult(freshCap);
+          }
         } catch {
           // keep the on-mount snapshot — best-effort, never block on a flaky read
         }
@@ -609,6 +634,8 @@ export function Stake({
           totalDelegatedBps: totalBps,
           moveBps: bps,
           capBps: freshCapBps,
+          perWalletBps: freshPerWalletBps,
+          currentDelegationCount,
         });
         if (!verdict.ok) {
           setSubmitError({
@@ -668,19 +695,14 @@ export function Stake({
         if (action !== "claim") onDelegationRejected?.(null);
       } else {
         const code = typeof r.code === "number" ? r.code : null;
-        // Map the chain's cap reverts — PerWalletCapExceeded (0x0213) and
-        // WalletTotalExceeded (0x0205) — which the pre-flight guards now
-        // prevent, but could still slip through on a race or a future cap
-        // change — to clear messages instead of a generic "rejected". Specific
-        // to those codes; other revert codes keep the raw reason.
-        const isCapRevert =
-          isPerWalletCapRevert(r.reason, code) ||
-          isWalletTotalCapRevert(r.reason, code);
-        const message = isPerWalletCapRevert(r.reason, code)
-          ? PER_WALLET_CAP_REVERT_MESSAGE
-          : isWalletTotalCapRevert(r.reason, code)
-            ? WALLET_TOTAL_CAP_REVERT_MESSAGE
-            : (r.reason ?? `${action} rejected`);
+        // Map the delegation module's 0x02NN reverts — cap (0x0213/0x0205),
+        // max-10 (0x0206), inactive-cluster (0x020B), and the claim-path codes
+        // (0x020D/0x0214) — to clear messages. Most are now prevented by the
+        // pre-flight / picker filter but can still slip through on a race or a
+        // future rule change; unmapped codes keep the raw node reason.
+        const mappedMessage = classifyDelegationRevert(r.reason, code);
+        const isKnownDelegationRevert = mappedMessage !== null;
+        const message = mappedMessage ?? (r.reason ?? `${action} rejected`);
         setSubmitError({
           message,
           code,
@@ -690,7 +712,10 @@ export function Stake({
         setStep("error");
         // DURABLE signal: a residual-race cap rejection at chain admission still
         // surfaces after the user navigates away from this ephemeral error page.
-        if (isCapRevert && (action === "delegate" || action === "redelegate")) {
+        if (
+          isKnownDelegationRevert &&
+          (action === "delegate" || action === "redelegate")
+        ) {
           const rejClusterId =
             action === "redelegate" && redelegateDstClusterId !== null
               ? redelegateDstClusterId
@@ -959,6 +984,10 @@ export function Stake({
               </div>
             )}
 
+            {/* §23 auto-compound — a dedicated, explained section on the Delegate
+                page (self-gated: shown only for a LIVE pending-rewards read). */}
+            <AutoCompoundSection rewards={rewards} isMock={rewardsMock} chainId={chainId} />
+
             {/* Existing delegations — manage Unstake / Redelegate per row */}
             {delegations !== null && delegations.rows.length > 0 && (
               <ExistingDelegations
@@ -1008,7 +1037,7 @@ export function Stake({
                 clusters={clusters}
                 targetBps={autovoteTargetBps}
                 onTargetChange={setAutovoteTargetBps}
-                capBps={capBps}
+                capBps={bindingPerClusterCapBps(capBps, perWalletBps)}
                 seedAvailable={autovoteSeed !== null}
                 onProceed={() => {
                   if (autovotePlan === null) return;
@@ -1110,6 +1139,7 @@ export function Stake({
                 ?.weightBps ?? 0
             }
             capBps={capBps}
+            perWalletBps={perWalletBps}
             amountStr={amountStr}
             onAmountChange={setAmountStr}
             onPickDestination={() => setStep("redelegate-dst-pick")}
@@ -1186,6 +1216,7 @@ export function Stake({
             existingWeightBps={existingWeightBps}
             totalDelegatedBps={delegations?.totalBps ?? 0}
             capBps={capBps}
+            perWalletBps={perWalletBps}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -2198,6 +2229,27 @@ export function capBpsFromCapResult(capR: {
   // capBps === null is the legitimate "cap disabled (u32::MAX)" state; either
   // way a non-concrete cap collapses to null (badge hidden / unlimited).
   return capR.data?.capBps ?? null;
+}
+
+/**
+ * Issue #44 — resolve the ENFORCED per-wallet cap (bps) from a
+ * `staking-delegation-cap` read. CRITICAL contrast with `capBpsFromCapResult`:
+ * the per-wallet cap is a REAL protocol floor, not a display value, so it NEVER
+ * collapses to null. A live, in-range value is adopted; a `via:"mock"` / failed
+ * / absent / null / out-of-range read falls back to the fixed
+ * `DELEGATION_PER_WALLET_CAP_BPS` floor (fail-closed — NEVER "unlimited"). The
+ * chain still enforces the true cap at admission (0x0213), so a stale fallback
+ * only ever over-blocks the pre-flight, never under-blocks it.
+ */
+export function perWalletBpsFromCapResult(capR: {
+  ok: boolean;
+  via?: string | null;
+  data?: { perWalletBps?: number | null };
+}): number {
+  const v = capR.ok ? capR.data?.perWalletBps : null;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 10000
+    ? v
+    : DELEGATION_PER_WALLET_CAP_BPS;
 }
 
 /** Notification weight for an undelegate. The op encodes no bps (it removes the

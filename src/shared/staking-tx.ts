@@ -32,8 +32,10 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
+  encodeSetAutoCompoundCalldata,
   LYTHOSHI_PER_LYTH,
 } from "@monolythium/core-sdk";
+import type { TxOpKind } from "./notifications.js";
 
 /** Delegation precompile address — Whitepaper §5.4 / §7.6
  *  (mono-core `DELEGATION_ADDRESS`). */
@@ -79,6 +81,50 @@ export function encodeRedelegate(
  *  — settles + withdraws the caller's pending delegation rewards. */
 export function encodeClaimRewards(): string {
   return encodeClaimCalldata();
+}
+
+/** `setAutoCompound(bool)` calldata via the SDK encoder (chain-canonical
+ *  selector `0x86593454`; mono-core `delegation/src/abi.rs`). Persists the
+ *  caller's GLOBAL per-wallet auto-compound preference (not per-cluster).
+ *  Non-custodial / non-payable — sent with `value = 0`.
+ *
+ *  ⚠️ ENABLING (`enabled=true`) also **claims the wallet's pending rewards
+ *  immediately** in the same tx (chain `auto_claim_if_enabled` → the whole
+ *  pending amount is withdrawn to balance, emitting `Claimed`). Disabling has
+ *  no such side effect. Callers MUST disclose the claim before signing. */
+export function encodeSetAutoCompound(enabled: boolean): string {
+  return encodeSetAutoCompoundCalldata(enabled);
+}
+
+/** Execution-unit allowance for a `setAutoCompound` tx — reuses the claim
+ *  selector-only allowance (enabling also settles + auto-claims, i.e. the same
+ *  order of work as a claim). */
+export const AUTO_COMPOUND_UNIT_LIMIT_HEX = "0x14820"; // 84000
+
+/** The exact `bgWalletSendTx` request for a §23 auto-compound toggle — a
+ *  non-payable (`value 0`) `0x100A` call carrying `setAutoCompound(bool)`,
+ *  tagged for a clean activity label. Extracted so the submit SHAPE is unit-
+ *  testable (the page-level click→submit interaction isn't statically render-
+ *  able). NON-CUSTODIAL: `value = 0`; the signer/nonce/wire are unchanged. */
+export function autoCompoundTxRequest(
+  enabled: boolean,
+  chainIdHex: string,
+): {
+  to: string;
+  valueWeiHex: "0x0";
+  chainIdHex: string;
+  data: string;
+  executionUnitLimitHex: string;
+  opKind: TxOpKind;
+} {
+  return {
+    to: DELEGATION_PRECOMPILE,
+    valueWeiHex: "0x0",
+    chainIdHex,
+    data: encodeSetAutoCompound(enabled),
+    executionUnitLimitHex: AUTO_COMPOUND_UNIT_LIMIT_HEX,
+    opKind: "set-auto-compound",
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

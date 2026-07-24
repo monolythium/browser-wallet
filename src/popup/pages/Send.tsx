@@ -43,12 +43,10 @@ import {
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
 import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import {
-  STORAGE_KEY_NAME_CACHE,
   parseMonoName,
-  validateNameCache,
   type MonoNameParse,
-  type NameCache,
 } from "../../shared/name-resolution";
+import { useReverseName } from "../hooks/useReverseName";
 import {
   finalityPostureFor,
   monoscanTxUrl,
@@ -139,6 +137,15 @@ const ADMISSION_REJECT_CODE_HI = -32020;
 // Fallback execution-unit limit for native LYTH transfer when the chain
 // doesn't supply one.
 const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
+
+// Execution units the chain actually CHARGES for a plain native transfer
+// (mono-core `NATIVE_TRANSFER_EXECUTION_UNITS = 21000`, executor.rs). The tx is
+// signed with a higher limit (the 30000 admission ceiling) for mainnet-floor
+// headroom, but unused units are never charged — so the fee we DISPLAY (the
+// deduction the user will actually see) is computed from this figure, while the
+// Max/insufficient-funds reservation below still covers the full signed-limit
+// worst case. §22.4.1: show the honest charge, never overstate the deduction.
+const NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
 // MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI is the single source of truth in
 // shared/operator-bounds (imported above) — both the submit clamp here and the
@@ -254,14 +261,28 @@ export function Send({
   }, [account.addr, chainId]);
 
   const tierMultiplierBps = TIER_MULTIPLIERS_BPS[tier];
+  // DISPLAYED fee = the deduction the chain will actually take. A native
+  // transfer is charged NATIVE_TRANSFER_EXECUTION_UNITS (21000) regardless of
+  // the (higher) 30000 admission limit the tx is signed with — unused units are
+  // never charged (mono-core executor.rs). Override the suggestion's limit with
+  // the charge count so the headline is the honest deduction, not 1.43× it. A
+  // structured fee, if the chain ever supplies one, still wins (it is the
+  // authoritative charge and ignores this unit count).
   const estimatedFeeResult = useMemo(
     () =>
       feeSuggestion === null
         ? null
-        : nativeFeeDisplayFromExecutionFeeSuggestion(feeSuggestion, {
-            fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
-            priorityMultiplierBps: tierMultiplierBps,
-          }),
+        : nativeFeeDisplayFromExecutionFeeSuggestion(
+            {
+              ...feeSuggestion,
+              executionUnitLimitHex: NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX,
+            },
+            {
+              fallbackExecutionUnitLimitHex:
+                NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX,
+              priorityMultiplierBps: tierMultiplierBps,
+            },
+          ),
     [feeSuggestion, tierMultiplierBps],
   );
   const estimatedFeeDisplay =
@@ -271,6 +292,26 @@ export function Send({
       ? estimatedFeeResult.failures.join("; ")
       : null;
   const estimatedFeeLythoshi = estimatedFeeDisplay?.totalLythoshi ?? null;
+
+  // RESERVATION = the worst-case the chain requires at admission: it admits a tx
+  // only if the balance covers `max_execution_unit_price × execution_unit_limit`
+  // (the 30000 signed limit) + value (mono-core admission.rs). The Max button
+  // and the insufficient-funds gate must reserve THIS (not the smaller displayed
+  // charge) or a Max/near-balance send would be rejected on-chain; the surplus
+  // over the 21000-unit charge is refunded. Mirrors the signed limit exactly
+  // (suggestion limit, else the same 21000 fallback the signed tx uses).
+  const reserveFeeResult = useMemo(
+    () =>
+      feeSuggestion === null
+        ? null
+        : nativeFeeDisplayFromExecutionFeeSuggestion(feeSuggestion, {
+            fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+            priorityMultiplierBps: tierMultiplierBps,
+          }),
+    [feeSuggestion, tierMultiplierBps],
+  );
+  const reserveFeeLythoshi =
+    reserveFeeResult?.ok === true ? reserveFeeResult.display.totalLythoshi : null;
 
   const parsedRecipient = useMemo(() => validateToAddress(to), [to]);
   const nameResolution = useNameForwardResolve(parsedRecipient.monoName, chainId);
@@ -299,9 +340,9 @@ export function Send({
   const spendGateLythoshi = spendGuardLythoshi ?? balanceLythoshi;
   const insufficientFunds =
     amountLythoshi !== null &&
-    estimatedFeeLythoshi !== null &&
+    reserveFeeLythoshi !== null &&
     spendGateLythoshi !== null &&
-    amountLythoshi + estimatedFeeLythoshi > spendGateLythoshi;
+    amountLythoshi + reserveFeeLythoshi > spendGateLythoshi;
 
   const canContinue =
     effectiveAddr0x !== null &&
@@ -352,19 +393,22 @@ export function Send({
   }, [selectedContact, effectiveAddr0x, contactsMap]);
 
   // §25.2 item 6 — a §22.8 registered name for the recipient, reverse-
-  // resolved from the local name cache (the same cache the activity feed
-  // populates via lyth_getAddressLabel). Preferred over the contact name
-  // in the preview "To" row. There is no forward name->address RPC, so
-  // this is reverse-resolve + cache only (no new registry path).
-  const recipientRegisteredName = useRegisteredName(effectiveAddr0x);
+  // §22.8 reverse-resolve the recipient → its canonical `*.mono` name,
+  // QUORUM-checked (mirrors forward-resolve; a single rogue operator can't
+  // mislabel who you're paying). Cache-first; null → the review shows the
+  // bech32m address (which stays the source of truth). Preferred over the
+  // contact name in the preview "To" row.
+  const recipientRegisteredName = useReverseName(effectiveAddr0x, chainId);
 
   const handleMax = () => {
     // T4-03 (Item C): Max is computed against the spend guard (lowest
     // cross-operator balance), not the displayed MAX, so it can never exceed
     // affordable funds.
     const maxBasis = spendGuardLythoshi ?? balanceLythoshi;
-    if (maxBasis === null || estimatedFeeLythoshi === null) return;
-    const maxLythoshi = maxBasis - estimatedFeeLythoshi;
+    if (maxBasis === null || reserveFeeLythoshi === null) return;
+    // Reserve the admission worst case (30000-limit), not the displayed 21000
+    // charge — else the Max amount would leave too little to be admitted.
+    const maxLythoshi = maxBasis - reserveFeeLythoshi;
     if (maxLythoshi <= 0n) {
       setAmountStr("0");
       return;
@@ -1195,7 +1239,15 @@ export function Send({
                       </span>
                     </div>
                     <div>
-                      Execution units:{" "}
+                      Execution units (charged):{" "}
+                      <span style={{ fontFamily: "var(--f-mono)" }}>
+                        {formatExecutionUnits(
+                          NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX,
+                        )}
+                      </span>
+                    </div>
+                    <div>
+                      Reserved limit:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
                         {formatExecutionUnits(
                           feeSuggestion?.executionUnitLimitHex ??
@@ -1519,62 +1571,6 @@ function useNameForwardResolve(
   }, [canonical, chainIdHex]);
 
   return state;
-}
-
-/**
- * §25.2 item 6 — reverse-resolve a recipient address to its registered
- * §22.8 display name from the local name cache (address-keyed,
- * populated by lyth_getAddressLabel elsewhere in the popup). Returns the
- * `displayName` string when the cache holds a non-null label for the
- * address, else null. Subscribes to chrome.storage.onChanged so a fresh
- * label resolved elsewhere lights up the preview without a re-render
- * loop. No forward registry/RPC path is wired here — the SDK does expose
- * `lyth_resolveName`, but this preview stays cache-only for now.
- */
-function useRegisteredName(addr0x: string | null): string | null {
-  const [name, setName] = useState<string | null>(null);
-  const key = addr0x === null ? null : addr0x.toLowerCase();
-
-  useEffect(() => {
-    if (key === null) {
-      setName(null);
-      return;
-    }
-    let cancelled = false;
-
-    const resolve = (cache: NameCache) => {
-      if (cancelled) return;
-      const entry = cache[key];
-      const displayName = entry?.label?.displayName ?? null;
-      setName(typeof displayName === "string" && displayName.length > 0 ? displayName : null);
-    };
-
-    chrome.storage.local.get([STORAGE_KEY_NAME_CACHE], (res) => {
-      if (cancelled) return;
-      const validated = validateNameCache(res?.[STORAGE_KEY_NAME_CACHE]);
-      resolve(validated ?? {});
-    });
-
-    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
-      changes,
-      area,
-    ) => {
-      if (area !== "local") return;
-      const change = changes[STORAGE_KEY_NAME_CACHE];
-      if (!change) return;
-      const validated = validateNameCache(change.newValue);
-      if (validated === null) return;
-      resolve(validated);
-    };
-    chrome.storage.onChanged.addListener(listener);
-
-    return () => {
-      cancelled = true;
-      chrome.storage.onChanged.removeListener(listener);
-    };
-  }, [key]);
-
-  return name;
 }
 
 interface MonoNameResolveHintProps {

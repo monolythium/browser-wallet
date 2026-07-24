@@ -35,6 +35,7 @@ import {
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SIGNATURE_LEN,
+  REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT,
   typedBech32ToAddress,
   verifyNoEvmArchiveProofSignatures,
   type NoEvmArchiveSignatureVerification,
@@ -231,7 +232,7 @@ import {
   rehydrateGenesisCache,
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
-import { hardenedChains } from "../shared/hardened-dial.js";
+import { hardenedChains, overrideWithinFleet } from "../shared/hardened-dial.js";
 import {
   clampToSaneBound,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
@@ -245,6 +246,7 @@ import {
   activityPendingKey,
   activityLocalClaimsKey,
   mergeIndexerSnapshot,
+  mapAddressActivityToRows,
   transitionPending,
   applyLocalClaims,
   reconcilePending,
@@ -258,6 +260,7 @@ import {
   type RawAddressActivity,
   type RawDelegationHistory,
 } from "../shared/activity.js";
+import { mapTxFeedToRows, type RawTxFeedTx } from "../shared/tx-feed.js";
 import { isCurrencyCode, type CurrencyCode } from "../shared/iso4217.js";
 import {
   sentAddressesKey,
@@ -278,6 +281,24 @@ import {
   type NameLabel,
   type NameCache,
 } from "../shared/name-resolution.js";
+import {
+  validateRegisterableName,
+  quoteNameCostLythoshi,
+  nameFeeUnitLythoshi,
+  encodeNameRegisterCall,
+  encodeNameProposeTransferCall,
+  encodeNameAcceptTransferCall,
+  nameRegistryAddressHex,
+  type NameCategory,
+} from "../shared/name-registry.js";
+import {
+  STORAGE_KEY_NAME_LEDGER,
+  validateNameLedger,
+  addOwnedNameEntry,
+  getOwnedNames,
+  type ReconciledOwnedName,
+  type OwnedNameStatus,
+} from "../shared/name-ledger.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { lythoshiDecimalToLythDecimal } from "../shared/lyth-units.js";
 import { decodeClaimedAmountLythoshi } from "../shared/claimed-log.js";
@@ -285,11 +306,30 @@ import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
   submitMlDsaTx,
+  broadcastPlaintextTransaction,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   testnetResolveNameConsensus,
+  testnetReverseNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
+import { hexToBytes, type NativeEvmTxFields } from "@monolythium/core-sdk/crypto";
+import { isFeatureEnabled } from "../shared/two-tier-features.js";
+import {
+  deriveNativeMultisigAddress,
+  nativeMultisigBaseSighash,
+} from "../shared/native-multisig.js";
+import {
+  assembleNativeMultisigSignedTx,
+  type CollectedMemberSignature,
+} from "../shared/native-multisig-tx.js";
+import {
+  STORAGE_KEY_REVERSE_NAME_CACHE,
+  validateReverseNameCache,
+  getReverseName,
+  putReverseName,
+  evictExpiredReverseNames,
+} from "../shared/reverse-name-cache.js";
 import {
   deriveWsUrl,
   getWsClient,
@@ -311,11 +351,8 @@ import {
 } from "../shared/mrc-account.js";
 import type { NativeAgentStateResponse } from "../shared/native-agent-state.js";
 import {
-  collectWalletBridgeRouteDisclosures,
   validateWalletMrcHoldersResponse,
   validateWalletTokenBalanceList,
-  type WalletBridgeRouteDisclosure,
-  type WalletBridgeRouteReadiness,
   type WalletMrcHolderStandard,
   type WalletMrcHoldersResponse,
   type WalletTokenBalance,
@@ -332,11 +369,6 @@ import {
   readDelegationCap,
   readPendingRewards,
 } from "./staking-client.js";
-import { readBridgeRoutes } from "./bridge-routes-client.js";
-import {
-  readBridgeDrainStatus,
-  readBridgeHealth,
-} from "./bridge-health-client.js";
 import {
   buildSpendingPolicyClaim,
   readSpendingPolicy,
@@ -1577,6 +1609,13 @@ function walletAuthInternalFailure(stage: string, cause?: unknown): RpcResponse 
 const MULTISIG_SEND_REFUSAL =
   "This is a multisig wallet — transactions go through the multisig propose/approve flow.";
 
+/** Server-side refusal for the native `0x40` multisig send path while it is
+ *  e2e-unverified on-chain. The path is DEV-GATED: enforced here (not just hidden
+ *  in the UI) so no ordinary user can move funds through it until a live-testnet
+ *  e2e passes (fund a monom, spend with a threshold witness). */
+const NATIVE_MULTISIG_DEV_GATE_REFUSAL =
+  "native multisig send is not enabled — it is unverified on-chain and available only in Developer mode until a testnet end-to-end test passes.";
+
 /** True when the active (unlocked) vault is a multisig vault. Cheap +
  *  side-effect-free: getActiveVaultIdV4 is in-memory (null when locked);
  *  readMultisigMetaV4 does one container read, needs no unlock, and returns
@@ -1671,7 +1710,7 @@ async function readPendingNonceMap(): Promise<Record<string, PendingNonceEntry>>
 
 /** Nonce hex to sign: max(committed-from-chain, local-pending + 1), TTL-healed.
  *  Falls back to the committed nonce on any error or a stale/absent entry. */
-async function nextNonceHex(address: string, chainIdHex: string): Promise<string> {
+export async function nextNonceHex(address: string, chainIdHex: string): Promise<string> {
   const committedHex = await testnetTransactionCountHex(address);
   let next: bigint;
   try {
@@ -1700,7 +1739,7 @@ async function nextNonceHex(address: string, chainIdHex: string): Promise<string
 
 /** Record a successfully-submitted nonce so the next tx advances past it. Only
  *  the SUCCESS path calls this (a rejected submit must NOT advance the nonce). */
-async function recordSubmittedNonce(
+export async function recordSubmittedNonce(
   address: string,
   chainIdHex: string,
   nonceHex: string,
@@ -1719,6 +1758,140 @@ async function recordSubmittedNonce(
     await chrome.storage.session.set({ [PENDING_NONCE_KEY]: map });
   } catch {
     // best-effort — a write failure just means the next tx re-reads committed
+  }
+}
+
+/** The single SW-side submit chokepoint that unifies nonce selection across
+ *  EVERY submit path (popup send, dApp eth_sendTransaction, MRV native + plan,
+ *  multisig-execute). Picks the nonce — an explicit caller-supplied
+ *  `preferredNonceHex` (e.g. a dApp-supplied nonce) when present, else the local
+ *  pending-nonce tracker `nextNonceHex` (committed-fallback + TTL-healed, §D5) —
+ *  then signs + broadcasts through the one `submitMlDsaTx` chokepoint (which fans
+ *  the SAME signed bytes out to N operators, Part B). On SUCCESS only, it records
+ *  the used nonce ONCE (after the single `submitMlDsaTx`, never per fan-out
+ *  operator) so the next cross-path send advances past it. A reject throws from
+ *  `submitMlDsaTx` before the record, so a failed submit never reserves a nonce
+ *  (no gap — a gap is worse than a collision). NO signing/sighash/wire change:
+ *  only WHICH nonce value gets signed is centralized here; `submitMlDsaTx` and
+ *  the SDK signer are untouched. Any `req.nonce` is IGNORED — the helper owns
+ *  the nonce (so a pre-built plan/tx can be passed as-is and its stale build-time
+ *  nonce is overridden here at submit time). */
+export async function submitTrackedTx(
+  req: Omit<EthSendTxFields, "nonce"> & { nonce?: string },
+  boundVaultId: string,
+  opts: { from: string; chainIdHex: string; preferredNonceHex?: string | undefined },
+): Promise<{ txHash: string; via: string; nonceHex: string }> {
+  const nonceHex =
+    opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
+  const { txHash, via } = await submitMlDsaTx(
+    { ...req, nonce: nonceHex },
+    boundVaultId,
+  );
+  // Success path only (a reject threw above). Awaited so a rapid next send sees
+  // it immediately. Once per logical tx — the fan-out already happened inside.
+  await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
+  return { txHash, via, nonceHex };
+}
+
+// ── Name-registry (0x110E) submit helpers ────────────────────────────────────
+// The register / propose-transfer / accept-transfer flows are standard plaintext
+// `0x110E` precompile calls: SDK-encoded calldata, an exact-match `value` (the
+// U-curve registration cost, 0 for a free propose), routed through the Phase-3
+// tracker-aware submitTrackedTx. No new signing mechanism, no wire change.
+
+/** A 20-byte `0x` address, non-zero. */
+function isNonZeroAddr0x(v: unknown): v is string {
+  return (
+    typeof v === "string" &&
+    /^0x[0-9a-fA-F]{40}$/.test(v) &&
+    !/^0x0{40}$/.test(v)
+  );
+}
+
+/** Shape a submit error into the popup wire form (mirrors the MRV/send paths). */
+function nameSubmitError(e: unknown): {
+  ok: false;
+  reason: string;
+  code?: number;
+  method?: string;
+  via?: string;
+} {
+  const err = e as Error & { code?: number; via?: string; method?: string };
+  const out: { ok: false; reason: string; code?: number; method?: string; via?: string } = {
+    ok: false,
+    reason: err.message ?? "name transaction failed",
+  };
+  if (typeof err.code === "number") out.code = err.code;
+  if (typeof err.method === "string") out.method = err.method;
+  if (typeof err.via === "string") out.via = err.via;
+  return out;
+}
+
+/** Build + submit a name-registry tx via the Phase-3 tracker. Re-reads the fee
+ *  (and, for a priced op, re-quotes the cost from the live base price) right
+ *  BEFORE signing so the signed `value` matches the current base fee — the
+ *  chain enforces `value == cost` exactly (IncorrectFee otherwise). `cost:null`
+ *  is a free op (propose-transfer, value 0). Nonce-safe (tracker picks + records
+ *  once on success). */
+async function submitNameTx(opts: {
+  data: string;
+  cost: { category: NameCategory; primaryLabelLen: number } | null;
+  from: string;
+  chainIdHex: string;
+  boundVaultId: string;
+}): Promise<{ txHash: string; via?: string; costLythoshiHex: string }> {
+  const fee = await suggestFee(opts.chainIdHex);
+  const costLythoshi =
+    opts.cost === null
+      ? 0n
+      : quoteNameCostLythoshi(
+          opts.cost.category,
+          opts.cost.primaryLabelLen,
+          BigInt(fee.baseFeePerGas),
+        );
+  const txReq: Omit<EthSendTxFields, "nonce"> = {
+    to: nameRegistryAddressHex(),
+    value: "0x" + costLythoshi.toString(16),
+    data: opts.data,
+    gas: "0x" + REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT.toString(16),
+    maxFeePerGas: fee.maxFeePerGas,
+    maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+    chainIdHex: opts.chainIdHex,
+  };
+  const { txHash, via } = await submitTrackedTx(txReq, opts.boundVaultId, {
+    from: opts.from,
+    chainIdHex: opts.chainIdHex,
+  });
+  return { txHash, via, costLythoshiHex: "0x" + costLythoshi.toString(16) };
+}
+
+/** Record a name the wallet just register/accept'd for `address` in the
+ *  best-effort local ledger (chrome.storage.local). Convenience only — the list
+ *  is reconciled against the chain on read; there is no on-chain owned-names
+ *  reader (Nayiem/SDK-gate). Best-effort: a write failure is swallowed (the tx
+ *  already broadcast). */
+async function recordOwnedName(
+  address: string,
+  name: string,
+  category: string,
+): Promise<void> {
+  try {
+    const raw = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([STORAGE_KEY_NAME_LEDGER], (res) =>
+        resolve(res?.[STORAGE_KEY_NAME_LEDGER]),
+      );
+    });
+    const ledger = validateNameLedger(raw) ?? {};
+    const next = addOwnedNameEntry(ledger, address, {
+      name,
+      category,
+      addedAt: Date.now(),
+    });
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set({ [STORAGE_KEY_NAME_LEDGER]: next }, () => resolve());
+    });
+  } catch {
+    // best-effort — the ledger is a convenience, not truth.
   }
 }
 
@@ -2259,9 +2432,11 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // the chain registry's RPC alias resolves NXDOMAIN and the
           // existing `view` was built against that broken alias too, so
           // its fields are usually null on the testnet.
-          const nonceHex =
-            txReq.nonce ?? view.nonce ??
-            await testnetTransactionCountHex(fromAddr);
+          // Nonce (D3): honor an explicit dApp-supplied `txReq.nonce`; otherwise
+          // the tracker fills it at submit (submitTrackedTx below). `view.nonce`
+          // is the approval-PREVIEW value (display only) and is intentionally NOT
+          // used as the signed nonce — a wallet-filled nonce must reflect the
+          // CURRENT next nonce (tracker), not the stale approval-time count.
           // Prefer the price captured into `view` at approval time over a
           // fresh read, then clamp to the sane ceiling (T4-04 D3) so a
           // malicious/MITM operator cannot inflate the fee signed into the
@@ -2286,15 +2461,22 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
 
           // Sign + submit via the plaintext mesh_submitTx path.
           // The testnet does not use an eth_sendRawTransaction fallback path.
-          const { txHash } = await submitMlDsaTx({
-            ...(txReq.to !== undefined ? { to: txReq.to } : {}),
-            ...(txReq.value !== undefined ? { value: txReq.value } : {}),
-            ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-            nonce: nonceHex,
-            gas: executionUnitsHex,
-            gasPrice: executionUnitPriceHex,
-            chainIdHex: session.chainId,
-          }, boundVaultId);
+          const { txHash } = await submitTrackedTx(
+            {
+              ...(txReq.to !== undefined ? { to: txReq.to } : {}),
+              ...(txReq.value !== undefined ? { value: txReq.value } : {}),
+              ...(txReq.data !== undefined ? { data: txReq.data } : {}),
+              gas: executionUnitsHex,
+              gasPrice: executionUnitPriceHex,
+              chainIdHex: session.chainId,
+            },
+            boundVaultId,
+            {
+              from: fromAddr,
+              chainIdHex: session.chainId,
+              preferredNonceHex: txReq.nonce,
+            },
+          );
           return ok(txHash);
         } catch (e) {
           return err(ERR_INTERNAL, `ml-dsa tx failed: ${(e as Error).message}`);
@@ -2381,7 +2563,15 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitMlDsaTx(approvedTxReq, boundVaultId);
+        // PRESERVE the plan's build-time nonce (the previewed tx — and, for a
+        // deploy, its expectedContractAddress — bind it; overriding would diverge
+        // from the preview). Still routed through the tracker so the nonce is
+        // RECORDED, advancing a subsequent cross-path send past it.
+        const { txHash, via } = await submitTrackedTx(approvedTxReq, boundVaultId, {
+          from: fromAddr,
+          chainIdHex,
+          preferredNonceHex: approvedTxReq.nonce,
+        });
         return ok({ txHash, via });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -2507,7 +2697,15 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           chainIdHex,
           fromAddress: fromAddr,
         });
-        const { txHash, via } = await submitMlDsaTx(approvedTxReq, boundVaultId);
+        // PRESERVE the plan's build-time nonce (the previewed tx — and, for a
+        // deploy, its expectedContractAddress — bind it; overriding would diverge
+        // from the preview). Still routed through the tracker so the nonce is
+        // RECORDED, advancing a subsequent cross-path send past it.
+        const { txHash, via } = await submitTrackedTx(approvedTxReq, boundVaultId, {
+          from: fromAddr,
+          chainIdHex,
+          preferredNonceHex: approvedTxReq.nonce,
+        });
         return ok({ txHash, via, plan });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -4618,13 +4816,14 @@ const CACHE_STALENESS_MS = 30 * 1000;
 
 interface IndexerSnapshotRaw {
   tokenBalances: WalletTokenBalance[];
-  bridgeRouteDisclosures: WalletBridgeRouteDisclosure[];
-  bridgeRouteReadiness: WalletBridgeRouteReadiness | null;
   mrcAccount: MrcAccountLookupResponse | null;
   nativeAgentState: NativeAgentStateResponse | null;
   addressLabel: unknown | null;
   delegationHistory: unknown[];
   addressActivity: unknown[];
+  /** Page-1 keyset `nextCursor` for the address-activity timeline (#16(b));
+   *  null when exhausted / legacy bare-array operator. */
+  addressActivityCursor: string | null;
   errors: Record<string, string>;
 }
 
@@ -4810,6 +5009,11 @@ async function readNativeAgentStateLookup(
  *  most what it asked for (P5-005). */
 const ADDRESS_ACTIVITY_RPC_LIMIT = 30;
 const DELEGATION_HISTORY_RPC_LIMIT = 20;
+/** Rows requested from the GLOBAL `lyth_txFeed` for the indexer-off activity
+ *  fallback (#B3-2), before filtering to the queried address. The chain caps
+ *  txFeed at 200; the block-scan that backs it (indexer-off path) is
+ *  budget-bounded regardless, so this is a request hint, not a scan bound. */
+const TXFEED_FALLBACK_LIMIT = 50;
 
 /** Extract the row array from a `lyth_getAddressActivity` response, tolerating
  *  BOTH shapes during the v2 fleet migration: a legacy operator returns a bare
@@ -4847,6 +5051,22 @@ function extractAddressActivity(value: unknown, limit: number): unknown[] {
   return rows.length > limit ? rows.slice(0, limit) : rows;
 }
 
+/** Read the keyset `nextCursor` from a `lyth_getAddressActivity` v2 envelope
+ *  (#16(b)) so the popup can page the timeline. A legacy bare-array response
+ *  (no envelope) or any shape lacking a string cursor → `null` (timeline
+ *  exhausted / not paginable). The chain emits `nextCursor` only when a FULL
+ *  page returned (more rows may exist strictly before the last), else null. */
+function extractAddressActivityCursor(value: unknown): string | null {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { nextCursor?: unknown }).nextCursor === "string"
+  ) {
+    return (value as { nextCursor: string }).nextCursor;
+  }
+  return null;
+}
+
 /** Parallel-fetch the indexer streams used by popup-facing
  *  snapshots. Token balances are validated at the SW boundary because the
  *  popup renders them directly; other streams keep their existing raw shapes
@@ -4866,7 +5086,6 @@ async function fetchIndexerSnapshot(
   const addressForChain = userAddressForNativeRpc(address);
   const [
     tokenBalances,
-    bridgeRoutes,
     mrcAccount,
     nativeAgentState,
     addressLabel,
@@ -4874,7 +5093,6 @@ async function fetchIndexerSnapshot(
     addressActivity,
   ] = await Promise.all([
     settleTestnetRpc<unknown>("lyth_getTokenBalances", [addressForChain]),
-    readBridgeRoutes(),
     options.includeMrcAccount
       ? readMrcAccountLookup(address)
       : Promise.resolve<{ value: MrcAccountLookupResponse | null; error?: string }>({
@@ -4893,9 +5111,6 @@ async function fetchIndexerSnapshot(
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
-  if (bridgeRoutes.kind !== "live" && "reason" in bridgeRoutes) {
-    errors.bridgeRoutes = bridgeRoutes.reason;
-  }
   if (mrcAccount.error) errors.mrcAccount = mrcAccount.error;
   if (nativeAgentState.error) errors.nativeAgentState = nativeAgentState.error;
   if (addressLabel.error) errors.addressLabel = addressLabel.error;
@@ -4908,11 +5123,6 @@ async function fetchIndexerSnapshot(
   if (mrcHolderEnrichment.error) errors.mrcHolders = mrcHolderEnrichment.error;
   return {
     tokenBalances: mrcHolderEnrichment.tokenBalances,
-    bridgeRouteDisclosures: dedupeWalletBridgeRouteDisclosures([
-      ...bridgeRoutes.data.bridgeRouteDisclosures,
-      ...collectWalletBridgeRouteDisclosures(tokenBalances.value),
-    ]),
-    bridgeRouteReadiness: bridgeRoutes.data.readiness,
     mrcAccount: mrcAccount.value,
     nativeAgentState: nativeAgentState.value,
     addressLabel: addressLabel.value ?? null,
@@ -4924,50 +5134,9 @@ async function fetchIndexerSnapshot(
       addressActivity.value,
       ADDRESS_ACTIVITY_RPC_LIMIT,
     ),
+    addressActivityCursor: extractAddressActivityCursor(addressActivity.value),
     errors,
   };
-}
-
-function dedupeWalletBridgeRouteDisclosures(
-  disclosures: readonly WalletBridgeRouteDisclosure[],
-): WalletBridgeRouteDisclosure[] {
-  const seen = new Set<string>();
-  const out: WalletBridgeRouteDisclosure[] = [];
-  for (const disclosure of disclosures) {
-    const key =
-      typeof disclosure.routeId === "string"
-        ? `routeId:${disclosure.routeId}`
-        : `json:${JSON.stringify(disclosure)}`;
-    if (seen.has(key)) {
-      const index = out.findIndex((row) => {
-        const rowKey =
-          typeof row.routeId === "string"
-            ? `routeId:${row.routeId}`
-            : `json:${JSON.stringify(row)}`;
-        return rowKey === key;
-      });
-      if (index >= 0) {
-        out[index] = mergeWalletBridgeRouteDisclosure(out[index]!, disclosure);
-      }
-      continue;
-    }
-    seen.add(key);
-    out.push(disclosure);
-  }
-  return out;
-}
-
-function mergeWalletBridgeRouteDisclosure(
-  primary: WalletBridgeRouteDisclosure,
-  secondary: WalletBridgeRouteDisclosure,
-): WalletBridgeRouteDisclosure {
-  const merged: WalletBridgeRouteDisclosure = { ...primary };
-  for (const [key, value] of Object.entries(secondary)) {
-    if (merged[key] === undefined || merged[key] === null) {
-      merged[key] = value;
-    }
-  }
-  return merged;
 }
 
 // Structural validators for the raw wire shapes. These guard the SW
@@ -5062,6 +5231,46 @@ function validateRawDelegationList(input: unknown[]): RawDelegationHistory[] {
   const out: RawDelegationHistory[] = [];
   for (const raw of input) {
     const v = validateRawDelegationHistory(raw);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+/** Validate one `lyth_txFeed` transaction into the wallet-internal RawTxFeedTx
+ *  (the subset the indexer-off fallback consumes). Partial-data preferred: a
+ *  malformed row is dropped, the rest survive. */
+function validateRawTxFeedTx(input: unknown): RawTxFeedTx | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!isFiniteNum(r.blockNumber)) return null;
+  if (!isFiniteNum(r.txIndex)) return null;
+  if (typeof r.from !== "string") return null;
+  if (r.to !== null && typeof r.to !== "string") return null;
+  if (typeof r.value !== "string") return null;
+  if (typeof r.input !== "string") return null;
+  return {
+    blockNumber: r.blockNumber,
+    txIndex: r.txIndex,
+    from: r.from,
+    to: r.to,
+    value: r.value,
+    input: r.input,
+  };
+}
+
+/** Extract + validate the `transactions` array from a `lyth_txFeed` envelope
+ *  (`{ schemaVersion, latestHeight, limit, nextCursor, transactions }`).
+ *  Anything else → `[]` (defensive, matches the other stream extractors). */
+function validateRawTxFeedList(value: unknown): RawTxFeedTx[] {
+  const txs =
+    value !== null &&
+    typeof value === "object" &&
+    Array.isArray((value as { transactions?: unknown }).transactions)
+      ? (value as { transactions: unknown[] }).transactions
+      : [];
+  const out: RawTxFeedTx[] = [];
+  for (const raw of txs) {
+    const v = validateRawTxFeedTx(raw);
     if (v) out.push(v);
   }
   return out;
@@ -6694,6 +6903,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (validated === null) {
         return { ok: false, reason: "invalid operator list" };
       }
+      // Hardened (production) builds can only dial the allowlisted built-in
+      // fleet (strict connect-src). A reorder / pin / subset of the built-in
+      // operators is applied verbatim (same origins as the allowlist — e.g.
+      // pinning a healthy default to route around a degraded one), but a
+      // genuinely CUSTOM host would be CSP-blocked → bricked. Reject that
+      // up-front with a clear reason instead of persisting an override that
+      // hardened-dial would silently narrow back to the defaults (the "Save
+      // reverts to defaults" report). Dev builds skip this and honor any host.
+      if (isHardenedBuild() && !overrideWithinFleet(getDefaultOperators(), validated)) {
+        return {
+          ok: false,
+          reason:
+            "This build only dials the built-in operators. Reorder or pin the listed operators — adding a custom RPC host needs a developer build.",
+        };
+      }
       await setOperatorOverride(validated);
       cachedOperator = null;
       clearGenesisCache();
@@ -7446,7 +7670,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         let txHash: string | null = null;
         let broadcastError: string | null = null;
         try {
-          const nonceHex = await testnetTransactionCountHex(fromAddr);
           const fee = await suggestFee(action.chainIdHex);
           const gasHex =
             action.gasLimitHex ?? fee.gasLimit ?? TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
@@ -7480,16 +7703,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // p.vaultId and the assert passes on the sanctioned path; an
           // UNINTENDED swap during the nonce/fee awaits aborts (caught below,
           // finally restores the prior vault).
-          const r = await submitMlDsaTx({
-            to: action.to,
-            value: valueWeiHex,
-            ...(data !== undefined ? { data } : {}),
-            gas: gasHex,
-            nonce: nonceHex,
-            maxFeePerGas,
-            maxPriorityFeePerGas,
-            chainIdHex: action.chainIdHex,
-          }, p.vaultId);
+          const r = await submitTrackedTx(
+            {
+              to: action.to,
+              value: valueWeiHex,
+              ...(data !== undefined ? { data } : {}),
+              gas: gasHex,
+              maxFeePerGas,
+              maxPriorityFeePerGas,
+              chainIdHex: action.chainIdHex,
+            },
+            p.vaultId,
+            { from: fromAddr, chainIdHex: action.chainIdHex },
+          );
           txHash = r.txHash;
         } catch (e) {
           broadcastError = (e as Error).message ?? "send failed";
@@ -8154,6 +8380,112 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
+    case "native-multisig-send": {
+      // Phase 9 commit 3 — the native 0x40 multisig submit path (spend FROM a
+      // monom account). E2E-UNVERIFIED on-chain: DEV-GATED server-side (refused
+      // unless DEVELOPER_MODE is on) so no ordinary user can move funds through
+      // it until a live-testnet e2e passes. It NEVER routes through the single-key
+      // plaintext path (buildPlaintextSubmission / submitTrackedTx, which the c1
+      // guard refuses for 0x40) — it builds the base-sighash witness envelope and
+      // broadcasts via the same content-agnostic fan-out.
+      const p = message.payload as {
+        vaultId?: unknown;
+        to?: unknown;
+        valueWeiHex?: unknown;
+        dataHex?: unknown;
+        chainIdHex?: unknown;
+      };
+      if (
+        typeof p?.vaultId !== "string" ||
+        typeof p?.to !== "string" ||
+        typeof p?.chainIdHex !== "string"
+      ) {
+        return { ok: false, reason: "missing vaultId, to, or chainIdHex" };
+      }
+      // Server-side dev-gate — the enforcement point, not just a hidden UI.
+      const twoTier = await loadTwoTierState();
+      if (!isFeatureEnabled(twoTier, "DEVELOPER_MODE")) {
+        return { ok: false, reason: NATIVE_MULTISIG_DEV_GATE_REFUSAL };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "native multisig send is only wired for Monolythium Testnet today" };
+      }
+      const nmMeta = await readMultisigMetaV4(p.vaultId);
+      if (!nmMeta) {
+        return { ok: false, reason: "target vault is not a multisig vault" };
+      }
+      let members: Uint8Array[];
+      try {
+        members = nmMeta.signers.map((s) => hexToBytes(s.pubkey));
+      } catch {
+        return { ok: false, reason: "a member public key is malformed — cannot derive the native address" };
+      }
+      const monom = deriveNativeMultisigAddress(nmMeta.threshold, members);
+      // Local (self) signers the wallet can sign with. c3 wires the fully-local
+      // (self-only) path; external-member base-sighash collection is deferred.
+      const selfSigners = nmMeta.signers.filter(
+        (s) => s.role === "self" && typeof s.vaultId === "string",
+      );
+      if (selfSigners.length < nmMeta.threshold) {
+        return {
+          ok: false,
+          reason:
+            `native multisig send needs ${nmMeta.threshold} local (self) signer(s); this vault has ` +
+            `${selfSigners.length}. External-member signature collection isn't wired yet.`,
+        };
+      }
+      try {
+        // Nonce: the MONOM account's OWN committed nonce (fail-safe — never the
+        // local single-key tracker, which would risk a gap/collision for this
+        // account). A reused nonce is a chain-reject (fail-safe), never a stall.
+        const nonceHex = await testnetTransactionCountHex(monom);
+        const fee = await suggestFee(p.chainIdHex);
+        const gasHex = fee.gasLimit ?? TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
+        const maxFeePerGas =
+          "0x" +
+          clampToSaneBound(BigInt(fee.maxFeePerGas), MAX_EXECUTION_UNIT_PRICE_LYTHOSHI).toString(16);
+        const maxPriorityFeePerGas = clampPriorityTipToMaxFee(fee.maxPriorityFeePerGas, maxFeePerGas);
+        const fields: NativeEvmTxFields = {
+          chainId: p.chainIdHex,
+          nonce: nonceHex,
+          gasLimit: gasHex,
+          maxFeePerGas,
+          maxPriorityFeePerGas,
+          to: p.to,
+          value: typeof p.valueWeiHex === "string" ? p.valueWeiHex : "0x0",
+          input: typeof p.dataHex === "string" ? p.dataHex : "0x",
+          extensions: [],
+        };
+        // Every signature (each member + the outer) is over the BASE sighash.
+        const base = nativeMultisigBaseSighash(fields);
+        const memberSignatures: CollectedMemberSignature[] = [];
+        for (const sm of selfSigners.slice(0, nmMeta.threshold)) {
+          const sig = await signWithVaultV4(sm.vaultId as string, base);
+          memberSignatures.push({ pubkey: hexToBytes(sm.pubkey), signature: sig });
+        }
+        // The outer envelope signer is the first local member (a roster member),
+        // signing the same base.
+        const outer = selfSigners[0]!;
+        const outerSignature = await signWithVaultV4(outer.vaultId as string, base);
+        const outerPubkey = hexToBytes(outer.pubkey);
+        // Fail-closed assembly (verifies quorum + outer-is-member + base digest +
+        // derived == monom). Throws before broadcast if the chain would reject.
+        const built = assembleNativeMultisigSignedTx({
+          fields,
+          threshold: nmMeta.threshold,
+          members,
+          memberSignatures,
+          outerPubkey,
+          outerSignature,
+          expectedMonom: monom,
+        });
+        // Reuse the Phase-1 content-agnostic fan-out (idempotent by tx hash).
+        const { txHash, via } = await broadcastPlaintextTransaction(built.wireHex, built.txHashHex);
+        return { ok: true, txHash, via, monom };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message ?? "native multisig send failed" };
+      }
+    }
     // (The two-tier feature WRITE is applied popup-side now — see bg.ts
     // `bgTwoTierSetFeature`. It writes chrome.storage.local directly so a
     // toggle flips instantly without an MV3 cold-wake; the SW had no side
@@ -8808,8 +9140,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ok: true,
         snapshot: {
           tokenBalances: fresh.tokenBalances,
-          bridgeRouteDisclosures: fresh.bridgeRouteDisclosures,
-          bridgeRouteReadiness: fresh.bridgeRouteReadiness,
           mrcAccount: fresh.mrcAccount,
           nativeAgentState: fresh.nativeAgentState,
           addressLabel: fresh.addressLabel,
@@ -9037,10 +9367,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // cluster name is threaded onto its confirmed row (the indexer stream
       // carries only the numeric id, §C). prevConfirmed keeps the name sticky
       // across the rebuild once reconcilePending drops the pending row.
-      const nextCache = mergeIndexerSnapshot({ activity, delegation }, now, {
-        pending: prevPending,
-        confirmed: prevCache?.confirmed ?? [],
-      });
+      const nextCache = mergeIndexerSnapshot(
+        { activity, delegation, nextCursor: fresh.addressActivityCursor },
+        now,
+        {
+          pending: prevPending,
+          confirmed: prevCache?.confirmed ?? [],
+        },
+      );
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
       const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
       // Indexer-lag bridge (open-surface display path). A tx confirmed via the
@@ -9311,6 +9645,89 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       return { ok: true, cache: nextCache, pending: committedPending, errors: fresh.errors };
     }
+    case "wallet-activity-page": {
+      // #16(b) "load more" — fetch the NEXT (older) page of the address-activity
+      // timeline, cursor-driven, and return the mapped confirmed rows + the next
+      // cursor. READ-ONLY + ADDITIVE: NO caching, NO pending reconcile, NO
+      // notifications — the popup appends these older rows below the cached
+      // window (deduped by confirmedRowDedupKey). The richer, fund-adjacent
+      // wallet-activity-get path is deliberately untouched.
+      const p = message.payload as {
+        address?: unknown;
+        chainIdHex?: unknown;
+        cursor?: unknown;
+      };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (typeof p.cursor !== "string" || p.cursor.length === 0) {
+        return { ok: false, reason: "missing cursor" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "activity paging is only wired for Monolythium Testnet today" };
+      }
+      if (isDemoAddrSentinel(p.address)) {
+        return { ok: false, reason: "demo placeholder address — no chain query" };
+      }
+      const pageAddr = userAddressForNativeRpc(p.address);
+      const pageRes = await settleTestnetRpc<unknown>("lyth_getAddressActivity", [
+        pageAddr,
+        ADDRESS_ACTIVITY_RPC_LIMIT,
+        p.cursor,
+      ]);
+      // A transient/operator error surfaces to the caller (the popup keeps the
+      // already-shown rows + a retry) — it is NEVER masked as "no more pages".
+      if (pageRes.error !== null) {
+        return { ok: false, reason: pageRes.error };
+      }
+      const pageRows = validateRawActivityList(
+        extractAddressActivity(pageRes.value, ADDRESS_ACTIVITY_RPC_LIMIT),
+      );
+      // Map the address-activity stream ALONE for an older page (no
+      // delegation-history join): kind:"delegation" entries still map to
+      // delegate/undelegate/redelegate/claim rows; the empty key-set means no
+      // cross-stream suppression (there is no second stream to dedupe against).
+      const rows = mapAddressActivityToRows(pageRows, new Set<string>());
+      return {
+        ok: true,
+        rows,
+        nextCursor: extractAddressActivityCursor(pageRes.value),
+      };
+    }
+    case "wallet-activity-txfeed": {
+      // #B3-2 indexer-OFF fallback — surface recent activity from `lyth_txFeed`
+      // (a GLOBAL feed that indexer-OFF operators still serve via a block scan),
+      // FILTERED to txs involving this address. READ-ONLY + ADDITIVE: NO cache
+      // write, NO reconcile, NO notifications. The popup fires this ONLY when the
+      // per-address timeline is empty for a benign reason (indexer-disabled /
+      // genuinely-empty) — never to mask a transient error (that still surfaces +
+      // failovers per Phase 1). No-mock: a failed / empty txFeed → no rows → the
+      // popup shows the honest empty state (never fabricated activity).
+      const p = message.payload as { address?: unknown; chainIdHex?: unknown };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "txFeed fallback is only wired for Monolythium Testnet today" };
+      }
+      if (isDemoAddrSentinel(p.address)) {
+        return { ok: false, reason: "demo placeholder address — no chain query" };
+      }
+      const feedRes = await settleTestnetRpc<unknown>("lyth_txFeed", [
+        TXFEED_FALLBACK_LIMIT,
+      ]);
+      // txFeed itself failing (transient, or the operator lacks the
+      // TransactionsInBlock capability) → ok:false; the popup keeps the honest
+      // empty state, it does NOT fabricate rows.
+      if (feedRes.error !== null) {
+        return { ok: false, reason: feedRes.error };
+      }
+      const rows = mapTxFeedToRows(
+        validateRawTxFeedList(feedRes.value),
+        p.address,
+      );
+      return { ok: true, rows };
+    }
     case "wallet-activity-failed": {
       // Failed txs are NOT in the success-only indexer activity stream, so the
       // Activity list sources them from the notification history — already
@@ -9430,6 +9847,348 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       } catch (e) {
         return { ok: false, reason: (e as Error).message ?? "resolve failed" };
+      }
+    }
+    case "wallet-name-quote": {
+      // §22.8 name-registration COST quote (read-only; no submit). Validates
+      // the name (Human/Agent scope + the chain's forbidden prefixes) and prices
+      // it from the LIVE base price (suggestFee.baseFeePerGas ==
+      // lyth_executionUnitPrice.basePricePerExecutionUnitLythoshi — the exact
+      // fee unit the chain's U-curve uses). No-mock: an unquotable cost is an
+      // honest error, never a fabricated price.
+      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name registration is only wired for Monolythium Testnet today" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) {
+        return { ok: false, reason: v.message, invalid: true, invalidReason: v.reason };
+      }
+      try {
+        const fee = await suggestFee(p.chainIdHex);
+        const baseFee = BigInt(fee.baseFeePerGas);
+        const cost = quoteNameCostLythoshi(v.category, v.primaryLabelLen, baseFee);
+        return {
+          ok: true,
+          canonical: v.canonical,
+          category: v.category,
+          parentName: v.parentName,
+          costLythoshiHex: "0x" + cost.toString(16),
+          feeUnitLythoshiHex: "0x" + nameFeeUnitLythoshi(baseFee).toString(16),
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message ?? "couldn't quote the registration cost" };
+      }
+    }
+    case "wallet-name-register": {
+      // §22.8 REGISTER (Human/Agent). Standard plaintext 0x110E call via the
+      // Phase-3 tracker (submitTrackedTx): SDK-encoded calldata, value == the
+      // exact U-curve cost re-quoted right before signing. Fail-safe: the chain
+      // reverts a taken/invalid/unowned name post-inclusion; we pre-check
+      // availability (+ agent-parent ownership) to avoid a wasted-fee revert,
+      // but never fabricate success.
+      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name registration is only wired for Monolythium Testnet today" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) return { ok: false, reason: v.message };
+      if (!isUnlockedV4()) return { ok: false, reason: "wallet locked" };
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) return { ok: false, reason: "wallet locked" };
+      if (await activeVaultIsMultisig()) return { ok: false, reason: MULTISIG_SEND_REFUSAL };
+      // Availability pre-check (advisory — FCFS is authoritative). Block only on
+      // a CONFIRMED hit so a flaky quorum can't wedge the flow; a taken name that
+      // slips through reverts on-chain (fail-safe).
+      try {
+        const avail = await testnetResolveNameConsensus(v.canonical);
+        if (avail.status === "confirmed-hit") {
+          return { ok: false, reason: "That name is already registered." };
+        }
+      } catch {
+        // best-effort — proceed; the chain is authoritative.
+      }
+      // Agent: the caller must own the parent <human>.mono (chain: AgentParentInvalid).
+      if (v.registerableCategory === "agent" && v.parentName !== null) {
+        try {
+          const parent = await testnetResolveNameConsensus(v.parentName);
+          if (parent.status === "confirmed-hit") {
+            if ((parent.addr0x ?? "").toLowerCase() !== fromAddr.toLowerCase()) {
+              return { ok: false, reason: "You must own the parent name to register an agent under it." };
+            }
+          } else if (parent.status === "confirmed-miss") {
+            return { ok: false, reason: "The parent name isn't registered — register it first." };
+          }
+          // disagreement/insufficient → proceed; the chain enforces ownership.
+        } catch {
+          // proceed — the chain enforces.
+        }
+      }
+      try {
+        const r = await submitNameTx({
+          data: encodeNameRegisterCall(v.canonical),
+          cost: { category: v.category, primaryLabelLen: v.primaryLabelLen },
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          boundVaultId,
+        });
+        await recordOwnedName(fromAddr, v.canonical, v.category);
+        return {
+          ok: true,
+          txHash: r.txHash,
+          via: r.via,
+          canonical: v.canonical,
+          category: v.category,
+          costLythoshiHex: r.costLythoshiHex,
+        };
+      } catch (e) {
+        return nameSubmitError(e);
+      }
+    }
+    case "wallet-name-propose": {
+      // §22.8 PROPOSE-TRANSFER (owner → recipient). FREE (value 0); opens a 24h
+      // acceptance window on-chain. The recipient must be a resolved 0x address
+      // (the popup forward-resolves a .mono recipient before calling).
+      const p = message.payload as {
+        name?: unknown;
+        recipientAddr0x?: unknown;
+        chainIdHex?: unknown;
+      };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name transfers are only wired for Monolythium Testnet today" };
+      }
+      if (!isNonZeroAddr0x(p.recipientAddr0x)) {
+        return { ok: false, reason: "enter a valid recipient address" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) return { ok: false, reason: v.message };
+      if (!isUnlockedV4()) return { ok: false, reason: "wallet locked" };
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) return { ok: false, reason: "wallet locked" };
+      if (await activeVaultIsMultisig()) return { ok: false, reason: MULTISIG_SEND_REFUSAL };
+      if (p.recipientAddr0x.toLowerCase() === fromAddr.toLowerCase()) {
+        return { ok: false, reason: "The recipient is your own address." };
+      }
+      // Ownership pre-check (advisory): block only on a CONFIRMED owner mismatch.
+      try {
+        const owner = await testnetResolveNameConsensus(v.canonical);
+        if (owner.status === "confirmed-hit") {
+          if ((owner.addr0x ?? "").toLowerCase() !== fromAddr.toLowerCase()) {
+            return { ok: false, reason: "You don't own this name." };
+          }
+        } else if (owner.status === "confirmed-miss") {
+          return { ok: false, reason: "That name isn't registered." };
+        }
+      } catch {
+        // proceed — the chain enforces NotAuthorized.
+      }
+      try {
+        const r = await submitNameTx({
+          data: encodeNameProposeTransferCall(v.canonical, p.recipientAddr0x),
+          cost: null,
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          boundVaultId,
+        });
+        return { ok: true, txHash: r.txHash, via: r.via, canonical: v.canonical };
+      } catch (e) {
+        return nameSubmitError(e);
+      }
+    }
+    case "wallet-name-accept": {
+      // §22.8 ACCEPT-TRANSFER (recipient). PAID: the recipient re-pays the FULL
+      // U-curve registration cost (value == cost), within the 24h window. There
+      // is no on-chain pending-proposal reader, so a stale/absent proposal
+      // reverts post-inclusion (fail-safe) — surfaced honestly, never faked.
+      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name transfers are only wired for Monolythium Testnet today" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) return { ok: false, reason: v.message };
+      if (!isUnlockedV4()) return { ok: false, reason: "wallet locked" };
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) return { ok: false, reason: "wallet locked" };
+      if (await activeVaultIsMultisig()) return { ok: false, reason: MULTISIG_SEND_REFUSAL };
+      try {
+        const r = await submitNameTx({
+          data: encodeNameAcceptTransferCall(v.canonical),
+          cost: { category: v.category, primaryLabelLen: v.primaryLabelLen },
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          boundVaultId,
+        });
+        await recordOwnedName(fromAddr, v.canonical, v.category);
+        return {
+          ok: true,
+          txHash: r.txHash,
+          via: r.via,
+          canonical: v.canonical,
+          costLythoshiHex: r.costLythoshiHex,
+        };
+      } catch (e) {
+        return nameSubmitError(e);
+      }
+    }
+    case "wallet-names-owned": {
+      // Best-effort owned-names list: the local ledger (names THIS wallet
+      // register/accept'd for the active address) reconciled against the chain.
+      // There is NO on-chain owned-names reader (regular register/accept emit no
+      // events; reverse is single last-write-wins) — a lyth_namesOf gate, so this
+      // NEVER fabricates a list. Each name is forward-resolved: owner == you →
+      // owned; a different owner → transferred; unregistered → not-found; an
+      // unresolvable quorum → unknown.
+      const p = message.payload as { chainIdHex?: unknown };
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "names are only wired for Monolythium Testnet today" };
+      }
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const raw = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_NAME_LEDGER], (res) =>
+          resolve(res?.[STORAGE_KEY_NAME_LEDGER]),
+        );
+      });
+      const ledger = validateNameLedger(raw) ?? {};
+      const entries = getOwnedNames(ledger, fromAddr);
+      const reconciled: ReconciledOwnedName[] = await Promise.all(
+        entries.map(async (e) => {
+          let status: OwnedNameStatus = "unknown";
+          try {
+            const res = await testnetResolveNameConsensus(e.name);
+            if (res.status === "confirmed-hit") {
+              status =
+                (res.addr0x ?? "").toLowerCase() === fromAddr.toLowerCase()
+                  ? "owned"
+                  : "transferred";
+            } else if (res.status === "confirmed-miss") {
+              status = "not-found";
+            }
+          } catch {
+            // leave as "unknown" — the chain is authoritative, we don't guess.
+          }
+          return { ...e, status };
+        }),
+      );
+      reconciled.reverse(); // newest first
+      return { ok: true, names: reconciled };
+    }
+    case "wallet-has-name": {
+      // Best-effort "does the active address have a `.mono` name" for the
+      // onboarding nudge. Biased HARD to `hasName: true` (don't nag): a false
+      // "you have no name" nudge to a name-owner is worse than a missed nudge.
+      // No-mock — ANY uncertainty (locked, unreadable ledger, reverse RPC
+      // error/unsupported) returns `true`. Only a definitive empty-ledger +
+      // successful empty reverse-resolve yields `false` (→ nudge).
+      const p = message.payload as { chainIdHex?: unknown };
+      if (typeof p?.chainIdHex !== "string" || !chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: true, hasName: true };
+      }
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: true, hasName: true };
+      // 1. Local ledger — names registered/accepted from THIS wallet. A non-empty
+      //    ledger means the user has engaged with names here (even a name later
+      //    transferred away makes them name-aware) → don't nag. No network.
+      try {
+        const raw = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([STORAGE_KEY_NAME_LEDGER], (res) =>
+            resolve(res?.[STORAGE_KEY_NAME_LEDGER]),
+          );
+        });
+        const ledger = validateNameLedger(raw) ?? {};
+        if (getOwnedNames(ledger, fromAddr).length > 0) {
+          return { ok: true, hasName: true };
+        }
+      } catch {
+        return { ok: true, hasName: true }; // ledger unreadable → don't nag
+      }
+      // 2. Reverse resolve (`lyth_nameOf`) — catches a name registered elsewhere.
+      //    Only a SUCCESSFUL null-name read (empty ledger + no reverse name) lets
+      //    us nag; any error/unsupported method → don't nag.
+      try {
+        const { result } = await testnetJsonRpc<{ name?: unknown }>(
+          "lyth_nameOf",
+          [userAddressForNativeRpc(fromAddr)],
+        );
+        const name = result?.name;
+        if (typeof name === "string" && name.length > 0) {
+          return { ok: true, hasName: true };
+        }
+        // Confirmed: empty ledger AND no reverse name → genuinely no name.
+        return { ok: true, hasName: false };
+      } catch {
+        return { ok: true, hasName: true }; // reverse unreadable → don't nag
+      }
+    }
+    case "wallet-reverse-name": {
+      // §22.8 reverse-resolve (address → canonical *.mono name), QUORUM-checked
+      // mirroring forward-resolve (testnetReverseNameConsensus). Display-only.
+      // Cache-first (mono.names.reverse, 30-min TTL); a miss triggers the quorum
+      // read. FAIL-CLOSED: only a confirmed-hit returns a name; a quorum
+      // disagreement / insufficient responders / any error returns null (the UI
+      // shows the bech32m address — never a single-operator-asserted name). A
+      // confirmed-miss (quorum agrees "no name") is cached as null.
+      const p = message.payload as { address?: unknown; chainIdHex?: unknown };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "reverse name resolution is only wired for Monolythium Testnet today" };
+      }
+      const addrLower = p.address.toLowerCase();
+      const now = Date.now();
+      const raw = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_REVERSE_NAME_CACHE], (res) =>
+          resolve(res?.[STORAGE_KEY_REVERSE_NAME_CACHE]),
+        );
+      });
+      const cache = validateReverseNameCache(raw) ?? {};
+      const hit = getReverseName(cache, addrLower, now);
+      if (hit !== undefined) {
+        return { ok: true, name: hit.name, cached: true };
+      }
+      const persist = async (name: string | null) => {
+        const next = putReverseName(evictExpiredReverseNames(cache, now), addrLower, name, now);
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set({ [STORAGE_KEY_REVERSE_NAME_CACHE]: next }, () => resolve());
+        });
+      };
+      try {
+        const consensus = await testnetReverseNameConsensus(addrLower);
+        if (consensus.status === "confirmed-hit") {
+          await persist(consensus.name);
+          return { ok: true, name: consensus.name };
+        }
+        if (consensus.status === "confirmed-miss") {
+          await persist(null); // cache the agreed miss
+          return { ok: true, name: null };
+        }
+        // disagreement / insufficient — transient; do NOT cache. Show bech32m.
+        return { ok: true, name: null, status: consensus.status };
+      } catch {
+        // Transport / no-operators error → fail-closed to bech32m, not cached.
+        return { ok: true, name: null, status: "error" };
       }
     }
     case "wallet-resolve-names": {
@@ -9837,7 +10596,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
+        // PRESERVE the plan's build-time nonce (the previewed tx — and, for a
+        // deploy, its expectedContractAddress — bind it; overriding would diverge
+        // from the preview). Still routed through the tracker so the nonce is
+        // RECORDED, advancing a subsequent cross-path send past it.
+        const { txHash, via } = await submitTrackedTx(txReq, boundVaultId, {
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          preferredNonceHex: txReq.nonce,
+        });
         return { ok: true, txHash, via };
       } catch (e) {
         const err = e as Error & {
@@ -10252,31 +11019,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing clusterId" };
       }
       return readClusterDiversity(p.clusterId);
-    }
-    case "bridge-health": {
-      // §20/§25.2 — live circuit-breaker / pause posture page (MB-2).
-      // Disclosure-only: the bridge has no live quote/submit path.
-      const p = message.payload as
-        | { cursor?: string | null; limit?: number }
-        | undefined;
-      const cursor = typeof p?.cursor === "string" ? p.cursor : null;
-      const outcome =
-        typeof p?.limit === "number"
-          ? await readBridgeHealth(cursor, p.limit)
-          : await readBridgeHealth(cursor);
-      return { ok: true, outcome };
-    }
-    case "bridge-drain-status": {
-      // §20/§25.2 — live per-route drain bucket (MB-2) for one
-      // (bridgeId, wrappedAsset). Disclosure-only.
-      const p = message.payload as
-        | { bridgeId?: string; wrappedAsset?: string }
-        | undefined;
-      if (typeof p?.bridgeId !== "string" || typeof p?.wrappedAsset !== "string") {
-        return { ok: false, reason: "missing bridgeId or wrappedAsset" };
-      }
-      const outcome = await readBridgeDrainStatus(p.bridgeId, p.wrappedAsset);
-      return { ok: true, outcome };
     }
     case "spending-policy-get": {
       // §18.8 — live spending-policy summary for one controlled
@@ -10738,10 +11480,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
       }
       try {
-        // Local pending-nonce: max(committed, last-submitted+1) so a 2nd tx
-        // sent before the 1st commits gets the NEXT nonce instead of reusing
-        // it (the chain has no pending-nonce read). See nextNonceHex.
-        const nonceHex = await nextNonceHex(fromAddr, p.chainIdHex);
         const fee = await suggestFee(p.chainIdHex);
         // T4-04 (Item D, b1): if the popup bound the exact fee it displayed,
         // sign THAT instead of a second operator read (closes the display-vs-
@@ -10780,22 +11518,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           bound?.maxPriorityFeePerGasHex ?? fee.maxPriorityFeePerGas,
           maxFeePerGas,
         );
-        const txReq: EthSendTxFields = {
+        const txReq: Omit<EthSendTxFields, "nonce"> = {
           to: p.to,
           value: p.valueWeiHex,
           ...(p.data !== undefined ? { data: p.data } : {}),
           gas: gasHex,
-          nonce: nonceHex,
           maxFeePerGas,
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
-        // Advance the local pending-nonce now that the submit was accepted, so
-        // a 2nd tx sent before this one commits doesn't reuse this nonce.
-        // Awaited (small session write) so the next send sees it immediately.
-        // Only the success path reaches here — a reject throws to the catch.
-        await recordSubmittedNonce(fromAddr, p.chainIdHex, nonceHex);
+        // submitTrackedTx picks the pending-tracker nonce (max(committed,
+        // last-submitted+1), TTL-healed) and records it ONCE on success, so a 2nd
+        // tx (from ANY path) sent before this one commits gets the NEXT nonce.
+        const { txHash, via, nonceHex } = await submitTrackedTx(
+          txReq,
+          boundVaultId,
+          { from: fromAddr, chainIdHex: p.chainIdHex },
+        );
         // Part 3: SW-authoritative daily-cap count. A daily-mode passkey-
         // unlocked send was just submitted — append to the usage ledger here
         // (success path only) so the SW, not the popup, is the counter.

@@ -5,13 +5,14 @@ import { addressToBech32m } from "../shared/bech32m.js";
 export type IconName =
   | "send" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "clock" | "close" | "back" | "settings" | "lock" | "eye" | "search"
-  | "shield" | "warn" | "tpm" | "hw" | "passkey" | "bridge"
+  | "shield" | "warn" | "tpm" | "hw" | "passkey"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
   | "mono-mark" | "github" | "grid"
-  | "language" | "coins" | "palette" | "unstake" | "restake" | "reward";
+  | "language" | "coins" | "palette" | "unstake" | "restake" | "reward"
+  | "name-tag";
 
 /** Distinct glyph per delegation action so delegate / undelegate / redelegate
  *  read apart at a glance (they all shared `stake` before). delegate keeps the
@@ -100,6 +101,15 @@ export function Icon({ name, size = 16 }: IconProps) {
           <circle cx="13.5" cy="6.5" r="1.1" fill="currentColor" stroke="none" />
           <circle cx="17.5" cy="10.5" r="1.1" fill="currentColor" stroke="none" />
           <circle cx="6.5" cy="12.5" r="1.1" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "name-tag":
+      // A luggage / price tag with its string-hole dot — a claimable `.mono`
+      // name label. Distinct from `contacts` (people), `gem`, and `contract`.
+      return (
+        <svg {...props}>
+          <path d="M3 6a3 3 0 0 1 3-3h5.172a3 3 0 0 1 2.12.879l7.83 7.828a2 2 0 0 1 0 2.828l-5.586 5.586a2 2 0 0 1-2.828 0l-7.828-7.829A3 3 0 0 1 3 11.172V6Z" />
+          <circle cx="7.5" cy="7.5" r="1.3" />
         </svg>
       );
     case "send":
@@ -356,13 +366,6 @@ export function Icon({ name, size = 16 }: IconProps) {
       return (
         <svg {...props}>
           <path d="M15 7a4 4 0 1 1-4 4M11 11l-7 7v3h3l7-7" />
-        </svg>
-      );
-    case "bridge":
-      return (
-        <svg {...props}>
-          <path d="M2 17c2-4 4-4 6-4s3 4 8 4" />
-          <path d="M2 13c2-4 4-4 6-4s4 4 8 4" />
         </svg>
       );
     case "contract":

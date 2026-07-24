@@ -41,6 +41,9 @@ interface MainMenuProps {
   /** Optional — automation spending-limits management. Dev-gated; when
    *  omitted (or developer mode is off) the menu item is hidden. */
   onAgentPolicy?: () => void;
+  /** Optional — §22.8 name registration / management. Gated behind REGISTRY;
+   *  omitted (row hidden) when the feature is off. */
+  onOpenNames?: () => void;
   onSettings: () => void;
   /** Opens the Display & Preferences hub (theme / language / display
    *  currency) — the same hub the Settings page routes to. */
@@ -81,6 +84,7 @@ export function MainMenu({
   onOperators,
   onMultisig,
   onAgentPolicy,
+  onOpenNames,
   onSettings,
   onDisplayPreferences,
   onAbout,
@@ -168,6 +172,14 @@ export function MainMenu({
             onClick={onContacts}
             hasChevron
           />
+          {onOpenNames && (
+            <MenuItem
+              icon="name-tag"
+              label="Names"
+              onClick={onOpenNames}
+              hasChevron
+            />
+          )}
           <MenuItem
             icon="globe"
             label="Connected sites"

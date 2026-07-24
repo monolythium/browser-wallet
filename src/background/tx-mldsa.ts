@@ -22,6 +22,27 @@ import {
 } from "./networks.js";
 import { isWithinSaneBound } from "../shared/operator-bounds.js";
 import { bech32mToAddress } from "../shared/bech32m.js";
+import { extractMempoolInner } from "../shared/send-error.js";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
+import { parseMonoName } from "../shared/name-resolution.js";
+import { carriesMultisigExtension } from "../shared/native-multisig.js";
+
+/** Fail-closed guard for the single-key plaintext path. The SDK signer signs the
+ *  FULL (extension-inclusive) sighash, but the chain verifies a native multisig
+ *  (`0x40`) tx's outer + member signatures over the BASE (witness-stripped)
+ *  sighash — so a `0x40`-bearing tx signed here would be chain-REJECTED. Refuse
+ *  it loudly so a native-multisig tx can never be full-sighash-signed by
+ *  accident. The genuine native path (Phase 9 commit 3) builds the base-sighash
+ *  witness envelope separately and never routes through here. Non-`0x40`
+ *  extensions (e.g. MRV v1, kind `0x30`) are unaffected. */
+export const MULTISIG_PLAINTEXT_REFUSAL =
+  "refusing to sign a native multisig (0x40) transaction on the single-key plaintext path — a 0x40 spend must use the base-sighash multisig submit path";
+
+function assertNoMultisigExtension(req: EthSendTxFields): void {
+  if (carriesMultisigExtension(req.extensions)) {
+    throw new Error(MULTISIG_PLAINTEXT_REFUSAL);
+  }
+}
 
 /** Sentinel thrown by the fail-closed vault-binding assert when the active
  *  vault changed between approval and the synchronous pre-sign read (NN-01
@@ -115,7 +136,6 @@ const COALESCED_READ_METHODS = new Set<string>([
   "lyth_nativeReceipt",
   "lyth_getTokenBalances",
   "lyth_getAddressActivity",
-  "lyth_bridgeRoutes",
   "lyth_mrcAccount",
   "lyth_nativeAgentState",
   "lyth_getAddressLabel",
@@ -151,11 +171,97 @@ export async function testnetJsonRpc<T>(
   return p;
 }
 
+/** The one write RPC (the chain's inclusion path). Its failover/fan-out is
+ *  Part B — Part A leaves the submit path byte-identical: throw on the first
+ *  error body, no cross-operator failover here. */
+const SUBMIT_METHOD = "mesh_submitTx";
+/** `-32047` UPSTREAM_UNAVAILABLE. Bare = the operator's upstream is down (fail
+ *  over); mempool-WRAPPED (`upstream unavailable: mempool: <admission>`) = an
+ *  admission decision about a tx (propagate — every operator answers the same). */
+const UPSTREAM_UNAVAILABLE_CODE = -32047;
+/** D1: cap read-failover attempts so one bad call doesn't walk the whole fleet
+ *  (the v0.4.0 four-cluster DVT set; its exact size comes from the SDK registry
+ *  and can change) — after this many failover-band errors, surface the last one. */
+const READ_FAILOVER_ATTEMPT_CAP = 4;
+/** D2: how long a read-failover-band error deprioritizes an operator (soft, in
+ *  memory) so subsequent reads try healthier operators first. Never a hard
+ *  removal; the operator is still tried once the rest are exhausted, and the
+ *  entry clears early on its next success. */
+const DEGRADED_OPERATOR_TTL_MS = 30_000;
+/** Deterministic JSON-RPC error codes (mono-core `crates/core/rpc/src/error.rs`):
+ *  the same answer on every operator, so a read gains nothing by failing over —
+ *  throw immediately. Everything else with a numeric code is operator-scoped /
+ *  transient → fail over across the genesis-trusted fleet. (`-32047` is special,
+ *  see `readErrorShouldPropagate`.) */
+const PROPAGATE_ERROR_CODES: ReadonlySet<number> = new Set([
+  -32700, // PARSE_ERROR — our request is malformed
+  -32600, // INVALID_REQUEST
+  -32602, // INVALID_PARAMS
+  -32043, // REQUEST_TOO_LARGE
+  -32052, // FILTER_TOO_BROAD
+  -32054, // DEBUG_TRACE_TOO_LARGE
+  -32055, // UNSUPPORTED_ENCODING
+  -32056, // INVALID_SUBSCRIPTION_TOPIC
+  -32059, // INVALID_JSONRPC_VERSION
+]);
+
+/** opName -> expiry ms. A soft, in-memory deprioritize hint set on a
+ *  read-failover-band error and honored by `orderReadOperators`. Cleared on a
+ *  later success from that operator; never bypasses the genesis-trust gate. */
+const degradedOperators = new Map<string, number>();
+
+/** Test-only: clear the D2 degraded-operator hints so a suite starts from a
+ *  known state. Not used by production code. */
+export function __resetReadFailoverStateForTest(): void {
+  degradedOperators.clear();
+}
+
+type OperatorRpc = ReturnType<typeof getActiveOperators>[number];
+
+/** True when an HTTP-200 `{error}` body from a READ should PROPAGATE (throw now)
+ *  rather than fail over: deterministic codes, or a mempool-wrapped `-32047`
+ *  admission reject. `undefined` code preserves today's throw-on-error behavior.
+ *  Bare `-32047` and every other operator-scoped code return false → fail over. */
+function readErrorShouldPropagate(
+  code: number | undefined,
+  message: string | undefined,
+): boolean {
+  if (typeof code !== "number") return true;
+  if (code === UPSTREAM_UNAVAILABLE_CODE) {
+    return message != null && extractMempoolInner(message) !== null;
+  }
+  return PROPAGATE_ERROR_CODES.has(code);
+}
+
+/** Stable soft-deprioritize: operators flagged degraded within the TTL window go
+ *  LAST (still tried, never dropped), otherwise the override/hardened-dial order
+ *  is preserved verbatim. Reads iterate this; the submit path uses the raw order. */
+function orderReadOperators(
+  ops: ReadonlyArray<OperatorRpc>,
+  nowMs: number,
+): OperatorRpc[] {
+  const fresh: OperatorRpc[] = [];
+  const degraded: OperatorRpc[] = [];
+  for (const op of ops) {
+    const until = degradedOperators.get(op.name);
+    if (until !== undefined && until > nowMs) degraded.push(op);
+    else fresh.push(op);
+  }
+  return degraded.length === 0 ? fresh : [...fresh, ...degraded];
+}
+
 /**
- * Iterate the published testnet operators in order, returning the
- * first one that produces a non-error JSON-RPC response. Transport-level
- * failures trigger fallback to the next operator; RPC-level rejections
- * propagate immediately because they are state-level consensus answers.
+ * Iterate the genesis-trusted testnet operators, returning the first that
+ * produces a non-error JSON-RPC response. Transport faults AND operator-scoped /
+ * transient RPC errors (the FAILOVER band — `-32045/-32046/-32048/-32058/-32601/
+ * -32701/-32090`, bare `-32047`, etc.) advance to the next operator; only
+ * DETERMINISTIC errors (`-32602`, request-shape faults) and the `mesh_submitTx`
+ * mempool-wrapped `-32047` admission reject propagate immediately (they are the
+ * same on every operator). Reads deprioritize a recently-degraded operator (D2)
+ * and cap failover at `READ_FAILOVER_ATTEMPT_CAP` (D1). The submit path
+ * (`mesh_submitTx`) is unchanged — throw on the first error body (Part B owns
+ * write fan-out). The genesis-trust gate and operator set/order (override /
+ * hardened-dial) are unchanged.
  */
 async function _testnetJsonRpcUncoalesced<T>(
   method: string,
@@ -186,9 +292,21 @@ async function _testnetJsonRpcUncoalesced<T>(
     throw new ChainGenesisMismatchError(getActiveOperators().length);
   }
 
+  const isSubmit = method === SUBMIT_METHOD;
+  // Reads deprioritize a recently-degraded operator (D2); the submit path keeps
+  // the raw override / hardened-dial order (Part B owns write fan-out).
+  const walkOps = isSubmit
+    ? getActiveOperators()
+    : orderReadOperators(getActiveOperators(), Date.now());
   let untrustedCount = 0;
   let totalOperators = 0;
-  for (const v of getActiveOperators()) {
+  // Last FAILOVER-band read error — surfaced (with its real code) when the walk
+  // or the attempt cap is exhausted, so the caller still classifies on a code.
+  let readFailoverErr:
+    | (Error & { code?: number; via?: string; method?: string })
+    | null = null;
+  let readFailoverAttempts = 0;
+  for (const v of walkOps) {
     totalOperators++;
     // GAP #11: genesis-hash pin. Operators whose chain identity doesn't
     // match TESTNET_GENESIS_HASH are skipped — they're either on a fork
@@ -240,12 +358,26 @@ async function _testnetJsonRpcUncoalesced<T>(
       if (typeof body.error.code === "number") err.code = body.error.code;
       err.via = v.name;
       err.method = method;
-      throw err;
+      // Submit path (mesh_submitTx) is Part B — unchanged: throw on the first
+      // error body. Reads propagate deterministic errors + the mempool-wrapped
+      // -32047 admission reject immediately; the operator-scoped / transient
+      // band fails over to the next genesis-trusted operator.
+      if (isSubmit || readErrorShouldPropagate(body.error.code, body.error.message)) {
+        throw err;
+      }
+      degradedOperators.set(v.name, Date.now() + DEGRADED_OPERATOR_TTL_MS); // D2
+      readFailoverErr = err;
+      readFailoverAttempts++;
+      if (readFailoverAttempts >= READ_FAILOVER_ATTEMPT_CAP) throw err; // D1 cap
+      continue;
     }
     if (body.result === undefined) {
       lastTransportErr = new Error(`empty result body from ${v.name}`);
       continue;
     }
+    // This operator answered cleanly — clear any stale degraded flag so it
+    // recovers immediately (before the D2 TTL would).
+    degradedOperators.delete(v.name);
     return { result: body.result, via: v.name };
   }
   // If EVERY operator failed the genesis pin check,
@@ -275,7 +407,13 @@ async function _testnetJsonRpcUncoalesced<T>(
     // classifySendError would mis-key as genesis-mismatch).
     throw new Error("no Monolythium Testnet operator reachable");
   }
-  throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
+  // Prefer the last real FAILOVER-band RPC error (it carries a code the caller
+  // can classify) over a bare transport error.
+  throw (
+    readFailoverErr ??
+    lastTransportErr ??
+    new Error("no Monolythium Testnet operator reachable")
+  );
 }
 
 /**
@@ -625,6 +763,120 @@ export async function testnetResolveNameConsensus(
     : { status: "confirmed-hit", addr0x: agreed, agreeing: answered.length, detail: "" };
 }
 
+/** Reverse name-resolution consensus (address → canonical `*.mono` name).
+ *
+ * The DIRECT MIRROR of {@link testnetResolveNameConsensus}: the same operator
+ * set (`getActiveOperators`), the same genesis-pin gate, the same parallel-probe-
+ * with-timeout, the same quorum threshold ({@link NAME_RESOLVE_QUORUM_MIN}), and
+ * the same EXACT-MATCH agreement reduce — only the RPC (`lyth_nameOf`) and the
+ * agreed value (a name string, not an address) differ.
+ *
+ * FAIL-CLOSED for display integrity: a `*.mono` name is shown to the user only
+ * on `confirmed-hit` (quorum agreed the SAME name). A single rogue operator
+ * returning a different name → `disagreement` → no name (the UI shows the
+ * bech32m address). This closes the SINGLE-ROGUE mislabel model — critical on
+ * send-review, where a wrong name could trick the user about who they're paying.
+ */
+export interface ReverseNameConsensusResult {
+  status: "confirmed-hit" | "confirmed-miss" | "disagreement" | "insufficient";
+  /** The agreed canonical `*.mono` name — `confirmed-hit` only, else null. */
+  name: string | null;
+  /** Operators that returned a definitive answer (a name OR an explicit miss). */
+  agreeing: number;
+  /** Per-operator outcome, for the SW console (diagnostics only). */
+  detail: string;
+}
+
+export async function testnetReverseNameConsensus(
+  address: string,
+): Promise<ReverseNameConsensusResult> {
+  const operators = getActiveOperators();
+  if (operators.length === 0) {
+    throw new Error("no Monolythium Testnet operators configured");
+  }
+  const addrParam = userAddressForNativeRpc(address);
+
+  const probes = operators.map(async (op) => {
+    // GAP #11: skip operators whose chain identity doesn't match our pin.
+    if (!(await verifyOperatorGenesis(op.rpc, BALANCE_GENESIS_PROBE_TIMEOUT_MS))) {
+      return { name: op.name, resolved: null, answered: false, reason: "untrusted genesis" };
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), BALANCE_CONSENSUS_TIMEOUT_MS);
+    try {
+      const res = await fetch(op.rpc, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "lyth_nameOf", params: [addrParam] }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        return { name: op.name, resolved: null, answered: false, reason: `HTTP ${res.status}` };
+      }
+      const body = (await res.json()) as {
+        result?: { name?: unknown } | null;
+        error?: { message?: string };
+      };
+      if (body.error) {
+        return { name: op.name, resolved: null, answered: false, reason: body.error.message ?? "rpc error" };
+      }
+      const name =
+        body.result !== null && typeof body.result === "object"
+          ? (body.result as { name?: unknown }).name
+          : null;
+      // No reverse record → a DEFINITIVE miss answer (null), still a quorum vote.
+      if (name === null || name === undefined) {
+        return { name: op.name, resolved: null, answered: true, reason: null };
+      }
+      // A malformed / non-`*.mono` value is NOT counted (never displayed).
+      if (typeof name !== "string" || parseMonoName(name) === null) {
+        return { name: op.name, resolved: null, answered: false, reason: "malformed name" };
+      }
+      return { name: op.name, resolved: name, answered: true, reason: null };
+    } catch (e) {
+      const err = e as Error;
+      return {
+        name: op.name,
+        resolved: null,
+        answered: false,
+        reason: err.name === "AbortError" ? "timeout" : err.message,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  const responses = await Promise.all(probes);
+  const answered = responses.filter((r) => r.answered);
+
+  if (answered.length < NAME_RESOLVE_QUORUM_MIN) {
+    return {
+      status: "insufficient",
+      name: null,
+      agreeing: answered.length,
+      detail: responses.map((r) => `${r.name}:${r.reason ?? "ok"}`).join("; "),
+    };
+  }
+
+  // EXACT-MATCH agreement: every definitive answer must be identical — all the
+  // SAME name, or all miss. A single divergent answer (a rogue's different name,
+  // or a hit-vs-miss split) → disagreement → fail-closed (show the address).
+  const distinct = new Set(answered.map((r) => (r.resolved === null ? "MISS" : r.resolved)));
+  if (distinct.size !== 1) {
+    return {
+      status: "disagreement",
+      name: null,
+      agreeing: answered.length,
+      detail: answered.map((r) => `${r.name}:${r.resolved ?? "MISS"}`).join("; "),
+    };
+  }
+
+  const agreed = answered[0]!.resolved;
+  return agreed === null
+    ? { status: "confirmed-miss", name: null, agreeing: answered.length, detail: "" }
+    : { status: "confirmed-hit", name: agreed, agreeing: answered.length, detail: "" };
+}
+
 function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
   const maxFeePerGas = req.maxFeePerGas ?? req.gasPrice;
   if (maxFeePerGas === undefined) throw new Error("maxFeePerGas/gasPrice missing");
@@ -680,6 +932,8 @@ export async function buildPlaintextSubmission(args: {
   if (getActiveVaultIdV4() !== args.boundVaultId) {
     throw new Error(VAULT_BINDING_CHANGED_MESSAGE);
   }
+  // Fail-closed: never full-sighash-sign a native multisig (0x40) tx here.
+  assertNoMultisigExtension(args.txReq);
   const backend = getUnlockedBackendV4();
   if (backend === null) {
     throw new Error("v3 wallet is locked");
@@ -690,33 +944,178 @@ export async function buildPlaintextSubmission(args: {
   });
 }
 
-/** Submit a bincode-encoded chain-side `SignedTransaction` (`0x`-hex) through
- *  the plaintext `mesh_submitTx` path and validate the node's echoed canonical
- *  tx hash against the locally computed one. Mirrors the validation in the
- *  SDK's `submitPlaintextTransaction`: the node echoes the 32-byte canonical
- *  native tx hash on admission; any mismatch (or non-32-byte response) is
- *  rejected so a wallet never trusts a hash it did not derive itself. */
+/** D3: fan out a broadcast to this many genesis-trusted operators (or all, if the
+ *  trusted set is smaller). One accepting/gossiping operator is enough for
+ *  inclusion — the X1 stuck-tx mode was a single accepting-but-non-gossiping
+ *  operator sinking the send. Re-broadcasting the SAME signed bytes is
+ *  idempotent by tx hash (the chain dedupes → DuplicateKnown, never a second
+ *  inclusion), so this cannot double-spend (verified vs mono-core v0.4.0). */
+const FANOUT_BREADTH = 3;
+
+/** Per-operator outcome of one mesh_submitTx in the fan-out. */
+type FanoutOutcome =
+  | { kind: "accepted"; via: string } // echoed our canonical hash
+  | { kind: "already-known"; via: string } // our exact tx already pooled/mined here
+  | { kind: "mailbox-full"; via: string } // actor backpressure — this op didn't take it
+  | { kind: "reject"; via: string; err: Error } // deterministic admission reject of THIS tx
+  | { kind: "transient"; via: string; err?: Error }; // transport / bare band — op unavailable
+
+function stampSubmitError(
+  message: string,
+  code: number | undefined,
+  via: string,
+): Error & { code?: number; via?: string; method?: string } {
+  const err = new Error(message) as Error & {
+    code?: number;
+    via?: string;
+    method?: string;
+  };
+  if (typeof code === "number") err.code = code;
+  err.via = via;
+  err.method = SUBMIT_METHOD;
+  return err;
+}
+
+/** Submit the SAME signed bytes to ONE operator and classify the response. Never
+ *  throws (all faults become an outcome) so the parallel fan-out can aggregate.
+ *  The echoed canonical hash is validated per operator — a wallet never trusts a
+ *  hash it did not derive itself. Genesis is gated by the caller (pickFanoutTargets). */
+async function submitToOneOperator(
+  op: OperatorRpc,
+  signedTxWireHex: string,
+  expectedTxHashHex: string,
+): Promise<FanoutOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(op.rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: SUBMIT_METHOD,
+        params: [signedTxWireHex],
+      }),
+    });
+  } catch {
+    return { kind: "transient", via: op.name };
+  }
+  if (!res.ok) return { kind: "transient", via: op.name };
+  let body: { result?: unknown; error?: { code?: number; message?: string } };
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    return { kind: "transient", via: op.name };
+  }
+  if (body.error) {
+    const msg = body.error.message ?? "";
+    const inner = extractMempoolInner(msg);
+    // A mempool-wrapped error is an admission DECISION about this tx; a bare error
+    // is the operator's upstream being down (transient — other operators may take it).
+    if (inner !== null) {
+      const low = inner.toLowerCase();
+      // Our own hash already pooled here, or the nonce already mined — both mean the
+      // tx is safely known to the chain (idempotent same-hash resubmit).
+      if (low.includes("duplicate tx already known") || low.includes("already known")) {
+        return { kind: "already-known", via: op.name };
+      }
+      if (low.includes("nonce already consumed") || low.includes("already consumed")) {
+        return { kind: "already-known", via: op.name };
+      }
+      // The one genuine transient admission fault (actor backpressure).
+      if (low.includes("mailbox full")) {
+        return { kind: "mailbox-full", via: op.name };
+      }
+      // Any other admission reject (bad nonce/fee/balance/sig, replace-underpriced …)
+      // is deterministic — every honest operator rejects it the same way.
+      return { kind: "reject", via: op.name, err: stampSubmitError(msg, body.error.code, op.name) };
+    }
+    return { kind: "transient", via: op.name, err: stampSubmitError(msg, body.error.code, op.name) };
+  }
+  const echoed = typeof body.result === "string" ? body.result.toLowerCase() : "";
+  const expected = expectedTxHashHex.toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
+    return {
+      kind: "reject",
+      via: op.name,
+      err: new Error(
+        `mesh_submitTx returned a non-canonical tx hash (${String(body.result)}); refusing to trust it`,
+      ),
+    };
+  }
+  if (echoed !== expected) {
+    return {
+      kind: "reject",
+      via: op.name,
+      err: new Error(
+        `mesh_submitTx echoed tx hash ${echoed} does not match locally computed ${expected}`,
+      ),
+    };
+  }
+  return { kind: "accepted", via: op.name };
+}
+
+/** The genesis-trusted operators to fan a broadcast to: the first FANOUT_BREADTH
+ *  of the override/hardened-dial set (in its order) that pass the genesis-pin
+ *  gate. Never routes a signed tx to an untrusted operator; falls to fewer than
+ *  FANOUT_BREADTH when the trusted set is smaller. */
+async function pickFanoutTargets(): Promise<OperatorRpc[]> {
+  const targets: OperatorRpc[] = [];
+  for (const op of getActiveOperators()) {
+    if (targets.length >= FANOUT_BREADTH) break;
+    if (await verifyOperatorGenesis(op.rpc, 2_000)) targets.push(op);
+  }
+  return targets;
+}
+
+/** Broadcast a bincode-encoded chain-side `SignedTransaction` (`0x`-hex) through
+ *  the plaintext `mesh_submitTx` path, FANNING OUT the SAME signed bytes to up to
+ *  FANOUT_BREADTH genesis-trusted operators in parallel (D3/D4) so a single
+ *  accepting-but-non-gossiping operator can't silently sink the send (the X1
+ *  stuck-tx mode). Re-broadcasting identical bytes is idempotent by tx hash, so
+ *  this cannot double-spend. Success = at least ONE operator accepts or reports
+ *  our own hash already-known (D5). The echoed canonical hash is validated per
+ *  accepting operator. NO re-sign, NO new sighash — the same signed bytes go to
+ *  every operator. `via` is the first accepting operator. */
 export async function broadcastPlaintextTransaction(
   signedTxWireHex: string,
   expectedTxHashHex: string,
 ): Promise<{ txHash: string; via: string }> {
-  const { result, via } = await testnetJsonRpc<string>("mesh_submitTx", [
-    signedTxWireHex,
-  ]);
-  const echoed = typeof result === "string" ? result.toLowerCase() : "";
-  const expected = expectedTxHashHex.toLowerCase();
-  // A canonical tx hash is 32 bytes -> "0x" + 64 hex chars.
-  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
-    throw new Error(
-      `mesh_submitTx returned a non-canonical tx hash (${result}); refusing to trust it`,
-    );
+  const targets = await pickFanoutTargets();
+  if (targets.length === 0) {
+    // No genesis-trusted operator to broadcast through — mirror the read path's
+    // aggregate reason so the user sees the same actionable chain-status error.
+    const n = getActiveOperators().length;
+    const reason = classifyNoOperatorReason();
+    if (reason === "quarantined") throw new ChainQuarantinedError(n);
+    if (reason === "regenesis" || reason === "untrusted") {
+      throw new ChainGenesisMismatchError(n);
+    }
+    throw new Error("no Monolythium Testnet operator reachable");
   }
-  if (echoed !== expected) {
-    throw new Error(
-      `mesh_submitTx echoed tx hash ${echoed} does not match locally computed ${expected}`,
-    );
+  const results = await Promise.allSettled(
+    targets.map((op) => submitToOneOperator(op, signedTxWireHex, expectedTxHashHex)),
+  );
+  const settled: FanoutOutcome[] = results.map((r, i) =>
+    r.status === "fulfilled" ? r.value : { kind: "transient", via: targets[i]!.name },
+  );
+  // D5: succeed if ANY operator accepted or already-knows our hash.
+  const accepted = settled.filter(
+    (o) => o.kind === "accepted" || o.kind === "already-known",
+  );
+  if (accepted.length > 0) {
+    return { txHash: expectedTxHashHex, via: accepted[0]!.via };
   }
-  return { txHash: expectedTxHashHex, via };
+  // No acceptance. Surface a real (bad-tx) failure ONLY when EVERY target
+  // returned a deterministic admission reject — otherwise some operators were
+  // transient/backpressured and the broadcast is retryable, not doomed.
+  const rejects = settled.filter(
+    (o): o is Extract<FanoutOutcome, { kind: "reject" }> => o.kind === "reject",
+  );
+  if (rejects.length === targets.length) {
+    throw rejects[0]!.err;
+  }
+  throw new Error("no Monolythium Testnet operator accepted the broadcast");
 }
 
 /** One-shot PLAINTEXT helper used by the service worker — the tx path on the
@@ -751,5 +1150,9 @@ export async function submitMlDsaTx(
   via: string;
   innerSighashHex: string;
 }> {
+  // Front-door guard (defense in depth; also enforced at the sign point in
+  // buildPlaintextSubmission): a native multisig (0x40) tx must never reach the
+  // full-sighash single-key path — it would be chain-rejected.
+  assertNoMultisigExtension(req);
   return submitPlaintextMlDsaTx(req, boundVaultId);
 }

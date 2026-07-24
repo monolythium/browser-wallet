@@ -4,11 +4,11 @@
 // The chain handler at protocore.rs:3003 takes
 //   [authorityIndex: u16, limit?: u32 default 200]
 // and returns an OperatorSigningActivity payload describing the
-// recent BLS-cert signing entries for that authority. The wallet
-// uses this for a *chain-wide* signing-health card on the Operators
+// recent ML-DSA-65 aggregate-cert signing entries for that authority. The
+// wallet uses this for a *chain-wide* signing-health card on the Operators
 // page — not per-operator-RPC, because the wallet's Operators page
 // manages RPC endpoint URLs (transport-layer) and the chain method
-// is keyed on the BLS validator-set authority slot (consensus-layer).
+// is keyed on the ML-DSA-65 aggregate-cert authority slot (consensus-layer).
 //
 // Per-operator (RPC-endpoint) signing-activity attribution would
 // require `lyth_resolveOperatorAuthority(operatorId)` chained per

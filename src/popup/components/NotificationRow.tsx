@@ -37,6 +37,8 @@ function iconForKind(kind: TxOpKind): IconName {
       return "shield";
     case "agent-policy":
       return "settings";
+    case "set-auto-compound":
+      return "restake";
     case "contract_call":
     default:
       return "contract";

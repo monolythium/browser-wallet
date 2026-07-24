@@ -48,13 +48,15 @@ export function PendingTxRowBody({ row, counterpartyLabel, onDismiss }: PendingT
   const lifecycle = row.lifecycle ?? "pending";
   const isTerminalLifecycle = lifecycle === "dropped" || lifecycle === "expired";
   const lifecycleNote =
-    lifecycle === "slow"
-      ? "taking longer than usual"
-      : lifecycle === "dropped"
-        ? "Didn't confirm (replaced or dropped)"
-        : lifecycle === "expired"
-          ? "Status unknown — taking unusually long"
-          : null;
+    lifecycle === "awaiting-inclusion"
+      ? "Broadcast — waiting for inclusion"
+      : lifecycle === "slow"
+        ? "taking longer than usual"
+        : lifecycle === "dropped"
+          ? "Didn't confirm (replaced or dropped)"
+          : lifecycle === "expired"
+            ? "Status unknown — taking unusually long"
+            : null;
   const isDelegationKind =
     opKind === "delegate" || opKind === "undelegate" || opKind === "redelegate";
   // Pending delegation labels resolve the cluster via the CAPTURED name (the

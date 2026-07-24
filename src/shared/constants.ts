@@ -154,6 +154,9 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   // AddressActivityKind probe is passive metadata
   // (used by the activity feed to render empty-state context).
   "wallet-activity-kind",
+  // #B3-2 indexer-off fallback: fired automatically by the empty-state effect,
+  // not by user input — passive, so it must not re-arm auto-lock.
+  "wallet-activity-txfeed",
   // Background refreshers fired on a fixed setInterval WITHOUT user input (the App
   // balance/activity poll, the Delegations/Stake rewards poll, the 30s indexer-status
   // tick). Like wallet-balance / wallet-indexer-snapshot above, these are passive —

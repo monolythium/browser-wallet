@@ -105,7 +105,7 @@ export function classifySendError(
  *  locate is case-insensitive; the inner is sliced from the ORIGINAL message so
  *  display casing is preserved. An empty/whitespace inner returns null (treated
  *  as a bare wrapper → chain-quarantined). */
-function extractMempoolInner(message: string): string | null {
+export function extractMempoolInner(message: string): string | null {
   const marker = "upstream unavailable: mempool: ";
   const idx = message.toLowerCase().indexOf(marker);
   if (idx === -1) return null;

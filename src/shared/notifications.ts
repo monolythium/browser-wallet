@@ -57,6 +57,7 @@ export type TxOpKind =
   | "complete-redemption"
   | "emergency-key"
   | "agent-policy"
+  | "set-auto-compound"
   | "contract_call";
 
 /** Runtime guard for `TxOpKind`. Used by the SW handler to coerce
@@ -74,6 +75,7 @@ export function isTxOpKind(v: unknown): v is TxOpKind {
     v === "complete-redemption" ||
     v === "emergency-key" ||
     v === "agent-policy" ||
+    v === "set-auto-compound" ||
     v === "contract_call"
   );
 }
@@ -329,6 +331,10 @@ export const NOTIFICATION_LABELS: Record<
   "agent-policy": {
     confirmed: "Agent policy updated",
     failed: "Agent policy failed",
+  },
+  "set-auto-compound": {
+    confirmed: "Auto-compound updated",
+    failed: "Auto-compound update failed",
   },
   contract_call: {
     confirmed: "Transaction confirmed",

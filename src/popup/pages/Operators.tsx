@@ -1,7 +1,7 @@
 // Operators — the testnet operator override management.
 //
 // The testnet is a single chain with multiple operator RPC endpoints. Power
-// users can override the published 7-operator default list with their
+// users can override the published default operator list with their
 // own operator URLs, or pin a single operator to bypass round-robin.
 //
 // Storage flow: edits are local until [Save] writes via bgOperatorsSet.
@@ -932,8 +932,8 @@ function sameOperators(
  *
  *  Per-RPC-endpoint attribution is intentionally out of scope: the
  *  wallet's Operators page manages transport-layer RPC URLs, while
- *  `lyth_signingActivity` is keyed on the consensus BLS authority
- *  slot. Mapping the two would require chaining
+ *  `lyth_signingActivity` is keyed on the consensus ML-DSA-65 aggregate-cert
+ *  authority slot. Mapping the two would require chaining
  *  `lyth_resolveOperatorAuthority` over `lyth_clusterStatus.members`
  *  per row, which is deferred. The card title is explicit about that
  *  scope so users don't misread it as per-RPC health. */

@@ -11,15 +11,78 @@
 // networks wiring stays a one-liner. The build flag lives in build-mode.ts.
 import { mergeOperatorOverride, type OperatorEntry } from "./operators.js";
 
+/** Origin of a URL string, or null if it doesn't parse. */
+function safeOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The WS origin a default endpoint maps to — mirrors csp.ts `wsOrigin` and
+ * ws-client `deriveWsUrl`: an explicit `wsRpc` wins; else port 8545 → 8546 and
+ * scheme http → ws / https → wss. Used to bound a hardened override's optional
+ * explicit `wsRpc` to the same allowlist the strict `connect-src` enumerates.
+ */
+function endpointWsOrigin(e: OperatorEntry): string | null {
+  try {
+    if (e.wsRpc !== undefined && e.wsRpc.length > 0) return new URL(e.wsRpc).origin;
+    const u = new URL(e.rpc);
+    const proto = u.protocol === "https:" ? "wss:" : "ws:";
+    const port = u.port === "8545" ? "8546" : u.port;
+    return `${proto}//${u.hostname}${port ? `:${port}` : ""}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when EVERY entry of `override` stays within the built-in fleet's
+ * allowlisted origins — i.e. the override only REORDERS / PINS / SUBSETS the
+ * defaults (matched by `rpc` origin, and by the explicit `wsRpc` origin when
+ * present). Such an override dials only hosts the strict `connect-src` already
+ * permits (csp.ts derives that allowlist from the SAME defaults), so it can
+ * never be CSP-blocked. An entry pointing at ANY host outside the fleet makes
+ * this false — honoring it would brick RPC under the CSP.
+ */
+export function overrideWithinFleet(
+  defaults: ReadonlyArray<OperatorEntry>,
+  override: OperatorEntry[],
+): boolean {
+  const allowedHttp = new Set(
+    defaults.map((d) => safeOrigin(d.rpc)).filter((o): o is string => o !== null),
+  );
+  const allowedWs = new Set(
+    defaults.map((d) => endpointWsOrigin(d)).filter((o): o is string => o !== null),
+  );
+  return override.every((o) => {
+    const http = safeOrigin(o.rpc);
+    if (http === null || !allowedHttp.has(http)) return false;
+    // Only an EXPLICIT wsRpc can escape the fleet; a derived ws (no wsRpc) shares
+    // the rpc host we just cleared, so it's implicitly allowlisted.
+    if (o.wsRpc !== undefined) {
+      const ws = safeOrigin(o.wsRpc);
+      if (ws === null || !allowedWs.has(ws)) return false;
+    }
+    return true;
+  });
+}
+
 /**
  * The operators the SW will dial.
  *
- * Hardened → ALWAYS the allowlisted defaults. The stored override REPLACES the
- * fleet (`mergeOperatorOverride` returns the override alone, not defaults +
- * override), so honoring it under the strict CSP would point every RPC at a
- * non-allowlisted host and brick the wallet. `loadOperatorOverride` runs at
- * every boot regardless of the runtime DEVELOPER_MODE flag, so the guard must
- * live here, not behind a UI gate.
+ * Hardened → the stored override IS honored WHEN it stays within the built-in
+ * fleet (reorder / pin / subset the allowlisted defaults — every host is
+ * already in the strict `connect-src`, so it can't be CSP-blocked). This is
+ * what the Operators "Use this operator" / Save flow needs to route around a
+ * degraded default operator, and was previously dropped wholesale. An override
+ * that carries ANY non-fleet host is rejected in full → fall back to the
+ * allowlisted defaults (the original brick-prevention, now scoped to only the
+ * genuinely-unsafe case, since such a host would be CSP-blocked → bricked).
+ * `loadOperatorOverride` runs at every boot regardless of DEVELOPER_MODE, so
+ * the guard must live here, not behind a UI gate.
  *
  * Dev → the stored override (or defaults), exactly as before.
  */
@@ -28,9 +91,13 @@ export function hardenedOperators(
   override: OperatorEntry[] | null,
   hardened: boolean,
 ): OperatorEntry[] {
-  return hardened
-    ? defaults.map((d) => ({ ...d }))
-    : mergeOperatorOverride(defaults, override);
+  if (!hardened) return mergeOperatorOverride(defaults, override);
+  if (override === null || override.length === 0) {
+    return defaults.map((d) => ({ ...d }));
+  }
+  return overrideWithinFleet(defaults, override)
+    ? override.map((o) => ({ ...o }))
+    : defaults.map((d) => ({ ...d }));
 }
 
 /**
