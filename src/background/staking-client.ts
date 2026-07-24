@@ -33,6 +33,7 @@ import {
 } from "@monolythium/core-sdk";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
+  DELEGATION_PER_WALLET_CAP_BPS,
   DIVERSITY_SCORE_MAX,
   MOCK_CLUSTER_APR_BPS,
   type ClusterDiversity,
@@ -749,19 +750,40 @@ export async function readDelegations(
 }
 
 // SDK contract: DelegationCapResponse (binding, not top-level exported).
-// Strict shape: { capBps: u32, lastChangedAtHeight: bigint, blockNumber: bigint }.
-// Wire form receives bigints as `string | number` over JSON; the wallet
-// stringifies to preserve precision.
+// Post-#319 shape: { capBps: u32, perWalletBps: u32, lastChangedAtHeight: bigint,
+//   perWalletLastChangedAtHeight: bigint, blockNumber: bigint }.
+// `perWalletBps` + `perWalletLastChangedAtHeight` are ABSENT on pre-#319 nodes
+// (the current v0.4.0 live fleet). Wire form receives bigints as `string |
+// number` over JSON; the wallet stringifies to preserve precision.
 interface RawDelegationCap {
   capBps?: number;
+  perWalletBps?: number;
   lastChangedAtHeight?: string | number | bigint;
+  perWalletLastChangedAtHeight?: string | number | bigint;
 }
 
 /** Chain encodes "cap disabled" as `u32::MAX`. The wallet normalises that
  *  to `null` so the UI can branch cleanly on `capBps !== null`. */
 const CHAIN_CAP_DISABLED = 0xffffffff;
 
-/** Read the per-cluster delegation cap (§23.6). */
+/** Normalise the chain-authoritative enforced per-wallet cap (issue #44):
+ *  a live, in-range (0 < bps ≤ 10000) value is adopted; ABSENT (pre-#319 node),
+ *  null, or out-of-range → `null` sentinel meaning "no live per-wallet cap —
+ *  downstream falls back to the DELEGATION_PER_WALLET_CAP_BPS floor". NEVER
+ *  coerces a bad value into an unlimited or looser-than-floor number. */
+function normalisePerWalletBps(raw: unknown): number | null {
+  return typeof raw === "number" &&
+    Number.isFinite(raw) &&
+    raw > 0 &&
+    raw <= 10000
+    ? raw
+    : null;
+}
+
+/** Read the per-cluster delegation cap (§23.6) + the enforced per-wallet cap
+ *  (issue #44). The malformed guard is on `capBps` ONLY — the live fleet omits
+ *  `perWalletBps`, so a field-absent response is the current production path,
+ *  not an error. */
 export async function readDelegationCap(): Promise<StakingResult<DelegationCap>> {
   try {
     const { result, via } = await testnetJsonRpc<RawDelegationCap>(
@@ -776,7 +798,11 @@ export async function readDelegationCap(): Promise<StakingResult<DelegationCap>>
       via,
       data: {
         capBps: result.capBps === CHAIN_CAP_DISABLED ? null : result.capBps,
+        perWalletBps: normalisePerWalletBps(result.perWalletBps),
         lastChangedAtHeight: String(result.lastChangedAtHeight ?? 0),
+        perWalletLastChangedAtHeight: String(
+          result.perWalletLastChangedAtHeight ?? 0,
+        ),
       },
     };
   } catch (e) {
@@ -793,7 +819,15 @@ export async function readDelegationCap(): Promise<StakingResult<DelegationCap>>
     return {
       ok: true,
       via: "mock",
-      data: { capBps: 5000, lastChangedAtHeight: "0" },
+      // Complete shape so consumers never see `undefined`. The per-wallet cap is
+      // a real protocol floor (issue #44), so the mock carries the named default,
+      // not null — a mock read must never read as "no per-wallet cap".
+      data: {
+        capBps: 5000,
+        perWalletBps: DELEGATION_PER_WALLET_CAP_BPS,
+        lastChangedAtHeight: "0",
+        perWalletLastChangedAtHeight: "0",
+      },
     };
   }
 }

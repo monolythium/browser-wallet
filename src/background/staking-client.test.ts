@@ -984,6 +984,51 @@ describe("readDelegationCap", () => {
     if (!r.ok) return;
     expect(r.via).toBe("mock");
     expect(r.data.capBps).toBe(5000);
+    // #44: the offline mock returns the COMPLETE shape — the per-wallet floor is
+    // a real protocol constraint, so it is present (5000), not undefined.
+    expect(r.data.perWalletBps).toBe(5000);
+  });
+
+  it("#44: parses the post-#319 shape — perWalletBps + its independent change-height anchor", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        capBps: 0xffffffff, // aggregate disabled
+        perWalletBps: 4000, // milestone-tightened enforced per-wallet cap
+        lastChangedAtHeight: 0n,
+        perWalletLastChangedAtHeight: 21n,
+        blockNumber: 100_500n,
+      },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.capBps).toBeNull(); // u32::MAX → null
+    expect(r.data.perWalletBps).toBe(4000); // authoritative enforced cap adopted
+    expect(r.data.perWalletLastChangedAtHeight).toBe("21");
+  });
+
+  it("#44: field-absent (current v0.4.0 fleet) → perWalletBps is null so the 5000 fallback binds downstream", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { capBps: 0xffffffff, lastChangedAtHeight: 0n },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.capBps).toBeNull();
+    expect(r.data.perWalletBps).toBeNull();
+  });
+
+  it("#44: an out-of-range live perWalletBps is rejected to null (fail-closed, never trusted)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { capBps: 0xffffffff, perWalletBps: 20000, lastChangedAtHeight: 0n },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.perWalletBps).toBeNull();
   });
 
   // Wire-contract anchor mirroring the cluster directory's
@@ -1004,6 +1049,9 @@ describe("readDelegationCap", () => {
     if (!r.ok) return;
     expect(r.data.capBps).toBe(5000);
     expect(r.data.lastChangedAtHeight).toBe("100000");
+    // The pinned SDK 0.6.8 DelegationCapResponse omits perWalletBps entirely →
+    // the wallet's raw parse yields null (→ the 5000 fallback binds downstream).
+    expect(r.data.perWalletBps).toBeNull();
   });
 });
 

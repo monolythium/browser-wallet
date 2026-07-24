@@ -49,9 +49,13 @@ export function formatWeightBpsPercent(bps: number | null): string {
  *  A FIXED protocol floor the chain ALWAYS enforces (revert tag 0x0213
  *  PerWalletCapExceeded), DISTINCT from the configurable ADR-0018 cluster-
  *  AGGREGATE cap exposed by `lyth_getDelegationCap` (disabled — u32::MAX → null
- *  — at the v2 re-genesis). The wallet hardcodes the §16.7 default because no
- *  RPC currently exposes the live per-wallet cap; it is the same value
- *  `staking-client.readDelegationCap` uses as its offline mock. */
+ *  — at the v2 re-genesis). Since issue #44 the chain also exposes the LIVE
+ *  enforced per-wallet cap as `lyth_getDelegationCap.perWalletBps`; this constant
+ *  is now the FAIL-CLOSED FALLBACK the wallet uses only when that field is absent
+ *  (pre-#319 node — the current live fleet omits it), null, or out of range. It
+ *  mirrors mono-core `DELEGATION_CAP_PER_WALLET_BPS_DEFAULT` / the SDK's serde
+ *  default, and is the value `staking-client.readDelegationCap` returns in its
+ *  offline mock. */
 export const DELEGATION_PER_WALLET_CAP_BPS = 5000;
 
 /** The maximum number of DISTINCT clusters a wallet may delegate to at once
@@ -61,14 +65,33 @@ export const DELEGATION_PER_WALLET_CAP_BPS = 5000;
  *  only counts on a NEW row, ops.rs). */
 export const MAX_DELEGATIONS_PER_WALLET = 10;
 
-/** The binding per-cluster cap for a delegation move: the §16.7 per-wallet
- *  floor ALWAYS applies; a (future-active) aggregate cap tightens it further
- *  when present. A null aggregate cap (disabled / unread) does NOT lift the
- *  floor — fail-closed on a signing input. */
-export function bindingPerClusterCapBps(aggregateCapBps: number | null): number {
+/** The binding per-cluster cap for a delegation move. The enforced per-wallet
+ *  cap ALWAYS applies; a (future-active) aggregate cap tightens it further when
+ *  present.
+ *
+ *  Since issue #44 the enforced per-wallet cap is the chain-authoritative
+ *  `lyth_getDelegationCap.perWalletBps` when it is a live, in-range value;
+ *  otherwise the §16.7 `DELEGATION_PER_WALLET_CAP_BPS` floor. `perWalletBps` is
+ *  an OPTIONAL trailing arg (default `null`) so every existing single-argument
+ *  call stays byte-identical.
+ *
+ *  Fail-closed on a signing input: an absent / null / out-of-range `perWalletBps`
+ *  falls back to the 5000 floor — NEVER "unlimited". A null aggregate cap
+ *  (disabled / unread) still does NOT lift the per-cluster floor. */
+export function bindingPerClusterCapBps(
+  aggregateCapBps: number | null,
+  perWalletBps: number | null = null,
+): number {
+  const perWalletCap =
+    perWalletBps !== null &&
+    Number.isFinite(perWalletBps) &&
+    perWalletBps > 0 &&
+    perWalletBps <= 10000
+      ? perWalletBps
+      : DELEGATION_PER_WALLET_CAP_BPS;
   return aggregateCapBps !== null
-    ? Math.min(aggregateCapBps, DELEGATION_PER_WALLET_CAP_BPS)
-    : DELEGATION_PER_WALLET_CAP_BPS;
+    ? Math.min(aggregateCapBps, perWalletCap)
+    : perWalletCap;
 }
 
 /** True when adding `moveBps` to a wallet's existing weight at a cluster would
@@ -79,9 +102,11 @@ export function exceedsPerClusterCap(
   dstExistingWeightBps: number,
   moveBps: number,
   aggregateCapBps: number | null,
+  perWalletBps: number | null = null,
 ): boolean {
   return (
-    dstExistingWeightBps + moveBps > bindingPerClusterCapBps(aggregateCapBps)
+    dstExistingWeightBps + moveBps >
+    bindingPerClusterCapBps(aggregateCapBps, perWalletBps)
   );
 }
 
@@ -90,8 +115,12 @@ export function exceedsPerClusterCap(
 export function destinationAtPerClusterCap(
   dstExistingWeightBps: number,
   aggregateCapBps: number | null,
+  perWalletBps: number | null = null,
 ): boolean {
-  return dstExistingWeightBps >= bindingPerClusterCapBps(aggregateCapBps);
+  return (
+    dstExistingWeightBps >=
+    bindingPerClusterCapBps(aggregateCapBps, perWalletBps)
+  );
 }
 
 /** Global headroom for a delegate: a wallet's total delegated weight across ALL
@@ -111,9 +140,10 @@ export function dualCapHeadroomBps(
   aggregateCapBps: number | null,
   existingWeightBps: number,
   totalDelegatedBps: number,
+  perWalletBps: number | null = null,
 ): number {
   const clusterHeadroom =
-    bindingPerClusterCapBps(aggregateCapBps) - existingWeightBps;
+    bindingPerClusterCapBps(aggregateCapBps, perWalletBps) - existingWeightBps;
   return Math.max(
     0,
     Math.min(clusterHeadroom, walletTotalHeadroomBps(totalDelegatedBps)),
@@ -274,14 +304,25 @@ export function preflightDelegationVerdict(args: {
   totalDelegatedBps: number;
   moveBps: number;
   capBps: number | null;
+  /** The chain-authoritative enforced per-wallet cap
+   *  (`lyth_getDelegationCap.perWalletBps`, issue #44). Optional — omitted /
+   *  null falls back to the `DELEGATION_PER_WALLET_CAP_BPS` floor via
+   *  `bindingPerClusterCapBps` (never "unlimited"). */
+  perWalletBps?: number | null;
   /** Distinct clusters the wallet currently delegates to. When the move opens a
    *  NEW row (dstExistingWeightBps === 0) and this is already at
    *  MAX_DELEGATIONS_PER_WALLET, the chain reverts 0x0206 TooManyDelegations.
    *  Optional — omit to skip the count pre-flight (callers without the count). */
   currentDelegationCount?: number;
 }): { ok: true } | { ok: false; message: string } {
-  const { action, dstExistingWeightBps, totalDelegatedBps, moveBps, capBps } =
-    args;
+  const {
+    action,
+    dstExistingWeightBps,
+    totalDelegatedBps,
+    moveBps,
+    capBps,
+    perWalletBps,
+  } = args;
   if (action === "undelegate") return { ok: true };
   // Max-10 distinct clusters (0x0206). Only a NEW row counts — a top-up of an
   // existing cluster is exempt (chain counts on append only, ops.rs). Mirrors
@@ -294,7 +335,9 @@ export function preflightDelegationVerdict(args: {
   ) {
     return { ok: false, message: TOO_MANY_DELEGATIONS_REVERT_MESSAGE };
   }
-  if (exceedsPerClusterCap(dstExistingWeightBps, moveBps, capBps)) {
+  if (
+    exceedsPerClusterCap(dstExistingWeightBps, moveBps, capBps, perWalletBps)
+  ) {
     return { ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE };
   }
   if (action === "delegate" && totalDelegatedBps + moveBps > 10000) {
@@ -562,12 +605,24 @@ export interface DelegationsView {
  *  invariant client-side and surfaces the cap-headroom badge on every
  *  cluster card. */
 export interface DelegationCap {
-  /** Per-cluster cap in basis points. `null` is the wallet's normalised
+  /** Per-cluster AGGREGATE cap in basis points. `null` is the wallet's normalised
    *  "disabled" — the chain encodes disabled as `u32::MAX`. */
   capBps: number | null;
-  /** Height of the most recent milestone that changed the cap (used by
+  /** The chain-authoritative ENFORCED per-wallet, per-cluster cap in basis
+   *  points (`lyth_getDelegationCap.perWalletBps`, issue #44). `null` when the
+   *  node omits the field (pre-#319 — the current live fleet), the value is null,
+   *  or it is out of range → downstream fails closed to
+   *  `DELEGATION_PER_WALLET_CAP_BPS`. */
+  perWalletBps: number | null;
+  /** Height of the most recent milestone that changed the AGGREGATE cap (used by
    *  §23.7 auto-rebalance hook). */
   lastChangedAtHeight: string;
+  /** Height of the most recent milestone that changed the ENFORCED per-wallet
+   *  cap — an INDEPENDENT anchor (`perWalletLastChangedAtHeight`). Informational
+   *  only: the wallet queries `latest`, so `perWalletBps` is already the current
+   *  value and NO behavior branches on this. `"0"` while the compiled default
+   *  is in force. */
+  perWalletLastChangedAtHeight: string;
 }
 
 /** Delegation history event row. Mirrors SDK `DelegationHistoryRecord`.

@@ -96,6 +96,71 @@ describe("per-wallet delegation cap (WP §16.7, 0x0213 pre-flight)", () => {
   });
 });
 
+const base44 = {
+  action: "delegate" as const,
+  dstExistingWeightBps: 0,
+  totalDelegatedBps: 0,
+  moveBps: 1000,
+  capBps: null,
+};
+
+describe("chain-authoritative perWalletBps (issue #44 — lyth_getDelegationCap)", () => {
+  // The chain now exposes the ENFORCED per-wallet cap as `perWalletBps`; the
+  // wallet threads it through `bindingPerClusterCapBps` as an optional trailing
+  // arg. Absent/null/out-of-range MUST fail closed to DELEGATION_PER_WALLET_CAP_BPS
+  // (5000), NEVER to "unlimited"; a live tighten below the floor MUST be honored.
+  it("binding cap: a live perWalletBps tighter than the 5000 floor is honored", () => {
+    expect(bindingPerClusterCapBps(null, 4000)).toBe(4000);
+  });
+
+  it("binding cap: an absent/null live perWalletBps falls back to the 5000 floor (never unlimited)", () => {
+    expect(bindingPerClusterCapBps(null, undefined)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+    expect(bindingPerClusterCapBps(null, null)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+  });
+
+  it("binding cap: an out-of-range live perWalletBps fails closed to 5000 in both directions", () => {
+    expect(bindingPerClusterCapBps(null, 0)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+    expect(bindingPerClusterCapBps(null, 20000)).toBe(DELEGATION_PER_WALLET_CAP_BPS);
+  });
+
+  it("binding cap: min() of aggregate and live per-wallet — the tighter dial wins either way", () => {
+    expect(bindingPerClusterCapBps(3000, 4000)).toBe(3000); // aggregate tighter
+    expect(bindingPerClusterCapBps(6000, 4000)).toBe(4000); // per-wallet tighter
+  });
+
+  it("binding cap: a disabled/null aggregate still never lifts a live per-wallet floor", () => {
+    expect(bindingPerClusterCapBps(null, 4000)).toBe(4000);
+  });
+
+  it("exceedsPerClusterCap: a live per-wallet cap tightens the guard below the 5000 floor", () => {
+    // 4000 existing + 1 > live cap 4000 → over, even though it is under 5000.
+    expect(exceedsPerClusterCap(4000, 1, null, 4000)).toBe(true);
+    expect(exceedsPerClusterCap(3000, 1000, null, 4000)).toBe(false); // == 4000, at cap not over
+  });
+
+  it("destinationAtPerClusterCap: honors a live per-wallet cap tighter than the floor", () => {
+    expect(destinationAtPerClusterCap(4000, null, 4000)).toBe(true);
+    expect(destinationAtPerClusterCap(3999, null, 4000)).toBe(false);
+  });
+
+  it("dualCapHeadroomBps: a live per-wallet cap bounds the cluster headroom term", () => {
+    expect(dualCapHeadroomBps(null, 0, 0, 4000)).toBe(4000); // live 4000 < 5000 floor
+    expect(dualCapHeadroomBps(null, 3000, 0, 4000)).toBe(1000); // 4000 − 3000
+  });
+
+  it("preflightDelegationVerdict: blocks using a live per-wallet cap tighter than 5000", () => {
+    expect(
+      preflightDelegationVerdict({ ...base44, dstExistingWeightBps: 4000, moveBps: 1, perWalletBps: 4000 }),
+    ).toEqual({ ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE });
+  });
+
+  it("preflightDelegationVerdict: a live per-wallet cap does NOT falsely block a move within it", () => {
+    expect(
+      preflightDelegationVerdict({ ...base44, dstExistingWeightBps: 3000, moveBps: 500, perWalletBps: 4000 }),
+    ).toEqual({ ok: true });
+  });
+});
+
 describe("dual-cap headroom (delegate form — per-cluster floor ∩ wallet-total)", () => {
   it("walletTotalHeadroomBps: 100% ceiling across all clusters, never negative", () => {
     expect(walletTotalHeadroomBps(0)).toBe(10000);
