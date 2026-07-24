@@ -57,9 +57,13 @@ export interface StakeFormProps {
   /** Total weight already delegated across ALL clusters (bps). The global
    *  100%-of-balance ceiling: requested + total must stay ≤ 10000 bps. */
   totalDelegatedBps: number;
-  /** Per-cluster cap in bps from `lyth_getDelegationCap`. `null` when
+  /** Per-cluster AGGREGATE cap in bps from `lyth_getDelegationCap`. `null` when
    *  the chain has disabled the cap (`u32::MAX`). */
   capBps: number | null;
+  /** The chain-authoritative ENFORCED per-wallet cap (issue #44). Optional —
+   *  omitted / null falls back to the `DELEGATION_PER_WALLET_CAP_BPS` floor via
+   *  `bindingPerClusterCapBps` (never "unlimited"). */
+  perWalletBps?: number | null;
   /** Continue → preview/sign. Parent gates this when `canContinue`
    *  is false; the button is still rendered for keyboard a11y. */
   onContinue: () => void;
@@ -90,8 +94,14 @@ export function bindingHeadroomBps(
   capBps: number | null,
   existingWeightBps: number,
   totalDelegatedBps: number,
+  perWalletBps: number | null = null,
 ): number {
-  return dualCapHeadroomBps(capBps, existingWeightBps, totalDelegatedBps);
+  return dualCapHeadroomBps(
+    capBps,
+    existingWeightBps,
+    totalDelegatedBps,
+    perWalletBps,
+  );
 }
 
 /** The "X% delegated · Y% available" line escalates to the prominent warn
@@ -124,6 +134,7 @@ export function StakeForm({
   existingWeightBps,
   totalDelegatedBps,
   capBps,
+  perWalletBps,
   onContinue,
   onBack,
 }: StakeFormProps) {
@@ -139,11 +150,17 @@ export function StakeForm({
       ? effectiveWeightWholeLythoshi(additionalBps, balanceLythoshi)
       : null;
 
-  // The §16.7 per-wallet floor (5000 bps) ALWAYS binds — even when the queryable
-  // AGGREGATE cap (`capBps`, from lyth_getDelegationCap) is disabled/null on v2.
-  // Fail-closed: a null cap does NOT lift the per-cluster cap.
-  const overCap = exceedsPerClusterCap(existingWeightBps, additionalBps, capBps);
-  const bindingCapBps = bindingPerClusterCapBps(capBps);
+  // The enforced per-wallet cap ALWAYS binds — the chain-authoritative
+  // `perWalletBps` (issue #44) when live, else the §16.7 5000 floor — even when
+  // the queryable AGGREGATE cap (`capBps`) is disabled/null on v2. Fail-closed:
+  // a null cap does NOT lift the per-cluster cap.
+  const overCap = exceedsPerClusterCap(
+    existingWeightBps,
+    additionalBps,
+    capBps,
+    perWalletBps,
+  );
+  const bindingCapBps = bindingPerClusterCapBps(capBps, perWalletBps);
   // Already at the per-cluster cap (0 headroom because existing weight is the
   // whole cap) — surface WHY (not just the preset clamp's "Only 0.00% left").
   // Display-only: `overCap` already blocks the Continue button at 0 headroom.
@@ -155,6 +172,7 @@ export function StakeForm({
     capBps,
     existingWeightBps,
     totalDelegatedBps,
+    perWalletBps,
   );
   const overGlobal = additionalBps > globalHeadroomBps;
   const percentIsZero = percent === null || additionalBps === 0;

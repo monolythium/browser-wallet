@@ -81,6 +81,7 @@ import {
 import {
   bindingPerClusterCapBps,
   classifyDelegationRevert,
+  DELEGATION_PER_WALLET_CAP_BPS,
   preflightDelegationVerdict,
 } from "../../shared/staking";
 
@@ -273,6 +274,13 @@ export function Stake({
   // Delegation context state.
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
   const [capBps, setCapBps] = useState<number | null>(null);
+  // The chain-authoritative enforced per-wallet cap (issue #44). Unlike the
+  // display aggregate `capBps` (which stays null until a LIVE read), this is a
+  // real protocol floor, so it is NEVER null — it seeds at the
+  // DELEGATION_PER_WALLET_CAP_BPS fallback and adopts the live value when read.
+  const [perWalletBps, setPerWalletBps] = useState<number>(
+    DELEGATION_PER_WALLET_CAP_BPS,
+  );
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
@@ -400,7 +408,12 @@ export function Stake({
       // F-3.8/#25: only adopt a LIVE cap; a via:"mock" (offline) read carries a
       // fabricated 50% launch cap that must not render as real (capBps stays
       // null → cap badge hidden; the 0x100A precompile enforces the true cap).
-      if (capR.ok) setCapBps(capBpsFromCapResult(capR));
+      if (capR.ok) {
+        setCapBps(capBpsFromCapResult(capR));
+        // The per-wallet cap resolver NEVER nulls (unlike the display aggregate)
+        // — a mock/offline read still binds the 5000 floor (issue #44).
+        setPerWalletBps(perWalletBpsFromCapResult(capR));
+      }
       if (balR.ok) {
         const parsedBalance = parseHexQuantity(balR.balanceHex);
         if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
@@ -475,7 +488,7 @@ export function Stake({
       // on one cluster — which the submit guard (bindingPerClusterCapBps → 50%
       // floor) then rejects. Bind it here so the preview never promises an
       // allocation the submit path refuses.
-      capBps: bindingPerClusterCapBps(capBps),
+      capBps: bindingPerClusterCapBps(capBps, perWalletBps),
       seed: autovoteSeed,
       // §23.6 launch minimum diversification = 2 (Phase 12). The wallet
       // can tighten this as the chain reports phase transitions via
@@ -489,7 +502,7 @@ export function Stake({
           ? pickMaxDiversity(input)
           : pickMaxDecentralization(input);
     setAutovotePlan(plan);
-  }, [entryMode, autovoteTargetBps, clusters, capBps, autovoteSeed]);
+  }, [entryMode, autovoteTargetBps, clusters, capBps, perWalletBps, autovoteSeed]);
 
   // Existing weight in the selected cluster.
   const existingWeightBps = useMemo(() => {
@@ -593,6 +606,7 @@ export function Stake({
             ?.weightBps ?? 0;
         let totalBps = delegations?.totalBps ?? 0;
         let freshCapBps = capBps;
+        let freshPerWalletBps = perWalletBps;
         // Distinct clusters currently held — drives the max-10 pre-flight (0x0206).
         let currentDelegationCount = delegations?.rows.length ?? 0;
         try {
@@ -607,7 +621,10 @@ export function Stake({
             totalBps = freshDel.data.totalBps;
             currentDelegationCount = freshDel.data.rows.length;
           }
-          if (freshCap.ok) freshCapBps = capBpsFromCapResult(freshCap);
+          if (freshCap.ok) {
+            freshCapBps = capBpsFromCapResult(freshCap);
+            freshPerWalletBps = perWalletBpsFromCapResult(freshCap);
+          }
         } catch {
           // keep the on-mount snapshot — best-effort, never block on a flaky read
         }
@@ -617,6 +634,7 @@ export function Stake({
           totalDelegatedBps: totalBps,
           moveBps: bps,
           capBps: freshCapBps,
+          perWalletBps: freshPerWalletBps,
           currentDelegationCount,
         });
         if (!verdict.ok) {
@@ -1019,7 +1037,7 @@ export function Stake({
                 clusters={clusters}
                 targetBps={autovoteTargetBps}
                 onTargetChange={setAutovoteTargetBps}
-                capBps={bindingPerClusterCapBps(capBps)}
+                capBps={bindingPerClusterCapBps(capBps, perWalletBps)}
                 seedAvailable={autovoteSeed !== null}
                 onProceed={() => {
                   if (autovotePlan === null) return;
@@ -1121,6 +1139,7 @@ export function Stake({
                 ?.weightBps ?? 0
             }
             capBps={capBps}
+            perWalletBps={perWalletBps}
             amountStr={amountStr}
             onAmountChange={setAmountStr}
             onPickDestination={() => setStep("redelegate-dst-pick")}
@@ -1197,6 +1216,7 @@ export function Stake({
             existingWeightBps={existingWeightBps}
             totalDelegatedBps={delegations?.totalBps ?? 0}
             capBps={capBps}
+            perWalletBps={perWalletBps}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -2209,6 +2229,27 @@ export function capBpsFromCapResult(capR: {
   // capBps === null is the legitimate "cap disabled (u32::MAX)" state; either
   // way a non-concrete cap collapses to null (badge hidden / unlimited).
   return capR.data?.capBps ?? null;
+}
+
+/**
+ * Issue #44 — resolve the ENFORCED per-wallet cap (bps) from a
+ * `staking-delegation-cap` read. CRITICAL contrast with `capBpsFromCapResult`:
+ * the per-wallet cap is a REAL protocol floor, not a display value, so it NEVER
+ * collapses to null. A live, in-range value is adopted; a `via:"mock"` / failed
+ * / absent / null / out-of-range read falls back to the fixed
+ * `DELEGATION_PER_WALLET_CAP_BPS` floor (fail-closed — NEVER "unlimited"). The
+ * chain still enforces the true cap at admission (0x0213), so a stale fallback
+ * only ever over-blocks the pre-flight, never under-blocks it.
+ */
+export function perWalletBpsFromCapResult(capR: {
+  ok: boolean;
+  via?: string | null;
+  data?: { perWalletBps?: number | null };
+}): number {
+  const v = capR.ok ? capR.data?.perWalletBps : null;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 10000
+    ? v
+    : DELEGATION_PER_WALLET_CAP_BPS;
 }
 
 /** Notification weight for an undelegate. The op encodes no bps (it removes the
