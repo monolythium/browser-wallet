@@ -126,7 +126,6 @@ export function RevealPhrase({
         : await bgKeystoreExportSeed(password);
       if (r.ok) {
         setMnemonic(r.mnemonic);
-        setPassword("");
         setStep("warning");
         return;
       }
@@ -148,6 +147,13 @@ export function RevealPhrase({
     } catch (e) {
       setError((e as Error).message ?? "Could not reveal phrase.");
     } finally {
+      // Cleared on EVERY exit — success, wrong password, rate limit, and a
+      // thrown transport error alike. Previously this ran only in the success
+      // branch, so a failed attempt left the plaintext resident in component
+      // state for as long as the screen stayed open. Same discipline as
+      // PasswordGate and the wallet-removal flow: a submit that does not
+      // return must not be the reason a password survives.
+      setPassword("");
       setSubmitting(false);
     }
   };
