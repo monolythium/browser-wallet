@@ -1264,11 +1264,36 @@ function lockoutMsFor(fails: number): number {
  *  a message this function does not recognise still counts against the lockout.
  *  That is the fail-closed direction: mis-classifying a password failure as
  *  structural would hand out unlimited guesses. */
+// THE RULE FOR ADDING AN ENTRY HERE — every entry must satisfy BOTH:
+//   1. The refusal is raised BEFORE any AEAD tag is checked, so the attempt
+//      never evaluates the password and the reply is identical for every
+//      password including the correct one; and
+//   2. an attacker holding a WRONG password who induces this class therefore
+//      learns nothing about the guess — it is not a free-guess oracle.
+// A class that is attacker-inducible is fine PROVIDED (1) holds: "unknown vault
+// id" is trivially inducible (the caller supplies the id) and is still safe,
+// because the id lookup short-circuits before the crypto.
+//
+// Do NOT add a refusal whose safety depends on WHERE it is thrown rather than
+// on WHAT it is — this list is matched by message and shared across ops, so a
+// position-dependent entry would be enforced nowhere. Post-verification
+// failures use the separate `PostVerificationError` signal instead.
+//
+// `isStructuralAllowlistEntry` in the test suite enumerates this list and
+// asserts each entry refuses WITHOUT reaching the verification helper; a new
+// entry with no row there fails the suite.
 function isStructuralVaultRefusal(message: string): boolean {
   return (
     message === "container is locked" ||
     message === "no v4 vaults container" ||
     message === "no v4 vault — run onboarding first" ||
+    // The container exists but its activeVaultId names no record. Decided by a
+    // container read only; no MEK is ever tested against a ciphertext.
+    message === "container is missing its active vault" ||
+    // The stored blob failed shape validation, so nothing was decrypted at all.
+    // Charging this locked a corrupt-container user out of Reset wallet — the
+    // one path that could still recover them.
+    message === "v4 vaults container is unrecognised — refusing to read" ||
     message === "unknown vault id" ||
     message.startsWith("cannot remove the last vault")
   );
@@ -7063,7 +7088,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // [address] here so a still-connected dApp re-learns the account.
           broadcastEvent("accountsChanged", [r.address]);
           return { ok: true, address: r.address };
-        } catch {
+        } catch (e) {
+          // DA-004 — a structural refusal never evaluated the password, so it
+          // must not spend one of the user's attempts. The default stays
+          // fail-closed: anything the allowlist does not recognise counts.
+          const msg = (e as Error).message;
+          if (isStructuralVaultRefusal(msg)) {
+            return { ok: false, reason: msg };
+          }
           failCount += 1;
           const ms = lockoutMsFor(failCount);
           if (ms > 0) lockoutUntil = Date.now() + ms;
@@ -7144,7 +7176,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ]);
         await resetAutoLock();
         return { ok: true, mnemonic: r.mnemonic };
-      } catch {
+      } catch (e) {
+        // DA-004 — see keystore-unlock. Fail-closed default preserved.
+        const msg = (e as Error).message;
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
         failCount += 1;
         const ms = lockoutMsFor(failCount);
         if (ms > 0) lockoutUntil = Date.now() + ms;
@@ -7195,7 +7232,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         await unlockContainerV4(p.password);
-      } catch {
+      } catch (e) {
+        // DA-004 / C11 — the worst case of the three: charging here locks the
+        // user out of Reset wallet, which is the recovery path they are already
+        // on. Fail-closed default preserved.
+        const msg = (e as Error).message;
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
         failCount += 1;
         const ms = lockoutMsFor(failCount);
         if (ms > 0) lockoutUntil = Date.now() + ms;
@@ -7534,6 +7578,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       const verdict = await verifyContainerPasswordV4(p.password);
+      // DA-004 — a structural verdict means the password was never evaluated
+      // (no container, or a dangling activeVaultId), so it must not spend an
+      // attempt. Only a real AEAD verdict counts.
+      if (!verdict.verified && verdict.structural) {
+        return { ok: false, reason: verdict.reason };
+      }
       if (!verdict.verified) {
         failCount += 1;
         const ms = lockoutMsFor(failCount);
@@ -8969,6 +9019,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       const verified = await verifyContainerPasswordV4(p.password);
+      // DA-004 — see vault-verify-password.
+      if (!verified.verified && verified.structural) {
+        return { ok: false, reason: verified.reason };
+      }
       if (!verified.verified) {
         failCount += 1;
         const ms = lockoutMsFor(failCount);
@@ -11704,6 +11758,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               const verified = await verifyContainerPasswordV4(
                 p.elevatedPassword,
               );
+              // DA-004 — a structural verdict never evaluated the password.
+              if (!verified.verified && verified.structural) {
+                return { ok: false, reason: verified.reason };
+              }
               if (!verified.verified) {
                 failCount += 1;
                 const ms = lockoutMsFor(failCount);

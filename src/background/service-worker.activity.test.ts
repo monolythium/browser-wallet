@@ -375,6 +375,9 @@ let multisigMetaForTest: unknown = null;
 // wrong-password vs structural-refusal split.
 let removeVaultThrows: string | null = null;
 let exportSeedThrows: string | null = null;
+// Same seam for the unlock path, so the structural-vs-wrong-password split can
+// be driven at keystore-unlock / keystore-reset (both call unlockContainerV4).
+let unlockThrows: string | null = null;
 const REMOVE_VAULT_RESULT = {
   removedId: "vault-removed",
   newActiveVaultId: "vault-successor",
@@ -406,10 +409,10 @@ vi.mock("./keystore-mldsa.js", () => ({
   vaultContainerLockKey: vi.fn(() => "mono.vaults.v4"),
   hasContainerV4: vi.fn(async () => true),
   storedContainerNeedsRestoreV4: vi.fn(async () => false),
-  unlockContainerV4: vi.fn(async () => ({
-    address: DETERMINISTIC_ADDRESS,
-    vaultId: "v1",
-  })),
+  unlockContainerV4: vi.fn(async () => {
+    if (unlockThrows) throw new Error(unlockThrows);
+    return { address: DETERMINISTIC_ADDRESS, vaultId: "v1" };
+  }),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
   // T1-04(a) passkey-cap gate seams. Default-inert (null active vault).
   getActiveVaultIdV4: vi.fn(() => activePasskeyVaultId),
@@ -783,6 +786,7 @@ beforeEach(() => {
   multisigMetaForTest = null;
   removeVaultThrows = null;
   exportSeedThrows = null;
+  unlockThrows = null;
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -8957,16 +8961,16 @@ describe("vault-verify-password — characterisation (DA-015)", () => {
     expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
   });
 
-  it("DA-004 (KNOWN DEFECT, pinned): a STRUCTURAL failure burns a lockout attempt", async () => {
-    // `verifyContainerPasswordV4` returns FALSE — never throws — for the
-    // structural cases "no container" and "container is missing its active
-    // vault". The op therefore cannot distinguish them from a wrong guess and
-    // charges the brute-force counter for both. Modelled here by forcing the
-    // helper false while supplying the CORRECT password.
+  it("DA-004 (FIXED): a STRUCTURAL failure does NOT burn a lockout attempt", async () => {
+    // WAS, before FG-LOCKOUT: `verifyContainerPasswordV4` returned a bare
+    // `false` for the structural cases "no container" and "container is missing
+    // its active vault", so the op could not tell them from a wrong guess and
+    // charged the brute-force counter for both — throttling a user whose
+    // password was right all along.
     //
-    // This is DA-004. FG-LOCKOUT IS EXPECTED TO CHANGE THIS: structural
-    // failures should stop charging the counter, at which point this test
-    // should be updated to assert the counter is untouched.
+    // NOW: the helper returns a discriminated result, and a structural verdict
+    // returns its reason without spending an attempt. The password was never
+    // evaluated on this path, so there is nothing to charge.
     const keystore = await import("./keystore-mldsa.js");
     vi.mocked(keystore.verifyContainerPasswordV4).mockResolvedValueOnce({
       verified: false,
@@ -8979,9 +8983,10 @@ describe("vault-verify-password — characterisation (DA-015)", () => {
       payload: { password: GOOD },
     })) as { ok: boolean; reason?: string };
     expect(r.ok).toBe(false);
-    // A structurally broken container is reported to the user as a bad password.
-    expect(r.reason).toBe("wrong_password");
-    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+    // The structural reason is surfaced verbatim, NOT mislabelled as a bad
+    // password, and the counter is untouched.
+    expect(r.reason).toBe("no-container");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
   });
 
   it("an OPEN lockout is honoured before any derivation is spent", async () => {
@@ -9072,4 +9077,149 @@ describe("empty-password guard covers every password op (DA-003)", () => {
       expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// DA-004 / C11 — a STRUCTURAL failure must not burn a brute-force attempt.
+//
+// A structural refusal is one where the attempt NEVER EVALUATED THE PASSWORD:
+// no container, a container with a dangling activeVaultId, an unreadable
+// container, an unknown vault id, the last-vault guard. The outcome is
+// identical for every password including the correct one, so charging it
+// throttles a user whose password was right all along — and, for keystore-reset
+// and the unrecognised-container case, throttles them out of the recovery path
+// at the exact moment they need it.
+//
+// Each of these is cleared as NOT attacker-inducible-into-an-oracle: every one
+// short-circuits before any AEAD tag is checked, so an attacker who steers a
+// wrong guess into one of them learns nothing about the guess.
+// ---------------------------------------------------------------------------
+describe("structural failures do not charge the counter (DA-004, C11)", () => {
+  it("keystore-reset: an unreadable container does not charge", async () => {
+    unlockThrows = "v4 vaults container is unrecognised — refusing to read";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("keystore-unlock: a dangling activeVaultId does not charge", async () => {
+    unlockThrows = "container is missing its active vault";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-unlock",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("keystore-unlock: a REAL wrong password still charges (fail-closed)", async () => {
+    unlockThrows = "wrong password";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-unlock",
+      payload: { password: "nope" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("keystore-unlock: a NOVEL error still charges (fail-closed default)", async () => {
+    unlockThrows = "TypeError: something nobody anticipated";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-unlock",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { reason?: string };
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-verify-password: a structural verdict does not charge", async () => {
+    const keystore = await import("./keystore-mldsa.js");
+    vi.mocked(keystore.verifyContainerPasswordV4).mockResolvedValueOnce({
+      verified: false,
+      structural: true,
+      reason: "missing-active-vault",
+    });
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D3 — the allowlist rule, enforced by a test rather than by a comment.
+//
+// `isStructuralVaultRefusal` is an exact-match allowlist with a fail-closed
+// default. Every entry must be a refusal raised BEFORE any AEAD tag is checked,
+// so the attempt evaluates no password and an attacker who induces it learns
+// nothing about their guess. A comment saying so is the weakest enforcement
+// available — this codebase produced four false security claims in a single
+// day — so the rule is asserted here instead.
+//
+// ADDING AN ENTRY TO THE ALLOWLIST? Add a row here too. A new entry with no row
+// leaves the count assertion failing, and a row whose refusal actually reaches
+// the verification helper fails its own case.
+// ---------------------------------------------------------------------------
+describe("structural allowlist — every entry refuses without evaluating a password (D3)", () => {
+  // Mirrors isStructuralVaultRefusal. `prefix` marks the one startsWith arm.
+  const ALLOWLIST: Array<{ message: string; prefix?: true }> = [
+    { message: "container is locked" },
+    { message: "no v4 vaults container" },
+    { message: "no v4 vault — run onboarding first" },
+    { message: "container is missing its active vault" },
+    { message: "v4 vaults container is unrecognised — refusing to read" },
+    { message: "unknown vault id" },
+    { message: "cannot remove the last vault — use Reset wallet instead", prefix: true },
+  ];
+
+  it("has exactly the entries this suite knows about", () => {
+    // Guards against an entry being added to the production allowlist without a
+    // row here. If this fails, do not just bump the number — add the row and
+    // prove the new entry never reaches the crypto.
+    expect(ALLOWLIST.length).toBe(7);
+  });
+
+  for (const entry of ALLOWLIST) {
+    it(`"${entry.message}" refuses vault-remove WITHOUT charging or verifying`, async () => {
+      const keystore = await import("./keystore-mldsa.js");
+      removeVaultThrows = entry.message;
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: "vault-remove",
+        payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      // Surfaced verbatim — never relabelled as a password failure.
+      expect(r.reason).toBe(entry.message);
+      // And it costs the user nothing.
+      expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+      // The refusal happened before any password evaluation.
+      expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+    });
+  }
+
+  it("a message NOT on the list still charges (the fail-closed default)", async () => {
+    removeVaultThrows = "container is locked "; // trailing space — not an exact match
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-remove",
+      payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+    })) as { reason?: string };
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
 });
