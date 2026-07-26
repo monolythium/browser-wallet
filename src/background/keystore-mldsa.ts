@@ -965,6 +965,8 @@ export async function selectActiveVaultV4(
   vaultId: string,
 ): Promise<{ address: string }> {
   if (!mekCache) throw new Error("container is locked");
+  const mek = mekCache;
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
   const container = await loadVaultsContainerV4();
   if (!container) throw new Error("no v4 vaults container");
   const target = container.vaults.find((v) => v.id === vaultId);
@@ -973,7 +975,7 @@ export async function selectActiveVaultV4(
   if (vaultId === activeContainerVaultId && unlocked) {
     return { address: unlocked.address };
   }
-  const state = await loadVaultBackend(mekCache, target);
+  const state = await loadVaultBackend(mek, target);
   container.activeVaultId = vaultId;
   try {
     await saveVaultsContainerV4(container);
@@ -993,6 +995,7 @@ export async function selectActiveVaultV4(
   activeContainerVaultId = vaultId;
   prev?.backend.dispose();
   return { address: state.address };
+  });
 }
 
 /** Read-only list of vault summaries. No unlock required — labels and
@@ -1042,12 +1045,14 @@ export async function renameVaultV4(
   const trimmed = newLabel.trim();
   if (trimmed.length === 0) throw new Error("label must be non-empty");
   if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const target = container.vaults.find((v) => v.id === vaultId);
-  if (!target) throw new Error("unknown vault id");
-  target.label = trimmed;
-  await saveVaultsContainerV4(container);
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const target = container.vaults.find((v) => v.id === vaultId);
+    if (!target) throw new Error("unknown vault id");
+    target.label = trimmed;
+    await saveVaultsContainerV4(container);
+  });
 }
 
 /** Outcome of a successful {@link removeVaultV4}. */
@@ -1410,17 +1415,19 @@ export async function writeMultisigMetaV4(
   vaultId: string,
   meta: MultisigVaultMeta,
 ): Promise<void> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  if (v.kind !== "multisig") {
-    throw new Error("target vault is not a multisig vault");
-  }
-  validateThreshold(meta.threshold, meta.signers.length);
-  assertSignerSetUnique(meta.signers);
-  v.multisig = cloneMultisigMeta(meta);
-  await saveVaultsContainerV4(container);
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    if (v.kind !== "multisig") {
+      throw new Error("target vault is not a multisig vault");
+    }
+    validateThreshold(meta.threshold, meta.signers.length);
+    assertSignerSetUnique(meta.signers);
+    v.multisig = cloneMultisigMeta(meta);
+    await saveVaultsContainerV4(container);
+  });
 }
 
 function cloneMultisigMeta(meta: MultisigVaultMeta): MultisigVaultMeta {
@@ -1483,15 +1490,17 @@ export async function addPasskeyCredentialV4(
   vaultId: string,
   cred: PasskeyCredential,
 ): Promise<VaultPasskeyState> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  const current = v.passkey ?? emptyVaultPasskeyState();
-  const next = appendCredential(current, cred);
-  v.passkey = clonePasskeyState(next);
-  await saveVaultsContainerV4(container);
-  return clonePasskeyState(next);
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    const current = v.passkey ?? emptyVaultPasskeyState();
+    const next = appendCredential(current, cred);
+    v.passkey = clonePasskeyState(next);
+    await saveVaultsContainerV4(container);
+    return clonePasskeyState(next);
+  });
 }
 
 /** Remove a credential by id. No-op if absent. Auto-disables the
@@ -1501,15 +1510,17 @@ export async function removePasskeyCredentialV4(
   vaultId: string,
   credentialId: string,
 ): Promise<VaultPasskeyState> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  const current = v.passkey ?? emptyVaultPasskeyState();
-  const next = removePasskeyCredential(current, credentialId);
-  v.passkey = clonePasskeyState(next);
-  await saveVaultsContainerV4(container);
-  return clonePasskeyState(next);
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    const current = v.passkey ?? emptyVaultPasskeyState();
+    const next = removePasskeyCredential(current, credentialId);
+    v.passkey = clonePasskeyState(next);
+    await saveVaultsContainerV4(container);
+    return clonePasskeyState(next);
+  });
 }
 
 /** Advance a credential's stored signature counter after a verified WebAuthn
@@ -1523,18 +1534,24 @@ export async function updatePasskeyCredentialSignCountV4(
   credentialId: string,
   newSignCount: number,
 ): Promise<void> {
-  const container = await loadVaultsContainerV4();
-  if (!container) return;
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v || !v.passkey) return;
-  const next = clonePasskeyState(v.passkey);
-  const idx = next.credentials.findIndex((c) => c.credentialId === credentialId);
-  if (idx < 0) return;
-  const cur = next.credentials[idx]!;
-  if (typeof cur.signCount === "number" && newSignCount <= cur.signCount) return;
-  next.credentials[idx] = { ...cur, signCount: newSignCount };
-  v.passkey = next;
-  await saveVaultsContainerV4(container);
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) return;
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v || !v.passkey) return;
+    const next = clonePasskeyState(v.passkey);
+    const idx = next.credentials.findIndex(
+      (c) => c.credentialId === credentialId,
+    );
+    if (idx < 0) return;
+    const cur = next.credentials[idx]!;
+    if (typeof cur.signCount === "number" && newSignCount <= cur.signCount) {
+      return;
+    }
+    next.credentials[idx] = { ...cur, signCount: newSignCount };
+    v.passkey = next;
+    await saveVaultsContainerV4(container);
+  });
 }
 
 /** Replace the policy. Validation runs inside `setPolicy` — bad input
@@ -1543,15 +1560,17 @@ export async function setPasskeyPolicyV4(
   vaultId: string,
   policy: PasskeyPolicy,
 ): Promise<VaultPasskeyState> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  const current = v.passkey ?? emptyVaultPasskeyState();
-  const next = setPasskeyPolicy(current, policy);
-  v.passkey = clonePasskeyState(next);
-  await saveVaultsContainerV4(container);
-  return clonePasskeyState(next);
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    const current = v.passkey ?? emptyVaultPasskeyState();
+    const next = setPasskeyPolicy(current, policy);
+    v.passkey = clonePasskeyState(next);
+    await saveVaultsContainerV4(container);
+    return clonePasskeyState(next);
+  });
 }
 
 // ---- SLH-DSA backup CRUD ----
@@ -1589,16 +1608,18 @@ export async function writeSlhDsaBackupV4(
   vaultId: string,
   backup: SlhDsaBackup,
 ): Promise<SlhDsaBackup> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  v.slhDsaBackup = cloneBackupForWrite(backup);
-  await saveVaultsContainerV4(container);
-  // Return through the read clone so the caller always gets a
-  // fresh object (defensive against future mutation by callers
-  // that capture the reference).
-  return cloneBackupForRead(v.slhDsaBackup) ?? backup;
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    v.slhDsaBackup = cloneBackupForWrite(backup);
+    await saveVaultsContainerV4(container);
+    // Return through the read clone so the caller always gets a
+    // fresh object (defensive against future mutation by callers
+    // that capture the reference).
+    return cloneBackupForRead(v.slhDsaBackup) ?? backup;
+  });
 }
 
 /** Drop the SLH-DSA backup record entirely. Used by the Settings →
@@ -1612,13 +1633,15 @@ export async function writeSlhDsaBackupV4(
 export async function clearSlhDsaBackupV4(
   vaultId: string,
 ): Promise<boolean> {
-  const container = await loadVaultsContainerV4();
-  if (!container) return false;
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v || !v.slhDsaBackup) return false;
-  delete v.slhDsaBackup;
-  await saveVaultsContainerV4(container);
-  return true;
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) return false;
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v || !v.slhDsaBackup) return false;
+    delete v.slhDsaBackup;
+    await saveVaultsContainerV4(container);
+    return true;
+  });
 }
 
 /** Generate a fresh SLH-DSA backup keypair for the target vault,
@@ -1647,32 +1670,35 @@ export async function generateSlhDsaBackupV4(
   if (mekCache === null) {
     throw new Error("keystore locked");
   }
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  if (v.slhDsaBackup && v.slhDsaBackup.publicKey.length > 0) {
-    throw new Error(
-      "backup already exists — clear it first or use the re-export flow",
-    );
-  }
+  const mek = mekCache;
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    if (v.slhDsaBackup && v.slhDsaBackup.publicKey.length > 0) {
+      throw new Error(
+        "backup already exists — clear it first or use the re-export flow",
+      );
+    }
 
-  // Unwrap the VEK locally, run keygen, zero the VEK before return.
-  // The VEK never escapes this function's stack — the keygen module
-  // gets it by-reference and zeroes its working secret too.
-  const vek = unwrapVekV4(mekCache, v.wrappedKey, v.id);
-  let prepared: { mnemonic: string; backup: SlhDsaBackup };
-  try {
-    prepared = prepareSlhDsaBackup({ vek });
-  } finally {
-    vek.fill(0);
-  }
+    // Unwrap the VEK locally, run keygen, zero the VEK before return.
+    // The VEK never escapes this function's stack — the keygen module
+    // gets it by-reference and zeroes its working secret too.
+    const vek = unwrapVekV4(mek, v.wrappedKey, v.id);
+    let prepared: { mnemonic: string; backup: SlhDsaBackup };
+    try {
+      prepared = prepareSlhDsaBackup({ vek });
+    } finally {
+      vek.fill(0);
+    }
 
-  v.slhDsaBackup = cloneBackupForWrite(prepared.backup);
-  await saveVaultsContainerV4(container);
-  // Return the in-memory record (with mnemonic) — the caller
-  // forwards mnemonic to the popup and lets it fall out of scope.
-  return prepared;
+    v.slhDsaBackup = cloneBackupForWrite(prepared.backup);
+    await saveVaultsContainerV4(container);
+    // Return the in-memory record (with mnemonic) — the caller
+    // forwards mnemonic to the popup and lets it fall out of scope.
+    return prepared;
+  });
 }
 
 /** Re-derive the 24-word mnemonic from a previously-generated
@@ -1709,18 +1735,20 @@ export async function recoverSlhDsaMnemonicV4(
 export async function confirmSlhDsaColdStorageV4(
   vaultId: string,
 ): Promise<SlhDsaBackup | null> {
-  const container = await loadVaultsContainerV4();
-  if (!container) return null;
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v || !v.slhDsaBackup) return null;
-  if (!v.slhDsaBackup.coldStorageConfirmed) {
-    v.slhDsaBackup = cloneBackupForWrite({
-      ...v.slhDsaBackup,
-      coldStorageConfirmed: true,
-    });
-    await saveVaultsContainerV4(container);
-  }
-  return cloneBackupForRead(v.slhDsaBackup);
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) return null;
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v || !v.slhDsaBackup) return null;
+    if (!v.slhDsaBackup.coldStorageConfirmed) {
+      v.slhDsaBackup = cloneBackupForWrite({
+        ...v.slhDsaBackup,
+        coldStorageConfirmed: true,
+      });
+      await saveVaultsContainerV4(container);
+    }
+    return cloneBackupForRead(v.slhDsaBackup);
+  });
 }
 
 /** Update a backup record's chain-registration status atomically.
@@ -1753,6 +1781,7 @@ export async function setSlhDsaRegistrationStatusV4(
     error?: string | null;
   },
 ): Promise<SlhDsaBackup> {
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
   const container = await loadVaultsContainerV4();
   if (!container) throw new Error("no v4 vaults container");
   const v = container.vaults.find((rec) => rec.id === vaultId);
@@ -1804,6 +1833,7 @@ export async function setSlhDsaRegistrationStatusV4(
   v.slhDsaBackup = cloneBackupForWrite(next);
   await saveVaultsContainerV4(container);
   return cloneBackupForRead(v.slhDsaBackup) ?? next;
+  });
 }
 
 /** Defensive copy so callers can't mutate stored state by holding a
