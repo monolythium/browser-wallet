@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
-import { Icon } from "../Icon";
+import { Icon, type IconName } from "../Icon";
 import { Modal } from "../components/Modal";
 import { PasswordGate } from "../components/PasswordGate";
 import { ConfirmWordDialog } from "../components/ConfirmWordDialog";
@@ -34,6 +34,7 @@ import {
   bgVaultVerifyPassword,
   bgVaultRemove,
   bgVaultRename,
+  bgVaultSelect,
   bgVaultMultisigMeta,
   bgVaultsList,
   bgWalletBalance,
@@ -312,6 +313,12 @@ export function Wallets({ chainIdHex, onBack, onRevealPhrase }: WalletsProps) {
             // elected a new active wallet, and the list must reflect that.
             void loadVaults();
           }}
+          onActivated={() => {
+            setSheetFor(null);
+            // Re-read so the Active marker moves. App re-hydrates the header
+            // chip separately, off the container's storage change.
+            void loadVaults();
+          }}
         />
       )}
     </>
@@ -427,6 +434,7 @@ interface WalletActionSheetProps {
   onRenamed: () => void;
   onReveal: () => void;
   onRemoved: () => void;
+  onActivated: () => void;
 }
 
 function WalletActionSheet({
@@ -438,6 +446,7 @@ function WalletActionSheet({
   onRenamed,
   onReveal,
   onRemoved,
+  onActivated,
 }: WalletActionSheetProps) {
   const [step, setStep] = useState<SheetStep>("menu");
   const [renameValue, setRenameValue] = useState(vault.label);
@@ -505,6 +514,29 @@ function WalletActionSheet({
       return;
     }
     setError(r.reason ?? "Could not rename wallet.");
+  };
+
+  const handleSetActive = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      // The same op VaultPicker's row-click uses — selection is not
+      // reimplemented here. No password gate: switching the active wallet is
+      // neither destructive nor a disclosure, so it follows the rename
+      // precedent. App re-hydrates off the container's storage change, so the
+      // header chip and active account follow without a manual reload.
+      const r = await bgVaultSelect(targetId);
+      if (r.ok) {
+        onActivated();
+        return;
+      }
+      setError(r.reason ?? "Could not switch wallet.");
+    } catch (e) {
+      setError((e as Error).message ?? "Could not switch wallet.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleRemove = async () => {
@@ -659,6 +691,16 @@ function WalletActionSheet({
       showClose
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {/* Hidden on the wallet that is already active — the list already marks
+           it, so offering a no-op is noise. First in the list: it is the most
+           benign action here, and it keeps the furthest distance from remove. */}
+        {!vault.isActive && (
+          <SheetAction
+            icon="check"
+            label="Set as active wallet"
+            onClick={() => void handleSetActive()}
+          />
+        )}
         <SheetAction
           icon="pen"
           label="Rename wallet"
@@ -683,6 +725,9 @@ function WalletActionSheet({
             }}
           />
         )}
+        {/* A failed switch has nowhere else to surface — the sheet stays on the
+           menu step rather than advancing. */}
+        {error && <div style={SHEET_ERROR_STYLE}>{error}</div>}
       </div>
     </Modal>
   );
@@ -694,7 +739,7 @@ function SheetAction({
   onClick,
   danger,
 }: {
-  icon: "pen" | "eye" | "trash";
+  icon: IconName;
   label: string;
   onClick: () => void;
   danger?: boolean;
