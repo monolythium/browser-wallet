@@ -36,7 +36,7 @@ const DETERMINISTIC_BLOCK_NUMBER = "0xdeadbeef";
 const WALLET_AUTH_PUBLIC_KEY_BYTES = new Uint8Array(1952).fill(0x23);
 const WALLET_AUTH_SIGNATURE_BYTES = new Uint8Array(3309).fill(0x45);
 const WALLET_AUTH_GENESIS_HASH =
-  "0xe22733f4d7e013b93f0f825667fcf852cbf7ad1ca31a42a1bfcf1ab6d79c89a3";
+  "0x8dfc309dfe8e35b4ca036631c7dc25b29e618ac8a9694e0e2bbe23d0f98ab1fe";
 const walletAuthDigests: Uint8Array[] = [];
 
 // ---- Mocks installed before the SUT module is imported ----

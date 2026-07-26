@@ -96,6 +96,7 @@ import { useFeature } from "./hooks/useFeature";
 import { isHardenedBuild } from "../shared/build-mode";
 import { type Account } from "./demo-data";
 import { runMountHydrationLoads } from "./mount-hydration";
+import { TESTNET_FALLBACK_RPC } from "./testnet-fallback";
 import {
   lastKnownBalanceKey,
   makeLastKnownBalance,
@@ -225,7 +226,7 @@ const TESTNET_FALLBACK: ChainEntry = {
   // Bootstrap-window rpc. Mirrors TESTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
   // live endpoint (that defaults list is SDK-registry-ordered).
-  rpc: "http://192.0.2.1:8545",
+  rpc: TESTNET_FALLBACK_RPC,
   builtin: true,
   official: true,
   active: true,

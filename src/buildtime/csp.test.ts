@@ -3,8 +3,6 @@ import { getRpcEndpoints } from "@monolythium/core-sdk";
 
 import { buildExtensionCsp, applyHardenedCsp } from "./csp.js";
 
-const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 describe("buildExtensionCsp — strict prod connect-src (P6-001 drift guard)", () => {
   const endpoints = getRpcEndpoints("testnet-69420");
   const csp = buildExtensionCsp(endpoints);
@@ -21,14 +19,27 @@ describe("buildExtensionCsp — strict prod connect-src (P6-001 drift guard)", (
     expect(csp).toContain("https://raw.githubusercontent.com");
   });
 
-  it("includes EVERY fleet endpoint as both an http RPC and a ws origin", () => {
+  it("includes EVERY fleet endpoint as both an RPC and its derived WS origin", () => {
     expect(endpoints.length).toBeGreaterThanOrEqual(1);
     for (const ep of endpoints) {
       const u = new URL(ep.url);
-      expect(csp).toContain(u.origin); // http://<ip>:8545
-      const host = escapeRegExp(u.hostname);
-      expect(csp).toMatch(new RegExp(`wss?://${host}:`)); // ws://<ip>:8546
+      expect(csp).toContain(u.origin);
+      const wsPort = u.port === "8545" ? "8546" : u.port;
+      const wsOrigin = ep.ws_url
+        ? new URL(ep.ws_url).origin
+        : `${u.protocol === "https:" ? "wss:" : "ws:"}//${u.hostname}${wsPort ? `:${wsPort}` : ""}`;
+      expect(csp).toContain(wsOrigin);
     }
+  });
+
+  it("ships only encrypted RPC and WebSocket origins for the live SDK defaults", () => {
+    expect(endpoints).toEqual([
+      expect.objectContaining({
+        url: "https://rpc.monolythium.com",
+        ws_url: "wss://rpc.monolythium.com/ws",
+      }),
+    ]);
+    expect(csp).not.toMatch(/connect-src[^;]*(?:http:\/\/|ws:\/\/)/);
   });
 
   it("contains NO wildcard and no bare scheme-source (containment intact)", () => {

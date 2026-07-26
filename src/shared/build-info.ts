@@ -23,56 +23,36 @@ export const SDK_PACKAGE_VERSION: string =
     : "unknown";
 
 /** Expected testnet genesis hash — the wallet's authoritative pin for
- *  GAP #11 (orphan-fork defense). Operator probes that return a
- *  different chain genesis hash are marked "untrusted chain" and skipped
- *  by every RPC-dispatch path (balance, fee, send, indexer).
+ *  GAP #11 (orphan-fork defense). Operator probes that return a different
+ *  chain genesis hash are marked "untrusted chain" and skipped by every
+ *  RPC-dispatch path (balance, fee, send, indexer).
  *
- *  Mirrors the SDK chain-registry snapshot (see
- *  SDK_REGISTRY_GENESIS_HASH below). The two are duplicated so the
- *  About page can surface a warning if a future SDK sync drifts the
- *  registry's value out from under the wallet — in that case the pin
- *  takes precedence and the human reviewer decides whether to bump it.
+ *  This is the accepted Posture-C V16 R5 consensus identity produced by the
+ *  2026-07-25 ceremony and verified by the 42-node acceptance, signed-load
+ *  soak, and fresh cold-join gates. It is also the identity used by
+ *  wallet-auth and the canonical chain registry.
  *
- *  Current value = the 2026-07-07 v0.4.0 four-cluster re-genesis
- *  (release v0.4.0-testnet, mono-core master @ da04f8f5), where
- *  `lyth_chainStats.genesisHash` reports the registry identity hash below.
- *  Mirrors the v0.4.0 chain-registry pin
- *  (`web3_clientVersion = protocore/v2/v0.4.0-testnet+da04f8f5`), the binding
- *  source of truth for the live fleet's genesis. The
- *  SDK_REGISTRY_GENESIS_HASH below mirrors the v0.4.0 chain-registry snapshot;
- *  the About drift banner surfaces whenever the displayed registry genesis
- *  (the live GitHub chain-registry value, or SDK_REGISTRY_GENESIS_HASH as its
- *  fallback) differs from this pin, in which case this security pin takes
- *  precedence. The wallet reads only `TESTNET_69420.chain_id` from the bundled
- *  SDK — never its bundled `genesis_hash` — so this pin is independent of the
- *  SDK version (the installed `@monolythium/core-sdk` 0.6.8 now bundles the
- *  same snapshot, but the wallet still ignores that field, so the pin stays
- *  independently authoritative at 0xe22733f4). Bumping this security pin is a
- *  human-reviewer decision; the live-registry fetch shows the current
- *  GitHub-registry value alongside. */
+ *  The wallet keeps this reviewer-controlled literal separate from the SDK
+ *  snapshot so an unintended dependency drift cannot silently repin trust. */
 export const TESTNET_GENESIS_HASH =
-  "0xe22733f4d7e013b93f0f825667fcf852cbf7ad1ca31a42a1bfcf1ab6d79c89a3";
+  "0x8dfc309dfe8e35b4ca036631c7dc25b29e618ac8a9694e0e2bbe23d0f98ab1fe";
 
 /** Current block-0 header hash for the same chain. This is intentionally
- *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
- *  exposes the chain identity hash used by the registry / p2p binding,
- *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
- *  header hash. They are not the same value (per the v0.4.0 four-cluster
- *  (4×10, 7-of-10) chain-registry re-pin, genesis 0xe22733f4…). */
+ *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash` exposes
+ *  the chain identity used by the registry / p2p binding, while
+ *  `eth_getBlockByNumber("0x0", false).hash` is the live block header.
+ *
+ *  Accepted R5 block 0 was independently matched across relay and public RPC
+ *  during fleet acceptance. */
 export const TESTNET_BLOCK0_HASH =
-  "0x3254ae512e335d3dac4a625e6bfa5855392adc1860a0373490a9ad8f9e324391";
+  "0x0aaa60eb159d49dd50b371aca278a5f971dcc023448547af3e659c15f2bf07fa";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
- *  the About page when this differs from TESTNET_GENESIS_HASH so the
- *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
- *  the v0.4.0-testnet four-cluster (4×10, 7-of-10) re-genesis value
- *  (2026-07-07) — matching the live GitHub chain-registry — so it does not
- *  lag. The installed `@monolythium/core-sdk` 0.6.8 bundles the matching
- *  snapshot in `TESTNET_69420.genesis_hash`; the wallet nevertheless reads
- *  only `.chain_id` from the SDK bundle, so this reviewer-controlled literal
- *  remains the direct registry pin. */
+ *  the About page when this differs from TESTNET_GENESIS_HASH so the reviewer
+ *  notices registry-vs-pin drift. SDK 0.6.10 vendors the accepted R5 snapshot;
+ *  the wallet still compares it with the independent literal above. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0xe22733f4d7e013b93f0f825667fcf852cbf7ad1ca31a42a1bfcf1ab6d79c89a3";
+  "0x8dfc309dfe8e35b4ca036631c7dc25b29e618ac8a9694e0e2bbe23d0f98ab1fe";
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
