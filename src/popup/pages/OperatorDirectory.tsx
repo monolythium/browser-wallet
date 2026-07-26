@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { Modal } from "../components/Modal";
 import { useFeature } from "../hooks/useFeature";
 import {
@@ -870,6 +871,7 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
         }}
       >
         Reported surfaces
+        <DevBadge />
       </div>
       {surfaces.length === 0 ? (
         <Muted>

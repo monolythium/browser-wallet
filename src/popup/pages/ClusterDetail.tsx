@@ -32,6 +32,7 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgStakingClusterStatus,
@@ -469,6 +470,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
           }}
         >
           Operator slate
+          <DevBadge />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {status.members.map((m) => (

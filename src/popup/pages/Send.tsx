@@ -27,6 +27,7 @@ import {
 } from "../bg";
 import { AddContactModal } from "./Contacts";
 import { ContactsPickerModal } from "../components/ContactsPickerModal";
+import { DevBadge } from "../components/DevBadge";
 import type { ContactRecord } from "../bg";
 import { useContacts } from "../hooks/useContacts";
 import { useFeature } from "../hooks/useFeature";
@@ -1205,6 +1206,7 @@ export function Send({
                   }}
                 >
                   Low-level compatibility fee details
+                  <DevBadge />
                 </summary>
                 {estimatedFeeDisplay?.source === "structured" ? (
                   estimatedFeeDisplay.detailTexts.map((detail) => (
@@ -2931,6 +2933,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
                 }}
               >
                 Technical details
+                <DevBadge />
               </summary>
               <div
                 style={{
