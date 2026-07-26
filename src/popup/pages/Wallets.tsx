@@ -511,9 +511,19 @@ function WalletActionSheet({
     if (submitting) return;
     setSubmitting(true);
     setError(null);
-    const r = await bgVaultRemove(password, targetId);
-    setSubmitting(false);
-    setPassword("");
+    let r: Awaited<ReturnType<typeof bgVaultRemove>>;
+    try {
+      r = await bgVaultRemove(password, targetId);
+    } catch (e) {
+      setError((e as Error).message ?? "Could not remove wallet.");
+      setStep("remove-auth");
+      return;
+    } finally {
+      // Cleared on EVERY exit, including a throw — a failed transport must not
+      // leave the plaintext resident in component state.
+      setPassword("");
+      setSubmitting(false);
+    }
     if (r.ok) {
       onRemoved();
       return;
@@ -578,7 +588,12 @@ function WalletActionSheet({
           // Verified here so a wrong password costs one derivation and stops,
           // instead of carrying a bad password into the destructive submit.
           verify={(pw) => bgVaultVerifyPassword(pw)}
-          onVerified={() => {
+          onVerified={(_verdict, verified) => {
+            // Carry the verified password to the submit step. The keystore
+            // re-derives and re-verifies it there regardless — this gate is
+            // usability, not the boundary — but it has to receive the real
+            // string to do so. handleRemove clears it in a finally.
+            setPassword(verified);
             setError(null);
             setStep("remove-confirm");
           }}

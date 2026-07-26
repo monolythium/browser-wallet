@@ -7470,7 +7470,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // derived. Shares the same lockout counters as every other password op,
       // so this gate cannot be used as an unthrottled oracle.
       const p = message.payload as { password?: string };
-      if (typeof p?.password !== "string") {
+      if (typeof p?.password !== "string" || p.password.length === 0) {
         return { ok: false, reason: "missing password" };
       }
       const ses = await chrome.storage.session.get([
@@ -7523,7 +7523,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // keystore-export-seed / keystore-reset, so wrong-password attempts here
       // count toward the same brute-force lockout window.
       const p = message.payload as { password?: string; vaultId?: string };
-      if (typeof p?.password !== "string" || typeof p?.vaultId !== "string") {
+      // An EMPTY password is a malformed request, not a guess: the password
+      // policy floors real passwords at MIN_PASSWORD_LENGTH, so "" can never be
+      // correct. Rejecting it here costs no Argon2id derivation and — the point
+      // — burns no brute-force attempt, so a caller bug that sends "" surfaces
+      // as a visible payload error instead of silently walking the user into a
+      // lockout with a password that was right all along.
+      if (
+        typeof p?.password !== "string" ||
+        p.password.length === 0 ||
+        typeof p?.vaultId !== "string"
+      ) {
         return { ok: false, reason: "missing password or vaultId" };
       }
       const ses = await chrome.storage.session.get([
@@ -7586,7 +7596,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // only the vault targeting differs. The phrase is returned to the caller
       // and never cached, persisted, or logged here.
       const p = message.payload as { password?: string; vaultId?: string };
-      if (typeof p?.password !== "string" || typeof p?.vaultId !== "string") {
+      // An EMPTY password is a malformed request, not a guess: the password
+      // policy floors real passwords at MIN_PASSWORD_LENGTH, so "" can never be
+      // correct. Rejecting it here costs no Argon2id derivation and — the point
+      // — burns no brute-force attempt, so a caller bug that sends "" surfaces
+      // as a visible payload error instead of silently walking the user into a
+      // lockout with a password that was right all along.
+      if (
+        typeof p?.password !== "string" ||
+        p.password.length === 0 ||
+        typeof p?.vaultId !== "string"
+      ) {
         return { ok: false, reason: "missing password or vaultId" };
       }
       const ses = await chrome.storage.session.get([

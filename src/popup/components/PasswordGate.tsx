@@ -119,8 +119,15 @@ export interface PasswordGateProps<T> {
    *  not here. */
   verify: (password: string) => Promise<PasswordGateVerdict<T>>;
   /** Called with the successful verdict so the caller can read whatever the
-   *  operation returned. */
-  onVerified: (verdict: { ok: true } & T) => void;
+   *  operation returned.
+   *
+   *  `password` is the string that just verified. It is handed over ONLY for
+   *  operations that must re-submit it — a gate whose verification IS the
+   *  operation (a seed export, say) should ignore it. A caller that captures it
+   *  owns clearing it in a `finally`, so a thrown submit cannot leave it
+   *  resident. Without this the caller has no way to complete a two-step flow
+   *  (verify, then confirm, then submit) and would send an empty string. */
+  onVerified: (verdict: { ok: true } & T, password: string) => void;
   /** Omit to render a single full-width submit (RevealPhrase's shape); provide
    *  it for the two-button Cancel/Continue footer (ResetWallet's shape). */
   onCancel?: () => void;
@@ -194,8 +201,12 @@ export function PasswordGate<T>({
     try {
       const verdict = await verify(password);
       if (verdict.ok) {
+        // Read from the closure, not from state: setPassword("") schedules an
+        // update, it does not rewrite `password` here, so the value handed over
+        // is the one that verified.
+        const verified = password;
         setPassword("");
-        onVerified(verdict);
+        onVerified(verdict, verified);
         return;
       }
       const mapped = passwordGateErrorFor(verdict, fallbackError);

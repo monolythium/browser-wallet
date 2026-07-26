@@ -8735,6 +8735,49 @@ describe("vault-remove / vault-export-seed — per-vault password ops", () => {
     expect((await remove({})).ok).toBe(false);
   });
 
+  // Regression guard for the remove-with-a-correct-password bug: the action
+  // sheet verified the password at its gate but never carried it to the submit,
+  // so it sent "". That reached Argon2id, derived a wrong MEK, failed the AEAD
+  // tag with "invalid tag" — a message the classifier does not recognise — and
+  // so was reported as wrong_password AND burned a lockout attempt. Every
+  // attempt with a CORRECT password pushed the user toward a real lockout.
+  //
+  // The popup-side fix is to carry the verified password through. These pin the
+  // service-worker half: an empty password is a malformed request, never a
+  // guess, so it must cost no attempt and never reach the keystore.
+  it("vault-remove rejects an EMPTY password without burning a lockout attempt", async () => {
+    const r = await remove({ password: "", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password or vaultId");
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove does not reach the keystore with an empty password", async () => {
+    // Belt and braces: no Argon2id derivation should be spent on a request that
+    // cannot succeed.
+    removeVaultThrows = "should never be called";
+    const r = await remove({ password: "", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(keystoreMldsaMock.removeVaultV4).not.toHaveBeenCalled();
+  });
+
+  it("vault-export-seed rejects an EMPTY password without burning a lockout attempt", async () => {
+    const r = await exportSeed({ password: "", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password or vaultId");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("a NON-empty wrong password still fails, still bumps, still says wrong_password", async () => {
+    // The guard above must not have weakened the throttle.
+    removeVaultThrows = "invalid tag";
+    const r = await remove({ password: "definitely-not-the-password", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
   it("vault-remove maps an unrecognised keystore throw to wrong_password and bumps the counter", async () => {
     removeVaultThrows = "wrong password";
     const r = await remove();
