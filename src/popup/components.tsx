@@ -22,6 +22,7 @@ import type { IconName } from "./Icon";
 import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
+import { DevBadge } from "./components/DevBadge";
 import { ExternalLink } from "./components/ExternalLink";
 import { type DelegationsView, type PendingRewardsView } from "../shared/staking";
 import {
@@ -4189,6 +4190,7 @@ export function ReqSendTx({
         <div className="req-section">
           <div className="req-section__h">
             <span>Simulation</span>
+            <DevBadge />
             <button onClick={() => setShowSim((v) => !v)}>{showSim ? "hide" : "show"} ↓</button>
           </div>
           {showSim && view.simulation == null && (
@@ -4226,9 +4228,13 @@ export function ReqSendTx({
       <div className="req-section">
         <div className="req-section__h">
           <span>Network fee</span>
+          {/* "Network fee" itself is NOT dev-only (every user sees Max fee),
+              so the marker goes on the dev-only control, not the section
+              title — marking the title would claim the whole section. */}
           {devMode && (
             <button onClick={() => setShowFeeDetails((v) => !v)}>
               {showFeeDetails ? "hide" : "details"} ↓
+              <DevBadge />
             </button>
           )}
         </div>
@@ -4285,6 +4291,7 @@ export function ReqSendTx({
         <div className="req-section">
           <div className="req-section__h">
             <span>{decodedSurfaceTitle(decoded)}</span>
+            <DevBadge />
             <button onClick={() => setShowDecoded((v) => !v)}>
               {showDecoded ? "hide" : "show"} ↓
             </button>
@@ -4330,6 +4337,7 @@ export function ReqSendTx({
         <div className="req-section" style={{ paddingBottom: 16 }}>
           <div className="req-section__h">
             <span>Raw calldata</span>
+            <DevBadge />
             <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
           </div>
           {showRaw && (
