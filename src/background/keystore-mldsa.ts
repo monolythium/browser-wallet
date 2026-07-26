@@ -2160,20 +2160,51 @@ export function getActiveVaultIdV4(): string | null {
  *  popup-asserted flag (which the already-unlocked local actor this gate
  *  targets could forge). Returns false (never throws) on any failure and
  *  zeroes all derived secret material. */
+/**
+ * Why a container-password verification did not succeed.
+ *
+ * `structural: true` means the attempt **never evaluated the password** — the
+ * container was absent, or present but with a dangling `activeVaultId`. No MEK
+ * was tested against any ciphertext, so the outcome is identical for every
+ * password, including the correct one. Callers use this to decide whether the
+ * attempt counts against the brute-force budget: a structural refusal must NOT,
+ * because charging it throttles a user whose password was right all along.
+ *
+ * `structural: false` is a genuine password verdict — the Poly1305 tag was
+ * checked and it failed. That one always counts.
+ */
+export type VerifyPasswordOutcomeV4 =
+  | { verified: true }
+  | {
+      verified: false;
+      structural: true;
+      reason: "no-container" | "missing-active-vault";
+    }
+  | { verified: false; structural: false };
+
 export async function verifyContainerPasswordV4(
   password: string,
-): Promise<boolean> {
+): Promise<VerifyPasswordOutcomeV4> {
   const container = await loadVaultsContainerV4();
-  if (!container) return false;
+  if (!container) {
+    return { verified: false, structural: true, reason: "no-container" };
+  }
   const active = container.vaults.find((v) => v.id === container.activeVaultId);
-  if (!active) return false;
+  if (!active) {
+    return {
+      verified: false,
+      structural: true,
+      reason: "missing-active-vault",
+    };
+  }
   const mek = await deriveMekV4(password, container.masterKdf);
   try {
     const vek = unwrapVekV4(mek, active.wrappedKey, active.id);
     vek.fill(0);
-    return true;
+    return { verified: true };
   } catch {
-    return false;
+    // The AEAD tag was checked and failed — a real wrong-password verdict.
+    return { verified: false, structural: false };
   } finally {
     mek.fill(0);
   }

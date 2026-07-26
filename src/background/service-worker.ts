@@ -7533,7 +7533,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           failCount,
         };
       }
-      if (!(await verifyContainerPasswordV4(p.password))) {
+      const verdict = await verifyContainerPasswordV4(p.password);
+      if (!verdict.verified) {
         failCount += 1;
         const ms = lockoutMsFor(failCount);
         if (ms > 0) lockoutUntil = Date.now() + ms;
@@ -8968,7 +8969,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       const verified = await verifyContainerPasswordV4(p.password);
-      if (!verified) {
+      if (!verified.verified) {
         failCount += 1;
         const ms = lockoutMsFor(failCount);
         if (ms > 0) lockoutUntil = Date.now() + ms;
@@ -11703,7 +11704,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               const verified = await verifyContainerPasswordV4(
                 p.elevatedPassword,
               );
-              if (!verified) {
+              if (!verified.verified) {
                 failCount += 1;
                 const ms = lockoutMsFor(failCount);
                 if (ms > 0) lockoutUntil = Date.now() + ms;

@@ -415,8 +415,10 @@ vi.mock("./keystore-mldsa.js", () => ({
   getActiveVaultIdV4: vi.fn(() => activePasskeyVaultId),
   readPasskeyStateV4: vi.fn(async () => passkeyStateForTest),
   updatePasskeyCredentialSignCountV4: mockUpdateSignCount,
-  verifyContainerPasswordV4: vi.fn(
-    async (pw: string) => pw === correctElevatedPassword,
+  verifyContainerPasswordV4: vi.fn(async (pw: string) =>
+    pw === correctElevatedPassword
+      ? { verified: true }
+      : { verified: false, structural: false },
   ),
   tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
@@ -8966,7 +8968,11 @@ describe("vault-verify-password — characterisation (DA-015)", () => {
     // failures should stop charging the counter, at which point this test
     // should be updated to assert the counter is untouched.
     const keystore = await import("./keystore-mldsa.js");
-    vi.mocked(keystore.verifyContainerPasswordV4).mockResolvedValueOnce(false);
+    vi.mocked(keystore.verifyContainerPasswordV4).mockResolvedValueOnce({
+      verified: false,
+      structural: true,
+      reason: "no-container",
+    });
     const r = (await dispatchPopup({
       kind: "popup",
       op: "vault-verify-password",

@@ -539,19 +539,22 @@ describe("keystore-mldsa v4-multi state machine", () => {
 
       // Correct password verifies true. Verification is side-effect free —
       // it does NOT change the unlocked/active state in either direction.
-      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect((await ks.verifyContainerPasswordV4(password)).verified).toBe(true);
       expect(ks.isUnlockedV4()).toBe(true);
       expect(ks.getActiveVaultIdV4()).not.toBeNull();
 
-      // Wrong password verifies false (AEAD fails closed), never throws.
-      expect(await ks.verifyContainerPasswordV4("wrong-password")).toBe(false);
+      // Wrong password verifies false (AEAD fails closed), never throws — and
+      // reports it as a REAL password verdict, not a structural refusal.
+      const wrong = await ks.verifyContainerPasswordV4("wrong-password");
+      expect(wrong.verified).toBe(false);
+      expect(wrong.verified === false && wrong.structural).toBe(false);
 
       // Works while LOCKED too (re-derives the MEK from disk) and does not
       // unlock the wallet as a side effect.
       ks.lockV4();
       expect(ks.isUnlockedV4()).toBe(false);
       expect(ks.getActiveVaultIdV4()).toBeNull();
-      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect((await ks.verifyContainerPasswordV4(password)).verified).toBe(true);
       expect(ks.isUnlockedV4()).toBe(false);
       expect(ks.getUnlockedAddressV4()).toBeNull();
     },
@@ -3019,4 +3022,50 @@ describe("concurrent container writers both land (H1)", () => {
     expect(labels).toContain("Concurrent A");
     expect(labels.length).toBe(startCount + 2);
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// D1 — password verification must report WHY it failed.
+//
+// A bare boolean folded three different outcomes into one `false`: "there is no
+// container", "the container has no active vault", and a genuine AEAD failure.
+// Callers charge a brute-force attempt on `false`, so the two structural cases
+// burned the user's attempts for conditions that never evaluated the password.
+// Costs no Argon2id: both structural cases return before the derivation.
+// ---------------------------------------------------------------------------
+describe("verifyContainerPasswordV4 reports why it failed (D1)", () => {
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+
+  beforeEach(async () => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("reports a MISSING CONTAINER as structural, not as a wrong password", async () => {
+    const r = await ks.verifyContainerPasswordV4("any-password-at-all");
+    expect(r.verified).toBe(false);
+    expect(r.verified === false && r.structural).toBe(true);
+  });
+
+  it("reports a container with a DANGLING activeVaultId as structural", async () => {
+    const KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    storage[KEY] = {
+      version: 5,
+      algo: "ml-dsa-65",
+      kdf: "argon2id",
+      aead: "xchacha20-poly1305",
+      masterKdf: { kdf: "argon2id", m: 65536, t: 3, p: 1, salt: "c2FsdA==" },
+      vaults: [],
+      activeVaultId: "does-not-exist",
+    };
+    const r = await ks.verifyContainerPasswordV4("any-password-at-all");
+    expect(r.verified).toBe(false);
+    expect(r.verified === false && r.structural).toBe(true);
+  });
 });
