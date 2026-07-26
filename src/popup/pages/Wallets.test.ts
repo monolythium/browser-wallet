@@ -15,9 +15,14 @@ import { describe, expect, it } from "vitest";
 import {
   ABSENT,
   BALANCE_CONCURRENCY,
+  REMOVE_GATE_PROMPT,
   WALLETS_GATE_PROMPT,
+  canRemoveWallet,
+  multisigLabelsReferencing,
+  removeWarningHeading,
   runWithConcurrency,
   walletBalanceText,
+  type MultisigRosterEntry,
 } from "./Wallets";
 
 const LYTH = 10n ** 18n;
@@ -155,5 +160,88 @@ describe("Wallets gate copy", () => {
     expect(WALLETS_GATE_PROMPT).toBe(
       "Confirm your password to manage your wallets.",
     );
+  });
+
+  it("asks again, per action, before a removal", () => {
+    // Decision 2: the page-entry gate does NOT satisfy the per-action gate.
+    expect(REMOVE_GATE_PROMPT).toBe(
+      "Confirm your password to remove this wallet.",
+    );
+  });
+});
+
+describe("canRemoveWallet — the single-wallet predicate", () => {
+  it("hides the action when there is exactly one wallet", () => {
+    // Removing the only wallet would leave activeVaultId dangling and brick
+    // the container at next unlock, so the keystore refuses. Offering it and
+    // refusing after a password and a typed DELETE is not a real choice.
+    expect(canRemoveWallet(1)).toBe(false);
+  });
+
+  it("offers the action from two wallets upward", () => {
+    expect(canRemoveWallet(2)).toBe(true);
+    expect(canRemoveWallet(9)).toBe(true);
+  });
+
+  it("hides the action for an empty or unknown list rather than failing open", () => {
+    expect(canRemoveWallet(0)).toBe(false);
+  });
+});
+
+describe("removeWarningHeading", () => {
+  it("names the wallet being destroyed, in ResetWallet's wording", () => {
+    expect(removeWarningHeading("Trading")).toBe(
+      "This permanently deletes Trading from this browser.",
+    );
+  });
+});
+
+describe("multisigLabelsReferencing — who loses a signer", () => {
+  const entry = (
+    label: string,
+    vaultId: string,
+    signers: MultisigRosterEntry["signers"],
+  ): MultisigRosterEntry => ({ label, vaultId, signers });
+
+  it("matches a self-signer by vaultId", () => {
+    const rosters = [
+      entry("Treasury", "ms-1", [{ address: "0xzzz", vaultId: "target" }]),
+    ];
+    expect(multisigLabelsReferencing(rosters, "target", "0xaaa")).toEqual([
+      "Treasury",
+    ]);
+  });
+
+  it("matches an external signer by address, case-insensitively", () => {
+    const rosters = [entry("Treasury", "ms-1", [{ address: "0xAAA" }])];
+    expect(multisigLabelsReferencing(rosters, "target", "0xaaa")).toEqual([
+      "Treasury",
+    ]);
+  });
+
+  it("names every affected wallet, not just the first", () => {
+    const rosters = [
+      entry("Treasury", "ms-1", [{ address: "0xaaa" }]),
+      entry("Ops", "ms-2", [{ address: "0xbbb", vaultId: "target" }]),
+      entry("Unrelated", "ms-3", [{ address: "0xccc" }]),
+    ];
+    expect(multisigLabelsReferencing(rosters, "target", "0xaaa")).toEqual([
+      "Treasury",
+      "Ops",
+    ]);
+  });
+
+  it("never names the wallet being removed, even if it is itself a multisig", () => {
+    const rosters = [entry("Self", "target", [{ address: "0xaaa" }])];
+    expect(multisigLabelsReferencing(rosters, "target", "0xaaa")).toEqual([]);
+  });
+
+  it("returns empty when nothing references it", () => {
+    const rosters = [entry("Treasury", "ms-1", [{ address: "0xbbb" }])];
+    expect(multisigLabelsReferencing(rosters, "target", "0xaaa")).toEqual([]);
+  });
+
+  it("returns empty for no multisig wallets at all", () => {
+    expect(multisigLabelsReferencing([], "target", "0xaaa")).toEqual([]);
   });
 });

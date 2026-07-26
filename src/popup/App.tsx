@@ -345,6 +345,11 @@ export default function App() {
   // of the state isn't referenced directly (peek happens inside the
   // setStack callback in navigateBack); useRef would also work but
   // useState keeps the same hook shape for future inspection.
+  // Which wallet the reveal screen should target, set when the Wallets page
+  // routes into it. Null means "the active wallet" (the Settings entry point).
+  const [revealTarget, setRevealTarget] = useState<
+    { vaultId: string; label: string } | null
+  >(null);
   const [, setScreenStack] = useState<Screen[]>([]);
   const navigateTo = useCallback((target: Screen) => {
     setScreenStack((prev) => {
@@ -1751,7 +1756,14 @@ export default function App() {
          gate lives inside the page, matching RevealPhrase / ResetWallet; this
          codebase has no route-guard mechanism). */}
       {screen === "wallets" && (
-        <Wallets chainIdHex={activeChain.chainId} onBack={navigateBack} />
+        <Wallets
+          chainIdHex={activeChain.chainId}
+          onBack={navigateBack}
+          onRevealPhrase={(vaultId, label) => {
+            setRevealTarget({ vaultId, label });
+            setScreen("reveal-phrase");
+          }}
+        />
       )}
 
       {/* Theme page. Reached from the Display & Preferences hub via navigateTo,
@@ -2057,8 +2069,20 @@ export default function App() {
         />
       )}
 
+      {/* Reveal. Reached from Settings (active wallet, no target) or from the
+         Wallets page (a specific wallet). `revealTarget` is cleared on the way
+         back so a later Settings entry can never inherit a stale target. */}
       {screen === "reveal-phrase" && (
-        <RevealPhrase onBack={() => setScreen("settings")} />
+        <RevealPhrase
+          onBack={() => {
+            const target = revealTarget;
+            setRevealTarget(null);
+            setScreen(target ? "wallets" : "settings");
+          }}
+          {...(revealTarget
+            ? { vaultId: revealTarget.vaultId, vaultLabel: revealTarget.label }
+            : {})}
+        />
       )}
 
       {/* Back from Connected Sites was hardcoded to

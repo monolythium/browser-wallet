@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
 import { MnemonicGrid } from "../components/MnemonicGrid";
 import { WalletLockLogo } from "../components/WalletLockLogo";
-import { bgKeystoreExportSeed } from "../bg";
+import { bgKeystoreExportSeed, bgVaultExportSeed } from "../bg";
 import {
   clearClipboardNow,
   copyWithAutoClear,
@@ -11,9 +11,20 @@ import {
 } from "../../lib/clipboard-with-clear";
 
 interface RevealPhraseProps {
-  /** Returns to Settings. Called on Cancel, on auto-hide expiry, and after
-   *  the user closes the reveal screen. */
+  /** Returns to wherever the caller came from. Called on Cancel, on auto-hide
+   *  expiry, and after the user closes the reveal screen. */
   onBack: () => void;
+  /** Reveal THIS vault's phrase instead of the active one. Omit for the
+   *  Settings entry, which is fixed to the active wallet.
+   *
+   *  Safe to pass an arbitrary id: every envelope is AEAD-bound to its own
+   *  vaultId via `buildVaultAadV4`, so a stale or wrong id fails the Poly1305
+   *  tag rather than surfacing a neighbour's phrase. */
+  vaultId?: string;
+  /** Rendered in the header whenever `vaultId` is set. Not cosmetic: the user
+   *  has just picked from a list of N wallets, and an unattributed phrase on
+   *  screen is a real mis-transcription hazard. */
+  vaultLabel?: string;
 }
 
 type Step = "reauth" | "warning" | "reveal";
@@ -21,7 +32,11 @@ type Step = "reauth" | "warning" | "reveal";
 const AUTO_HIDE_SECONDS = 30;
 const CLIPBOARD_CLEAR_MS = 30_000;
 
-export function RevealPhrase({ onBack }: RevealPhraseProps) {
+export function RevealPhrase({
+  onBack,
+  vaultId,
+  vaultLabel,
+}: RevealPhraseProps) {
   const [step, setStep] = useState<Step>("reauth");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +119,11 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     setSubmitting(true);
     setError(null);
     try {
-      const r = await bgKeystoreExportSeed(password);
+      // Same shape either way; only the targeting differs. Both share the
+      // brute-force lockout counters at the service worker.
+      const r = vaultId
+        ? await bgVaultExportSeed(password, vaultId)
+        : await bgKeystoreExportSeed(password);
       if (r.ok) {
         setMnemonic(r.mnemonic);
         setPassword("");
@@ -366,10 +385,25 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
           <Icon name="back" size={15} />
         </button>
-        <div
-          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
-        >
-          Recovery phrase
+        <div style={{ flex: 1, textAlign: "center", minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Recovery phrase</div>
+          {/* Which wallet this belongs to. Only shown when a specific vault was
+             targeted; the Settings entry is always the active wallet. */}
+          {vaultLabel && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-400)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={vaultLabel}
+            >
+              {vaultLabel}
+            </div>
+          )}
         </div>
         <div style={{ width: 36 }} />
       </div>
