@@ -105,6 +105,24 @@ export const LOCKOUT_THRESHOLDS = [
   { fails: 5, ms: 30_000 },
 ] as const;
 
+/**
+ * Shown alongside a lockout countdown on the surfaces where the user could
+ * otherwise conclude the wallet is permanently unreachable.
+ *
+ * This is true by construction, not a reassurance: the counter lives in
+ * `chrome.storage.session` (see SESSION_KEY_UNLOCK_FAIL_COUNT above), which is
+ * in-memory for the browser session and dropped when the browser closes. There
+ * is no `chrome.storage.local` mirror of it anywhere.
+ *
+ * It matters because a single counter is shared by every password surface and
+ * never decays, so a user who is locked out at the unlock screen is also locked
+ * out of Reset wallet — the recovery path — at the exact moment they need it.
+ * At the 30-minute tier, with no way to know the lockout is not permanent, the
+ * reasonable conclusion is that the wallet is dead. It is not.
+ */
+export const LOCKOUT_RESTART_HINT =
+  "This limit resets if you restart your browser.";
+
 // Exempt set — ops that do NOT bump the auto-lock deadline.
 //
 // The rule: an op belongs in this set only if it represents PASSIVE

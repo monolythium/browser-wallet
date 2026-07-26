@@ -9,7 +9,10 @@ import { Modal } from "../components/Modal";
 import { PasswordInput } from "../components/PasswordInput";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bech32mDisplay } from "../../shared/bech32m";
-import { WIPE_CONFIRM_WORD as RESET_CONFIRM_WORD } from "../../shared/constants";
+import {
+  LOCKOUT_RESTART_HINT,
+  WIPE_CONFIRM_WORD as RESET_CONFIRM_WORD,
+} from "../../shared/constants";
 
 interface UnlockScreenProps {
   /** Truncated address chip rendered above the password field, in bech32m form (e.g. "mono1abc…wxyz"). */
@@ -270,7 +273,7 @@ export function UnlockScreen({
               }}
             >
               {secondsRemaining > 0
-                ? `Too many attempts. Try again in ${secondsRemaining}s.`
+                ? `Too many attempts. Try again in ${secondsRemaining}s. ${LOCKOUT_RESTART_HINT}`
                 : error}
             </div>
           )}
