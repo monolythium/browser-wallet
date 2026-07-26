@@ -230,6 +230,7 @@ export function VaultPicker({
   };
 
   const handleStartRename = (id: string) => {
+    setOpen(false);
     setRenameId(id);
   };
 
