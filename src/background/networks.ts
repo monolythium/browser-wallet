@@ -76,7 +76,12 @@ export const MAX_EXECUTION_UNIT_LIMIT = 30_000_000n; // 0x1C9C380
 export const TESTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
   getRpcEndpoints("testnet-69420").map((endpoint, i) => ({
     name: `operator-${i + 1}`,
-    region: endpoint.region ?? "unknown",
+    // The registry's `region` is optional and the current gateway entry omits
+    // it. Carry the absence through as an empty string instead of minting
+    // "unknown": a placeholder here would be rendered verbatim by every
+    // operator surface, and prefilled into the override form for the user to
+    // save. Consumers use `displayableRegion()` and omit the field.
+    region: endpoint.region ?? "",
     rpc: endpoint.url,
     // Pull SDK's ws_url through when present so the
     // WS client can subscribe without per-operator auto-discovery. When

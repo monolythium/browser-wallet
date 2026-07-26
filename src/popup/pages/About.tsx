@@ -57,6 +57,7 @@ import {
   type OperatorRiskBadge,
 } from "../../shared/operator-risk";
 import { CHAIN_RETURNS_LEGACY_WEI } from "../../shared/chain-units";
+import { displayableRegion } from "../../shared/operators";
 
 interface AboutProps {
   onBack: () => void;
@@ -1201,6 +1202,8 @@ function Mono({ children }: { children: ReactNode }) {
 
 function OperatorRow({ row }: { row: OperatorHealthRow }) {
   const devMode = useFeature("DEVELOPER_MODE");
+  // Absent/placeholder region → the tag is omitted entirely, not blanked.
+  const region = displayableRegion(row.region);
   const ok = row.ok;
   const trusted = row.trustedGenesis;
   // Untrusted (forked) operators are RPC-skipped regardless of liveness,
@@ -1258,16 +1261,18 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           }}
         >
           <span>{row.name}</span>
-          <span
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 10,
-              color: "var(--fg-500)",
-              letterSpacing: "0.04em",
-            }}
-          >
-            {row.region}
-          </span>
+          {region !== null && (
+            <span
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-500)",
+                letterSpacing: "0.04em",
+              }}
+            >
+              {region}
+            </span>
+          )}
           {!trusted && (
             <span
               style={{

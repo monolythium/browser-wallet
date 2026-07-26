@@ -38,6 +38,7 @@ import {
   type OperatorRiskInput,
   type OperatorRiskKind,
 } from "../../shared/operator-risk";
+import { displayableRegion } from "../../shared/operators";
 
 interface OperatorDirectoryProps {
   onBack: () => void;
@@ -661,6 +662,8 @@ function OperatorAccordionRow({
   const badges = classifyOperatorRisk(toRiskInput(op));
   const danger = !op.trustedGenesis || !op.ok;
   const host = op.rpc.replace(/^https?:\/\//, "");
+  // Absent/placeholder region → the tag is omitted entirely, not blanked.
+  const region = displayableRegion(op.region);
   // Plain-language status shown to every user (the host/latency line below is
   // developer-only). Quarantined = the operator self-reported a checkpoint
   // state-root mismatch and refuses RPC, so it must not be chosen.
@@ -723,9 +726,11 @@ function OperatorAccordionRow({
               }}
             />
             <span style={{ fontSize: 12, fontWeight: 600 }}>{op.name}</span>
-            <span style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
-              {op.region}
-            </span>
+            {region !== null && (
+              <span style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
+                {region}
+              </span>
+            )}
           </span>
           {devMode && (
           <span
@@ -1000,7 +1005,9 @@ function LegendEntry({
             gap: 3,
           }}
         >
-          {affected.map((op) => (
+          {affected.map((op) => {
+            const region = displayableRegion(op.region);
+            return (
             <div
               key={op.rpc}
               style={{
@@ -1019,10 +1026,12 @@ function LegendEntry({
                   color: "var(--fg-400)",
                 }}
               >
-                {op.region} · {op.rpc.replace(/^https?:\/\//, "")}
+                {region !== null && `${region} · `}
+                {op.rpc.replace(/^https?:\/\//, "")}
               </span>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
