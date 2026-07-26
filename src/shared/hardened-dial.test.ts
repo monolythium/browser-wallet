@@ -124,6 +124,30 @@ describe("overrideWithinFleet — the CSP-safety predicate", () => {
       overrideWithinFleet(DEFAULTS, [{ name: "x", region: "", rpc: "not a url" }]),
     ).toBe(false);
   });
+
+  it("rejects same-host plaintext downgrades of secure release defaults", () => {
+    const secureDefaults: ReadonlyArray<OperatorEntry> = [
+      {
+        name: "operator-1",
+        region: "global",
+        rpc: "https://rpc.monolythium.com",
+        wsRpc: "wss://rpc.monolythium.com/ws",
+      },
+    ];
+    const downgrade: OperatorEntry[] = [
+      {
+        name: "operator-1",
+        region: "global",
+        rpc: "http://rpc.monolythium.com",
+        wsRpc: "ws://rpc.monolythium.com/ws",
+      },
+    ];
+
+    expect(overrideWithinFleet(secureDefaults, downgrade)).toBe(false);
+    expect(hardenedOperators(secureDefaults, downgrade, true)).toEqual(
+      secureDefaults,
+    );
+  });
 });
 
 describe("hardenedChains — the custom-chain brick-preventer", () => {

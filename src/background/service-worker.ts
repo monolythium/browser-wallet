@@ -233,6 +233,7 @@ import {
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
 import { hardenedChains, overrideWithinFleet } from "../shared/hardened-dial.js";
+import { migrateRegenesisSensitiveState } from "./regenesis-migration.js";
 import {
   clampToSaneBound,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
@@ -881,6 +882,21 @@ const bootHydrated: Promise<void> = (async () => {
     // (cf. 5316b25) can't leave the flag stale at false.
     await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
     await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+  }
+
+  // Testnet retains chain id 69420 across a re-genesis. Before any cached
+  // activity, pending transaction, notification watermark, balance, name, or
+  // liveness hint is consumed, clear predecessor-chain families once and stamp
+  // the authoritative genesis carried by this build. Custody, contacts,
+  // connected sites, custom chains, preferences, and security-policy state are
+  // preserved by the migration's explicit allowlist.
+  const migratedForRegenesis = await migrateRegenesisSensitiveState();
+  if (migratedForRegenesis) {
+    // The deleted pending set no longer has anything to reconcile, and the
+    // notification poll alarm can otherwise survive with no current-chain
+    // work. The startup badge refresh is sequenced after boot hydration below,
+    // so it sees the already-migrated history.
+    await chrome.alarms.clear(ALARM_NOTIF_POLL);
   }
 
   await loadUserChains();
@@ -11832,10 +11848,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
 // badge once at startup so the unread pip is correct after a re-init.
 
 installNotificationsClickListener();
-void refreshUnreadBadge({
-  unlocked: isUnlockedV4(),
-  activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
-});
+void bootHydrated
+  .then(
+    () =>
+      refreshUnreadBadge({
+        unlocked: isUnlockedV4(),
+        activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+      }),
+    () =>
+      refreshUnreadBadge({
+        unlocked: isUnlockedV4(),
+        activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+      }),
+  )
+  .catch(() => {
+    // Best-effort badge reconciliation. Storage/action failures must not escape
+    // module initialization or keep the service worker alive.
+  });
 
 // ---- message routing ----
 

@@ -44,6 +44,15 @@ describe("TESTNET_OPERATOR_RPCS_DEFAULTS", () => {
     }
   });
 
+  it("pins the canonical R5 gateway and its explicit WebSocket path", () => {
+    expect(TESTNET_OPERATOR_RPCS_DEFAULTS).toEqual([
+      expect.objectContaining({
+        rpc: "https://rpc.monolythium.com",
+        wsRpc: "wss://rpc.monolythium.com/ws",
+      }),
+    ]);
+  });
+
   it("places operator-1 at position 0 (1-indexed off the SDK registry)", () => {
     expect(TESTNET_OPERATOR_RPCS_DEFAULTS[0]?.name).toBe("operator-1");
   });
@@ -489,13 +498,13 @@ describe("probeFirstAliveOperator (#42 reachable-but-wrong-chain → untrusted)"
     ).toBe("untrusted");
   });
 
-  it("parallel probe returns a live operator even when the others are dead", async () => {
+  it("returns a live operator without waiting on any dead peers", async () => {
     // The freeze fix: probing concurrently means one live operator is selected
-    // without waiting out every dead operator's timeout serially. Here every
-    // operator EXCEPT one is unreachable; the probe must still return the live
-    // one (and fast — not after summing the dead operators' timeouts).
+    // without waiting out every dead operator's timeout serially. R5 currently
+    // publishes one HTTPS gateway; if a later registry adds more public RPCs,
+    // this same fetch double makes every endpoint except the first unreachable.
     const operators = getActiveOperators();
-    expect(operators.length).toBeGreaterThanOrEqual(2);
+    expect(operators.length).toBeGreaterThanOrEqual(1);
     const liveRpc = operators[0]!.rpc;
     globalThis.fetch = vi.fn(async (url, init) => {
       if (String(url) !== liveRpc) throw new TypeError("network unreachable");

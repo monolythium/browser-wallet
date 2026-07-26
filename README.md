@@ -17,7 +17,7 @@ Functional Manifest V3 extension with substantive crypto + EIP-1193 implementati
 - **Chain target is testnet.** Monolythium mainnet has not launched. Anything you connect to here runs against the public testnet today; mainnet activation is gated on separate protocol milestones.
 - **Live on the Chrome Web Store** (Chromium browsers) — see [Install](#install) above. Firefox (AMO) is not yet published; for Firefox or development, build from source and load `dist/` as an unpacked extension.
 - **Fallback operator RPCs are placeholders** (`192.0.2.0/24` — IETF TEST-NET-1). The wallet's primary chain-config source is the SDK chain-registry; the bundled `FALLBACK_OPERATORS_2026_05_25` array in `src/background/networks.ts` only kicks in when the registry is unreachable. To override with real RPCs, copy [`examples/operators.json.example`](./examples/operators.json.example) to `examples/operators.json` (gitignored).
-- **SDK comes from npm, pinned exact.** `package.json` pins `@monolythium/core-sdk@0.6.8` (exact, not a range) — the SDK is pre-1.0, semver is not a wire-compatibility contract, and a silent upgrade could shift wallet-authentication or transaction bytes. Every wallet release bumps the SDK pin deliberately.
+- **SDK comes from npm, pinned exact.** `package.json` pins `@monolythium/core-sdk@0.6.10` (exact, not a range) — the SDK is pre-1.0, semver is not a wire-compatibility contract, and a silent upgrade could shift wallet-authentication or transaction bytes. Every wallet release bumps the SDK pin deliberately.
 
 Watch this repo for the first non-preview tag before treating any build as production-grade.
 
