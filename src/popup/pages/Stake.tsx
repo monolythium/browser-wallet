@@ -30,6 +30,7 @@ import { classifySendError, errorLinksOperators, severityColours } from "../../s
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
+import { DevBadge } from "../components/DevBadge";
 import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
@@ -1077,6 +1078,7 @@ export function Stake({
                                 wordBreak: "break-word",
                               }}
                             >
+                              <DevBadge />
                               {clustersError}
                             </div>
                           )}
@@ -2170,6 +2172,7 @@ function ErrorView({
               lineHeight: 1.5,
             }}
           >
+            <DevBadge />
             {error.message}
             {(error.code !== null ||
               error.method !== null ||

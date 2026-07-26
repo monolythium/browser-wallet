@@ -1144,6 +1144,7 @@ export function Send({
                           wordBreak: "break-word",
                         }}
                       >
+                        <DevBadge />
                         {feeError}
                       </div>
                     )}

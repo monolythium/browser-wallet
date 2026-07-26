@@ -976,6 +976,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                     marginTop: 4,
                   }}
                 >
+                  <DevBadge />
                   {probeError}
                 </div>
               )}
