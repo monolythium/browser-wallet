@@ -876,6 +876,24 @@ export async function hasContainerV4(): Promise<boolean> {
   return (await loadVaultsContainerV4()) !== null;
 }
 
+/**
+ * The `withKeyLock` key that serialises every vault-container mutation.
+ *
+ * Exported ONLY so the wallet-state wipe can take the same lock. That wipe
+ * removes the container by scanning for the `mono.` prefix rather than going
+ * through `saveVaultsContainerV4`, so it is the one container mutation the
+ * "route every write through the locked helper" invariant cannot catch on its
+ * own — without this it could delete the container out from under an in-flight
+ * writer, or be overwritten by one.
+ *
+ * Deliberately a key accessor and NOT a setter: callers can serialise against
+ * the container, but cannot write it. The only way to change the container's
+ * contents remains the locked writers in this module.
+ */
+export function vaultContainerLockKey(): string {
+  return VAULTS_CONTAINER_KEY_V4;
+}
+
 /** Internal: unwrap a vault's VEK, open its envelope, build the
  *  backend, return the unlocked-state record. Used by both
  *  {@link unlockContainerV4} and {@link selectActiveVaultV4} — both

@@ -400,6 +400,10 @@ const mockUpdateSignCount = vi.hoisted(() =>
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
   clearSlhDsaBackupV4: mockClearSlhDsaBackupV4,
+  // H1 — the wipe serialises against the container on this key. Returns the
+  // real key string so the wipe contends on the same lock the keystore writers
+  // use, rather than an isolated one that would make the test vacuous.
+  vaultContainerLockKey: vi.fn(() => "mono.vaults.v4"),
   hasContainerV4: vi.fn(async () => true),
   storedContainerNeedsRestoreV4: vi.fn(async () => false),
   unlockContainerV4: vi.fn(async () => ({

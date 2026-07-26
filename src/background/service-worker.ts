@@ -83,6 +83,7 @@ import {
   exportMnemonicV4,
   exportMnemonicForVaultV4,
   removeVaultV4,
+  vaultContainerLockKey,
   personalSignV4,
   signTypedDataV4FromV4,
   getUnlockedPublicKeyV4,
@@ -768,13 +769,26 @@ export async function purgeDemoAddrCacheKeys(): Promise<void> {
  *  and the caller's `session.connectedOrigins.clear()`). Every removed key is
  *  read-with-a-default at boot, so a clean Welcome + fresh import still work. */
 async function wipeAllLocalWalletState(): Promise<void> {
-  const all = await new Promise<Record<string, unknown>>((resolve) => {
-    chrome.storage.local.get(null, (res) => resolve(res ?? {}));
-  });
-  const toRemove = Object.keys(all).filter((k) => k.startsWith("mono."));
-  if (toRemove.length === 0) return;
-  await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(toRemove, () => resolve());
+  // H1 — the vault container is one of the keys this removes, and it is removed
+  // by prefix scan rather than through the keystore's locked writers. Take the
+  // SAME container lock so a wipe cannot interleave with an in-flight vault
+  // write: without it, a writer holding a pre-wipe snapshot could re-persist
+  // the container milliseconds after the wipe "succeeded", resurrecting a prior
+  // owner's wallet on a device that was supposed to be clean.
+  //
+  // Nothing inside this function calls a locked keystore writer, so it cannot
+  // deadlock by re-entering the same key; the callers' surrounding work
+  // (connected-sites clear, session removes, triggerAutoLock, lockV4) performs
+  // no container write either.
+  return withKeyLock(vaultContainerLockKey(), async () => {
+    const all = await new Promise<Record<string, unknown>>((resolve) => {
+      chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+    });
+    const toRemove = Object.keys(all).filter((k) => k.startsWith("mono."));
+    if (toRemove.length === 0) return;
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.remove(toRemove, () => resolve());
+    });
   });
 }
 
