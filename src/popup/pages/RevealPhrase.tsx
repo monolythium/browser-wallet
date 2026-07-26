@@ -27,10 +27,25 @@ interface RevealPhraseProps {
   vaultLabel?: string;
 }
 
-type Step = "reauth" | "warning" | "reveal";
+export type Step = "reauth" | "warning" | "reveal";
 
 const AUTO_HIDE_SECONDS = 30;
 const CLIPBOARD_CLEAR_MS = 30_000;
+
+/** Whether the 30 s auto-hide countdown should be running.
+ *
+ *  The condition is "the phrase is on screen" — the reveal step, holding a
+ *  decrypted mnemonic — and deliberately NOT "the user tapped to unblur".
+ *  Arming on the tap left the chip advertising `Hides in 30s` while no timer
+ *  ran, and let a decrypted phrase sit in component state for as long as the
+ *  screen stayed open. Note the absence of a tap/`revealed` parameter: the
+ *  blur is a shoulder-surfing control, not a lifetime control, so it must not
+ *  be able to gate the countdown.
+ *
+ *  Exported for the test — this file cannot be exercised through a DOM. */
+export function autoHideArmed(step: Step, mnemonic: string | null): boolean {
+  return step === "reveal" && mnemonic !== null;
+}
 
 export function RevealPhrase({
   onBack,
@@ -44,14 +59,13 @@ export function RevealPhrase({
   const [submitting, setSubmitting] = useState(false);
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [autoHideRemaining, setAutoHideRemaining] = useState(AUTO_HIDE_SECONDS);
-  const [autoHideStarted, setAutoHideStarted] = useState(false);
   const [copied, setCopied] = useState(false);
   const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
     "idle",
   );
   // Tap-to-reveal toggle. `revealed` flips on click anywhere on the
-  // grid/overlay click target; first transition to `true` arms the
-  // sticky `autoHideStarted` flag below.
+  // grid/overlay click target. Purely a shoulder-surfing blur — it does not
+  // affect the auto-hide countdown in either direction.
   const [revealed, setRevealed] = useState(false);
 
   // Lockout countdown — mirrors UnlockScreen.
@@ -70,12 +84,14 @@ export function RevealPhrase({
     return () => clearInterval(t);
   }, [secondsRemaining]);
 
-  // Auto-hide countdown — starts on the FIRST successful hold-to-reveal
-  // (autoHideStarted flag, set inside startHold) and ticks continuously
-  // regardless of subsequent press/release cycles. Expiry routes back to
-  // Settings via onBack.
+  // Auto-hide countdown — runs whenever `autoHideArmed` holds, i.e. from the
+  // moment the reveal step renders with a decrypted phrase. It is reset to
+  // AUTO_HIDE_SECONDS once, on the warning step's "Reveal phrase" button, and
+  // nothing else resets it: tap-to-reveal and tap-to-hide do not touch it, and
+  // neither does copying. Expiry routes back via onBack, which unmounts this
+  // screen and drops the mnemonic with it.
   useEffect(() => {
-    if (!autoHideStarted) return;
+    if (!autoHideArmed(step, mnemonic)) return;
     const t = setInterval(() => {
       setAutoHideRemaining((s) => {
         const next = s - 1;
@@ -88,7 +104,7 @@ export function RevealPhrase({
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [autoHideStarted, onBack]);
+  }, [step, mnemonic, onBack]);
 
   // Cleanup on unmount: drop the mnemonic from React state and FLUSH the
   // shared clipboard auto-clear (best-effort wipe NOW). This screen
@@ -104,15 +120,11 @@ export function RevealPhrase({
     };
   }, []);
 
-  // Tap-to-reveal toggle. The first transition to revealed=true arms
-  // the sticky 30s auto-hide (subsequent reveal/hide cycles don't reset
-  // it — same semantics as the previous hold-to-reveal implementation).
-  const toggleReveal = () => {
-    setRevealed((r) => {
-      if (!r) setAutoHideStarted(true);
-      return !r;
-    });
-  };
+  // Tap-to-reveal toggle — unblurs the grid and nothing else. It no longer
+  // arms the auto-hide: the countdown is already running by the time this can
+  // be tapped (see `autoHideArmed`), so blurring the words cannot extend how
+  // long they stay decrypted.
+  const toggleReveal = () => setRevealed((r) => !r);
 
   const handleAuthSubmit = async () => {
     if (submitting || secondsRemaining > 0) return;
