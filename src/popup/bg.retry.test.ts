@@ -13,7 +13,7 @@
 // path rather than a private predicate.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bgKeystoreStatus } from "./bg";
+import { bgKeystoreStatus, bgVaultRemove } from "./bg";
 
 type Outcome = { error: string } | { result: unknown };
 
@@ -90,5 +90,67 @@ describe("popup→SW transport retry (MV3 idle/teardown race)", () => {
 
     await expect(bgKeystoreStatus()).rejects.toThrow(/message channel closed/);
     expect(calls).toBe(2); // exactly one retry, then give up
+  });
+});
+
+// DA-009 — the retry is a blanket policy: it resends ANY op whose response was
+// lost, including a destructive one. For a removal that already succeeded, the
+// resend is a second destroy request for a vault that no longer exists.
+//
+// This narrows the policy per-op, mirroring the COALESCED_POPUP_OPS allowlist in
+// the same file. The success path is deliberately unchanged — the exclusion
+// lives in the catch, so a call that never fails never reaches it.
+describe("DA-009 — the destructive vault op is excluded from the blanket retry", () => {
+  it("does NOT resend vault-remove when the SW drops the response", async () => {
+    // Second outcome is a success the retry WOULD have consumed. If the
+    // exclusion regresses, `calls` becomes 2 and this resolves instead.
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: { ok: true } }];
+
+    await expect(bgVaultRemove("pw", "vault-1")).rejects.toThrow(
+      /message channel closed/,
+    );
+    expect(calls).toBe(1);
+  });
+
+  it("does not resend it for the legacy 'message port closed' phrasing either", async () => {
+    outcomes = [
+      { error: "The message port closed before a response was received." },
+      { result: { ok: true } },
+    ];
+
+    await expect(bgVaultRemove("pw", "vault-1")).rejects.toThrow(/message port/);
+    expect(calls).toBe(1);
+  });
+
+  it("SUCCESS PATH UNCHANGED: a normal removal still resolves on the first attempt", async () => {
+    const ok = {
+      ok: true,
+      removedId: "vault-1",
+      newActiveVaultId: "vault-2",
+      newActiveAddress: "0xabc",
+      affectedMultisigLabels: [],
+    } as unknown;
+    outcomes = [{ result: ok }];
+
+    await expect(bgVaultRemove("pw", "vault-1")).resolves.toEqual(ok);
+    expect(calls).toBe(1);
+  });
+
+  it("SUCCESS PATH UNCHANGED: an application-level refusal is delivered verbatim", async () => {
+    // `{ ok: false }` is a resolved reply, not a transport error — it never
+    // reached the retry before this change and must not now be swallowed.
+    const refusal = { ok: false, reason: "wrong_password", failCount: 2 } as unknown;
+    outcomes = [{ result: refusal }];
+
+    await expect(bgVaultRemove("pw", "vault-1")).resolves.toEqual(refusal);
+    expect(calls).toBe(1);
+  });
+
+  it("CONTROL: an ordinary read op still retries — the policy narrowed, it did not disappear", async () => {
+    const ok = { hasVault: true, unlocked: true } as unknown;
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: ok }];
+
+    await expect(bgKeystoreStatus()).resolves.toEqual(ok);
+    expect(calls).toBe(2);
   });
 });

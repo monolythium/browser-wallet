@@ -262,6 +262,18 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
   return p;
 }
 
+// DA-009: ops the transport must never resend. Same shape and same place as
+// COALESCED_POPUP_OPS above — one allowlist per policy, not a second mechanism.
+//
+// The retry below cannot tell "the SW never got it" from "the SW did it and
+// died before replying": both surface as the same idle/teardown error. For a
+// read that ambiguity is harmless — repeat it. For a destroy it means silently
+// issuing a second destroy request for work that may already be done, which is
+// not a decision a transport layer should be making on the user's behalf. The
+// user is on a confirm dialog for this op; a surfaced error they retry by hand
+// is the honest outcome.
+const NO_RETRY_POPUP_OPS = new Set<string>(["vault-remove"]);
+
 function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
   // Single retry against the MV3 idle/wake race. Pure transport-
   // level retry — application-level errors (`{ ok: false, ... }`
@@ -271,6 +283,9 @@ function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
     try {
       return (await rawSendMessage(envelope)) as T;
     } catch (e) {
+      // Checked inside the catch, so the success path is untouched: a call that
+      // does not throw never reaches this and behaves exactly as before.
+      if (NO_RETRY_POPUP_OPS.has(op)) throw e;
       const msg = (e as Error).message ?? "";
       if (!isSwIdleError(msg)) throw e;
       await new Promise((r) => setTimeout(r, 100));
