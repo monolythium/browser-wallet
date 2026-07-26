@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import type { UiOpenMode } from "../bg";
 import { bgGetUnread } from "../bg";
 
@@ -224,6 +225,11 @@ export function MainMenu({
               label="Automation spending limits"
               onClick={onAgentPolicy}
               hasChevron
+              /* The caller only passes onAgentPolicy under DEVELOPER_MODE, so
+                 this row exists solely as a developer surface. rightSlot is the
+                 established adjunct-content slot on a menu row (see the bell's
+                 unread pill) — MenuItem.label is a plain string. */
+              rightSlot={<DevBadge />}
             />
           )}
         </MenuSection>

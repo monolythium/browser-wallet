@@ -1949,7 +1949,11 @@ export default function App() {
           onNetworks={() => navigateTo("networks")}
           onOperators={() => navigateTo("operator-directory")}
           onMultisig={() => navigateTo("multisig-list")}
-          {...(agentCommerceEnabled
+          /* AGENT_COMMERCE *and* DEVELOPER_MODE: the destination page is itself
+             dev-gated (AgentPolicy renders a "Developer mode required" stub
+             without it), so an entry gated on AGENT_COMMERCE alone sent
+             agent-commerce users with developer mode off to a dead end. */
+          {...(agentCommerceEnabled && developerMode
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
           {...(registryEnabled ? { onOpenNames: () => navigateTo("names") } : {})}
