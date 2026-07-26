@@ -217,6 +217,10 @@ export function MainMenu({
               label="RISC-V"
               onClick={onOpenRiscv}
               hasChevron
+              /* Caller only passes onOpenRiscv under DEVELOPER_MODE, so this
+                 row is a developer surface. rightSlot, per the agent-policy
+                 row below — MenuItem.label is a plain string. */
+              rightSlot={<DevBadge />}
             />
           )}
           {onAgentPolicy && (

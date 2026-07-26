@@ -390,8 +390,9 @@ export function MrvNative({
 
   // Whole route is developer-only — the RISC-V contract console (bytecode,
   // raw lythoshi, RPC metadata, proof transcripts) is technical tooling and
-  // is off the LYTH-only fee-display posture. Reached only via the (now
-  // dev-gated) RISC-V menu entry; the route is gated too as defense-in-depth.
+  // is off the LYTH-only fee-display posture. Two entries reach it, both
+  // dev-gated: the Settings → Developer tools card and the RISC-V menu row.
+  // The route mount itself is NOT gated, so this check is the real backstop.
   if (!devMode) {
     return (
       <>

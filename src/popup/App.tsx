@@ -1972,7 +1972,13 @@ export default function App() {
               }
             : {})}
           onOpenFeatures={() => navigateTo("features")}
-          onOpenRiscv={() => navigateTo("mrv-native")}
+          /* DEVELOPER_MODE: MrvNative renders a "Developer mode required" stub
+             without it, and this entry carried no condition at all — so any
+             user, with no flags on, could tap through to a dead end. The
+             Settings entry into the same page was already dev-gated. */
+          {...(developerMode
+            ? { onOpenRiscv: () => navigateTo("mrv-native") }
+            : {})}
           onLockWallet={() => {
             void bgKeystoreLock();
             // Optimistically reflect the lock in popup STATE, not just the
