@@ -17,9 +17,11 @@ interface RevealPhraseProps {
   /** Reveal THIS vault's phrase instead of the active one. Omit for the
    *  Settings entry, which is fixed to the active wallet.
    *
-   *  Safe to pass an arbitrary id: every envelope is AEAD-bound to its own
-   *  vaultId via `buildVaultAadV4`, so a stale or wrong id fails the Poly1305
-   *  tag rather than surfacing a neighbour's phrase. */
+   *  A trusted selector, NOT a check — a valid id shows that wallet's 24 words,
+   *  and the keystore does not second-guess it (see `exportMnemonicForVaultV4`).
+   *  So the caller owns the id's provenance: App clears `revealTarget` on every
+   *  exit from this screen — `revealTargetSurvives` — so a lock, a navigation
+   *  or an auto-hide cannot leave a stale id for the next entry to inherit. */
   vaultId?: string;
   /** Rendered in the header whenever `vaultId` is set. Not cosmetic: the user
    *  has just picked from a list of N wallets, and an unattributed phrase on

@@ -196,7 +196,7 @@ type Screen =
 // the same reason — a user mid-reset must not be redirected to Unlock.
 // reveal-phrase is intentionally NOT exempt: a lock signal mid-reveal
 // correctly forces re-auth before the seed can be re-displayed.
-const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
+export const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "approval",
   "loading",
   "welcome",
@@ -208,6 +208,22 @@ const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "forgot-password",
   "reset-wallet",
 ]);
+
+/** Whether `revealTarget` — "reveal THIS wallet rather than the active one" —
+ *  may outlive the current screen. It may not: the selector is scoped to the
+ *  reveal screen, so leaving that screen by any route drops it.
+ *
+ *  This is the counterpart to reveal-phrase's deliberate absence from
+ *  LOCK_SIGNAL_EXEMPT above. A lock signal mid-reveal routes the user to
+ *  Unlock, which is intended; the defect was that the target stayed behind, so
+ *  a later Settings entry — which means "the active wallet" and passes no
+ *  target — inherited the previous one and would have shown a different
+ *  wallet's phrase after a fresh, correct re-auth.
+ *
+ *  Exported for the test: App cannot be mounted without a DOM. */
+export function revealTargetSurvives(screen: Screen): boolean {
+  return screen === "reveal-phrase";
+}
 
 interface UiApproval {
   approval: PendingApproval;
@@ -823,6 +839,21 @@ export default function App() {
       cancelled = true;
     };
   }, [refreshKeystoreStatus]);
+
+  // Drop the reveal target the moment the reveal screen is left, by ANY route.
+  // Clearing it in RevealPhrase's `onBack` handled only the two deliberate
+  // exits (Back / Done, and auto-hide expiry, which calls onBack); it did not
+  // cover the SW lock signal below, which routes reveal-phrase to "locked"
+  // precisely because that screen is not exempt. Keying on `screen` instead of
+  // on a handler covers every exit that exists and every one added later.
+  //
+  // Ordering is safe: the Wallets entry point sets the target and the screen in
+  // one handler, so React renders them together and this never sees the target
+  // set with the screen still on "wallets".
+  useEffect(() => {
+    if (revealTargetSurvives(screen)) return;
+    setRevealTarget(null);
+  }, [screen]);
 
   // SW-pushed lock/unlock signal — chrome.storage.session.walletLocked is
   // the authoritative cross-context flag. The SW writes `true` when it
@@ -2084,8 +2115,9 @@ export default function App() {
       )}
 
       {/* Reveal. Reached from Settings (active wallet, no target) or from the
-         Wallets page (a specific wallet). `revealTarget` is cleared on the way
-         back so a later Settings entry can never inherit a stale target. */}
+         Wallets page (a specific wallet). onBack clears the target here so it
+         can also decide where to return; the screen-keyed effect above is what
+         guarantees the target is gone on EVERY exit, including a lock. */}
       {screen === "reveal-phrase" && (
         <RevealPhrase
           onBack={() => {

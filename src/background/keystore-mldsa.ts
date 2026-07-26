@@ -2470,12 +2470,18 @@ export async function exportMnemonicV4(
  * zeroed on every exit path. Nothing is persisted or logged; the phrase exists
  * only in the returned value.
  *
- * Safety note for the per-wallet reveal that consumes this. Every ciphertext is
- * AEAD-bound to its own vaultId through `buildVaultAadV4` — the wrapped VEK and
- * both envelope halves all carry it as additional authenticated data. Opening a
- * record under any other id therefore fails the Poly1305 tag. A stale, guessed,
- * or tampered `vaultId` cannot surface a different vault's phrase; it throws,
- * and the dispatcher maps any throw to wrong-password.
+ * `vaultId` is a TRUSTED SELECTOR, not a check. It picks which record to open,
+ * and a valid id returns that wallet's 24 words — which is the whole point of
+ * the per-wallet reveal. Nothing here re-authorises the choice, and nothing
+ * needs to: the caller has already proven the master password, which unlocks
+ * every vault in the container. What that means for callers is that the
+ * PROVENANCE of the id is theirs to guarantee — a stale or swapped id shows a
+ * different wallet's phrase, silently and successfully.
+ *
+ * What the AEAD binding does do: `buildVaultAadV4(vaultId)` is threaded into
+ * the wrapped VEK and both envelope halves, so a record's ciphertext only opens
+ * under its OWN id. That stops a transplant — moving one vault's envelope into
+ * another's slot in the container — not a caller naming a different vault.
  */
 export async function exportMnemonicForVaultV4(
   password: string,
