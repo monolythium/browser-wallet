@@ -807,10 +807,35 @@ async function saveVaultsContainerV4(
         : v,
     ),
   };
-  return new Promise((resolve) => {
+  // DA-002 — `chrome.storage.local.set` reports failure (quota exhaustion, I/O,
+  // a corrupt profile) by setting `chrome.runtime.lastError` INSIDE the
+  // callback: it does not throw and it does not reject. Resolving
+  // unconditionally therefore reported every failed container write as a
+  // success, which made each caller's "the write landed" reasoning vacuous —
+  // including `removeVaultV4`'s rollback, whose catch could never fire.
+  // Reject instead, so those paths become live.
+  //
+  // `chrome.runtime` is always present in an MV3 service worker; the optional
+  // read only keeps this callable from a test stub that installs `storage`
+  // alone. An absent `runtime` is treated as "no error", which matches the
+  // real platform where its absence is impossible.
+  return new Promise((resolve, reject) => {
     chrome.storage.local.set(
       { [VAULTS_CONTAINER_KEY_V4]: persistable },
-      () => resolve(),
+      () => {
+        const err = (
+          chrome.runtime as { lastError?: { message?: string } } | undefined
+        )?.lastError;
+        if (err) {
+          reject(
+            new Error(
+              `failed to persist the vault container: ${err.message ?? "unknown storage error"}`,
+            ),
+          );
+          return;
+        }
+        resolve();
+      },
     );
   });
 }
@@ -949,7 +974,16 @@ export async function selectActiveVaultV4(
   }
   const state = await loadVaultBackend(mekCache, target);
   container.activeVaultId = vaultId;
-  await saveVaultsContainerV4(container);
+  try {
+    await saveVaultsContainerV4(container);
+  } catch (e) {
+    // DA-002 made this path reachable. The incoming backend never becomes the
+    // session, so dispose its decrypted ML-DSA-65 secret rather than leaving it
+    // for GC — the same discipline removeVaultV4 applies to its speculative
+    // successor. `unlocked` is untouched, so the outgoing vault stays live.
+    state.backend.dispose();
+    throw e;
+  }
   // S1-01: deterministically wipe the OUTGOING vault's ML-DSA-65 secret once
   // the new backend is installed, instead of leaving it for GC. `prev` is the
   // abandoned instance; `state.backend` (now `unlocked`) is never the target.
@@ -1957,7 +1991,16 @@ async function appendVaultRecord(
   // broadcast `accountsChanged` after this returns so dApps + popup
   // refresh.
   container.activeVaultId = record.id;
-  await saveVaultsContainerV4(container);
+  try {
+    await saveVaultsContainerV4(container);
+  } catch (e) {
+    // DA-002 made this path reachable. The new vault was never persisted, so it
+    // never becomes the session — dispose the backend built for it instead of
+    // leaking a decrypted secret that `lockV4` (which only disposes `unlocked`)
+    // would never reach. The previously active vault stays live and undisposed.
+    backend.dispose();
+    throw e;
+  }
   // S1-01: dispose the PREVIOUSLY-active vault's backend (the outgoing session
   // secret) now that the just-added vault becomes active. The new `backend` is
   // deliberately NOT disposed here (see its construction note above — lockV4

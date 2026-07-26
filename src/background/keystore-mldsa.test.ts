@@ -12,7 +12,7 @@
 // dominates the per-test runtime (~1-2 s on a 2020-era laptop), so
 // every test carries a generous timeout.
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 function bytesToHexLower(b: Uint8Array): string {
   let s = "";
@@ -2728,4 +2728,179 @@ describe("exportMnemonicForVaultV4 — per-vault recovery-phrase export", () => 
     },
     60_000,
   );
+});
+
+// ---------------------------------------------------------------------------
+// DA-002 — a container write that fails must not report success.
+//
+// `chrome.storage.local.set` signals failure by setting `chrome.runtime.lastError`
+// INSIDE the callback; it neither throws nor rejects. Swallowing that made every
+// "did the write land" guarantee above it vacuous — a failed wallet removal or
+// wallet creation was reported to the user as success.
+// ---------------------------------------------------------------------------
+
+/** A container that satisfies `isVaultsContainerV4` without any crypto, so these
+ *  tests cost zero Argon2id derivations. */
+function fixtureContainer(vaults: Array<{ id: string; label: string }>) {
+  return {
+    version: 5,
+    algo: "ml-dsa-65",
+    kdf: "argon2id",
+    aead: "xchacha20-poly1305",
+    masterKdf: { kdf: "argon2id", m: 65536, t: 3, p: 1, salt: "c2FsdA==" },
+    vaults: vaults.map((v) => ({ ...v, createdAt: 1_000, addr: "0x" + "11".repeat(20) })),
+    activeVaultId: vaults[0]?.id ?? "",
+  };
+}
+
+/** Chrome stub whose `set` can be made to fail the way the real API does. */
+function installFailableChromeStub(): {
+  storage: StorageMap;
+  failNextSet: (message: string | null) => void;
+} {
+  const storage: StorageMap = {};
+  let setFailure: string | null = null;
+  const runtime: { lastError?: { message: string } } = {};
+  (globalThis as { chrome?: unknown }).chrome = {
+    runtime,
+    storage: {
+      local: {
+        // Real `chrome.storage.local` structured-clones across the boundary, so
+        // a reader NEVER shares an object reference with the store. Cloning here
+        // is not politeness — without it an in-memory mutation would write
+        // through to "disk" with no `set` at all, which would make a failed-write
+        // assertion pass for the wrong reason and make an interleaving test
+        // prove nothing.
+        get: (keys: string[], cb: (res: Record<string, unknown>) => void) => {
+          const out: Record<string, unknown> = {};
+          for (const k of keys) {
+            if (k in storage) out[k] = JSON.parse(JSON.stringify(storage[k]));
+          }
+          queueMicrotask(() => cb(out));
+        },
+        set: (entries: Record<string, unknown>, cb: () => void) => {
+          if (setFailure !== null) {
+            const msg = setFailure;
+            queueMicrotask(() => {
+              runtime.lastError = { message: msg };
+              cb();
+              delete runtime.lastError;
+            });
+            return;
+          }
+          for (const [k, v] of Object.entries(entries)) {
+            storage[k] = JSON.parse(JSON.stringify(v));
+          }
+          queueMicrotask(() => cb());
+        },
+        remove: (keys: string[] | string, cb?: () => void) => {
+          const arr = Array.isArray(keys) ? keys : [keys];
+          for (const k of arr) delete storage[k];
+          if (cb) queueMicrotask(() => cb());
+        },
+      },
+    },
+  };
+  return {
+    storage,
+    failNextSet: (message: string | null) => {
+      setFailure = message;
+    },
+  };
+}
+
+describe("container write failure (DA-002)", () => {
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+  let failNextSet: (m: string | null) => void;
+  let KEY: string;
+
+  beforeEach(async () => {
+    ({ storage, failNextSet } = installFailableChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    storage[KEY] = fixtureContainer([
+      { id: "v-1", label: "Wallet 1" },
+      { id: "v-2", label: "Wallet 2" },
+    ]);
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("rejects when chrome.runtime.lastError is set on the write", async () => {
+    failNextSet("QUOTA_BYTES quota exceeded");
+    await expect(
+      ks.__internalV4Multi.saveVaultsContainerV4(
+        fixtureContainer([{ id: "v-1", label: "Wallet 1" }]) as never,
+      ),
+    ).rejects.toThrow(/QUOTA_BYTES quota exceeded/);
+  });
+
+  it("still resolves when the write succeeds", async () => {
+    await expect(
+      ks.__internalV4Multi.saveVaultsContainerV4(
+        fixtureContainer([{ id: "v-1", label: "Renamed" }]) as never,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("a caller does NOT report success when the write failed", async () => {
+    failNextSet("I/O error");
+    await expect(ks.renameVaultV4("v-1", "New Label")).rejects.toThrow(
+      /I\/O error/,
+    );
+    // And the on-disk container is unchanged — the failed write persisted nothing.
+    const onDisk = storage[KEY] as { vaults: Array<{ label: string }> };
+    expect(onDisk.vaults[0]!.label).toBe("Wallet 1");
+  });
+});
+
+describe("container write failure leaves the session intact (DA-002)", () => {
+  // Costs ONE real Argon2id derivation, shared across the block via beforeAll.
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+  let failNextSet: (m: string | null) => void;
+  let KEY: string;
+  let addrBefore: string | null;
+
+  beforeAll(async () => {
+    ({ storage, failNextSet } = installFailableChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    await ks.createVaultFromNewMnemonic("correct horse battery staple 42");
+    addrBefore = ks.getUnlockedAddressV4();
+  }, 60_000);
+
+  afterAll(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("a failed vault-add leaves the wallet unlocked on the SAME address", async () => {
+    const before = JSON.stringify(storage[KEY]);
+    failNextSet("QUOTA_BYTES quota exceeded");
+    await expect(ks.addVaultFreshV4("Wallet 2")).rejects.toThrow(
+      /QUOTA_BYTES/,
+    );
+    failNextSet(null);
+    // The session did not move to the half-created vault...
+    expect(ks.isUnlockedV4()).toBe(true);
+    expect(ks.getUnlockedAddressV4()).toBe(addrBefore);
+    // ...and nothing was persisted.
+    expect(JSON.stringify(storage[KEY])).toBe(before);
+  });
+
+  it("a failed vault-select leaves the previously active vault active", async () => {
+    await ks.addVaultFreshV4("Wallet 2");
+    const activeBefore = ks.getUnlockedAddressV4();
+    const vaults = await ks.listVaultsV4();
+    const other = vaults!.find((v) => !v.isActive)!;
+    failNextSet("I/O error");
+    await expect(ks.selectActiveVaultV4(other.id)).rejects.toThrow(/I\/O error/);
+    failNextSet(null);
+    expect(ks.getUnlockedAddressV4()).toBe(activeBefore);
+  });
 });
