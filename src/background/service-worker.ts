@@ -6993,6 +6993,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
+      // DA-003 — an EMPTY password is a malformed request, not a guess. The
+      // password policy floors real passwords at MIN_PASSWORD_LENGTH, so "" can
+      // never be correct; letting it through costs an Argon2id derivation and,
+      // the point, burns one of the user's five brute-force attempts on a value
+      // that could not have succeeded. Rejecting it here also means a caller bug
+      // that sends "" surfaces as a visible payload error instead of silently
+      // walking the user into a lockout with a password that was right all
+      // along. Applied to EVERY password-taking op — a guard on some of them
+      // implies a coverage that does not exist.
+      if (typeof p?.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
       // P1-003: a stored pre-V5 (no-AAD) container can't be opened by the V5
       // AAD-bound seal. Detect it (read-only — never decrypts) and tell the
       // user to restore from their recovery phrase, instead of a misleading
@@ -7097,6 +7109,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // no "no_mnemonic_stored" branch — wrong password is the only
       // failure case beyond the rate limit.
       const p = message.payload as { password: string };
+      // DA-003 — see the note on keystore-unlock. "" can never be a correct
+      // password under the policy floor, so refusing it here spends no
+      // derivation and burns no brute-force attempt.
+      if (typeof p?.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
       const ses = await chrome.storage.session.get([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -7148,6 +7166,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // keystore-unlock — wrong-password attempts here count toward the
       // shared brute-force lockout window.
       const p = message.payload as { password: string };
+      // DA-003 — see the note on keystore-unlock. Charging an attempt here is
+      // the worst case of the three, because a lockout on the shared counter
+      // blocks Reset wallet itself — the recovery path.
+      if (typeof p?.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
       const ses = await chrome.storage.session.get([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,

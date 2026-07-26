@@ -9026,3 +9026,44 @@ describe("vault-verify-password — characterisation (DA-015)", () => {
     expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// DA-003 — the empty-password guard must cover EVERY password-taking op.
+//
+// An inconsistent guard is the finding, not the fix: five of the eight charge
+// sites rejected an empty password without spending an attempt, three did not.
+// On those three, "" reached the KDF, failed the AEAD, and burned one of the
+// user's five tries — for a string the password policy (MIN_PASSWORD_LENGTH)
+// guarantees can never be correct.
+// ---------------------------------------------------------------------------
+describe("empty-password guard covers every password op (DA-003)", () => {
+  const CASES: Array<{ op: string; payload: Record<string, unknown> }> = [
+    { op: "keystore-unlock", payload: { password: "" } },
+    { op: "keystore-export-seed", payload: { password: "" } },
+    { op: "keystore-reset", payload: { password: "" } },
+  ];
+
+  for (const c of CASES) {
+    it(`${c.op} refuses an empty password without charging`, async () => {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: c.op,
+        payload: c.payload,
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe("missing password");
+      expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+    });
+
+    it(`${c.op} refuses a non-string password without charging`, async () => {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: c.op,
+        payload: { ...c.payload, password: 1234 },
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe("missing password");
+      expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+    });
+  }
+});
