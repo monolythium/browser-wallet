@@ -109,6 +109,7 @@ import {
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
 } from "../shared/constants.js";
+import { withKeyLock } from "./storage-lock.js";
 
 const ARGON2_M_KIB = 64 * 1024; // 64 MiB
 const ARGON2_T = 3;
@@ -1126,71 +1127,91 @@ export async function removeVaultV4(
   vaultId: string,
 ): Promise<RemoveVaultResultV4> {
   if (!mekCache) throw new Error("container is locked");
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const target = container.vaults.find((v) => v.id === vaultId);
-  if (!target) throw new Error("unknown vault id");
-  if (container.vaults.length <= 1) {
-    throw new Error("cannot remove the last vault — use Reset wallet instead");
-  }
-
-  const survivors = container.vaults.filter((v) => v.id !== vaultId);
-  const wasActive = container.activeVaultId === vaultId;
-  const successorId = wasActive
-    ? electSuccessorV4(survivors).id
-    : container.activeVaultId;
-
-  // Prove password knowledge, and (only if needed) open the successor while we
-  // still hold the derived MEK. Both happen before any mutation.
-  const mek = await deriveMekV4(password, container.masterKdf);
-  let nextState: UnlockedState | null = null;
+  // H1/D2 — the KDF runs OUTSIDE the container lock, deliberately.
+  //
+  // `masterKdf` is the one part of the container that cannot go stale: it is
+  // written exactly once, in `commitVaultFromSeed`'s fresh-container literal,
+  // and no writer mutates it thereafter. Reading it from a pre-lock snapshot is
+  // therefore safe, and it keeps a ~1 s Argon2id derivation out of the critical
+  // section — holding the lock across it would queue every other container op
+  // behind this one and make the UI look hung.
+  //
+  // Everything that CAN go stale — the vault list, the active id, the target
+  // record — is re-read INSIDE the lock below. Acting on this pre-lock snapshot
+  // would be the original bug with extra steps.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) throw new Error("no v4 vaults container");
+  const mek = await deriveMekV4(password, pre.masterKdf);
   try {
-    const vek = unwrapVekV4(mek, target.wrappedKey, target.id);
-    try {
-      const opened = openVaultEnvelopeV4(vek, target.envelope, target.id);
-      opened.seed.fill(0);
-    } finally {
-      vek.fill(0);
-    }
-    if (wasActive) {
-      nextState = await loadVaultBackend(mek, electSuccessorV4(survivors));
-    }
+    return await withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+      const container = await loadVaultsContainerV4();
+      if (!container) throw new Error("no v4 vaults container");
+      const target = container.vaults.find((v) => v.id === vaultId);
+      if (!target) throw new Error("unknown vault id");
+      if (container.vaults.length <= 1) {
+        throw new Error(
+          "cannot remove the last vault — use Reset wallet instead",
+        );
+      }
+
+      const survivors = container.vaults.filter((v) => v.id !== vaultId);
+      const wasActive = container.activeVaultId === vaultId;
+      const successorId = wasActive
+        ? electSuccessorV4(survivors).id
+        : container.activeVaultId;
+
+      // Prove password knowledge, and (only if needed) open the successor.
+      // Both happen before any mutation.
+      let nextState: UnlockedState | null = null;
+      const vek = unwrapVekV4(mek, target.wrappedKey, target.id);
+      try {
+        const opened = openVaultEnvelopeV4(vek, target.envelope, target.id);
+        opened.seed.fill(0);
+      } finally {
+        vek.fill(0);
+      }
+      if (wasActive) {
+        nextState = await loadVaultBackend(mek, electSuccessorV4(survivors));
+      }
+
+      const affectedMultisigLabels = multisigVaultsReferencingV4(
+        container.vaults,
+        target,
+      );
+
+      container.vaults = survivors;
+      container.activeVaultId = successorId;
+      try {
+        await saveVaultsContainerV4(container);
+      } catch (e) {
+        // Nothing on disk changed and no in-memory state has moved yet. Dispose
+        // the successor we opened speculatively so its decrypted secret doesn't
+        // linger.
+        nextState?.backend.dispose();
+        throw e;
+      }
+
+      if (nextState) {
+        // S1-01: wipe the removed vault's ML-DSA-65 secret once the successor is
+        // installed, rather than leaving it for GC — same discipline as
+        // selectActiveVaultV4.
+        const prev = unlocked;
+        unlocked = nextState;
+        activeContainerVaultId = successorId;
+        prev?.backend.dispose();
+      }
+
+      return {
+        removedId: vaultId,
+        newActiveVaultId: successorId,
+        newActiveAddress: nextState?.address ?? unlocked?.address ?? "",
+        affectedMultisigLabels,
+      };
+    });
   } finally {
+    // Covers every exit, including a rejection while WAITING for the lock.
     mek.fill(0);
   }
-
-  const affectedMultisigLabels = multisigVaultsReferencingV4(
-    container.vaults,
-    target,
-  );
-
-  container.vaults = survivors;
-  container.activeVaultId = successorId;
-  try {
-    await saveVaultsContainerV4(container);
-  } catch (e) {
-    // Nothing on disk changed and no in-memory state has moved yet. Dispose the
-    // successor we opened speculatively so its decrypted secret doesn't linger.
-    nextState?.backend.dispose();
-    throw e;
-  }
-
-  if (nextState) {
-    // S1-01: wipe the removed vault's ML-DSA-65 secret once the successor is
-    // installed, rather than leaving it for GC — same discipline as
-    // selectActiveVaultV4.
-    const prev = unlocked;
-    unlocked = nextState;
-    activeContainerVaultId = successorId;
-    prev?.backend.dispose();
-  }
-
-  return {
-    removedId: vaultId,
-    newActiveVaultId: successorId,
-    newActiveAddress: nextState?.address ?? unlocked?.address ?? "",
-    affectedMultisigLabels,
-  };
 }
 
 /** Generate a fresh recovery phrase and add a new vault to the
@@ -1925,6 +1946,14 @@ async function appendVaultRecord(
   requestedLabel?: string,
   extra?: { kind: "single" | "multisig"; multisig?: MultisigVaultMeta },
 ): Promise<{ vaultId: string; mnemonic: string; address: string }> {
+  // H1 — the ENTIRE read-modify-write runs under the container lock. This is
+  // the append half of the fund-loss pair: without it, a concurrent writer that
+  // read the container before this append's write would persist a vault array
+  // lacking the record below, erasing a wrapped VEK and a sealed seed envelope
+  // for an address that stays funded on-chain. No KDF runs here (the caller
+  // supplies the cached MEK), so the lock is held only for the storage
+  // round trips plus a backend construction.
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
   const container = await loadVaultsContainerV4();
   if (!container) throw new Error("no v4 vaults container");
   // NOTE: this backend is RETAINED as the held session backend below
@@ -2010,6 +2039,7 @@ async function appendVaultRecord(
   activeContainerVaultId = record.id;
   prev?.backend.dispose();
   return { vaultId: record.id, mnemonic, address };
+  });
 }
 
 // ---- public API ----
@@ -2170,14 +2200,28 @@ async function commitVaultFromSeed(
     // single-vault `mono.vault.v4` write — create commits straight into
     // the `mono.vaults.v4` container shape.
     const masterKdf = generateMasterKdfParamsV4();
+    // D2 — derive BEFORE taking the container lock. These params are freshly
+    // generated rather than read from storage, so there is nothing here that
+    // could go stale while we wait.
     mek = await deriveMekV4(password, masterKdf);
+    const mekOwned = mek;
+    return await withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    // H1 — the AUTHORITATIVE overwrite guard. The callers check
+    // `hasContainerV4()` too, but that check is separated from this write by
+    // `getAddress` and a ~1 s derivation, so on its own it is a check-then-act:
+    // two concurrent onboarding commits could both pass it and both write, and
+    // because this function persists a FRESH single-vault container the second
+    // would obliterate the first. Re-checking inside the lock closes that.
+    if (await hasContainerV4()) {
+      throw new Error("v4 vault already exists; cannot overwrite");
+    }
     // V5 (P1-003): id generated before the seal so it binds into the AAD.
     const vaultId = crypto.randomUUID();
     const vek = generateVekV4();
     let wrappedKey: WrappedVekV4;
     let envelope: SealedSeedRecordV4;
     try {
-      wrappedKey = wrapVekV4(mek, vek, vaultId);
+      wrappedKey = wrapVekV4(mekOwned, vek, vaultId);
       envelope = sealVaultEnvelopeV4(vek, seed, mnemonic, vaultId);
     } finally {
       vek.fill(0);
@@ -2206,12 +2250,13 @@ async function commitVaultFromSeed(
     // end state the d67de85 follow-up unlockContainerV4 call established,
     // inline, so no single-vault write + re-unlock round-trip is needed.
     if (mekCache) mekCache.fill(0);
-    mekCache = mek;
+    mekCache = mekOwned;
     unlocked = { backend, address };
     activeContainerVaultId = record.id;
     committed = true; // ownership of mek + backend now held by the session
-    await persistMekToSessionV4(mek);
+    await persistMekToSessionV4(mekOwned);
     return address;
+    });
   } catch (e) {
     if (!committed) {
       if (mek) mek.fill(0);

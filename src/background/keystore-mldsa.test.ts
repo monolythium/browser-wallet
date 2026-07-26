@@ -2904,3 +2904,119 @@ describe("container write failure leaves the session intact (DA-002)", () => {
     expect(ks.getUnlockedAddressV4()).toBe(activeBefore);
   });
 });
+
+// ---------------------------------------------------------------------------
+// H1 — two concurrent container read-modify-writes must BOTH land.
+//
+// The container is one storage blob and every mutator does load → mutate →
+// write-the-whole-blob. Without serialisation two writers both read the same
+// prior value and the second clobbers the first. When both writers are
+// APPENDING a vault, what is clobbered is a vault record — its wrapped VEK and
+// its sealed seed envelope — while its address stays funded on-chain. That is
+// the fund-loss pair from the plan, and it is what this block pins.
+//
+// Modelled on storage-lock.test.ts's "two concurrent writers both land".
+// ---------------------------------------------------------------------------
+
+/** Chrome stub that can hold the NEXT `get` open until released, so an
+ *  interleaving is deterministic rather than timing-dependent. */
+function installGatedChromeStub(): {
+  storage: StorageMap;
+  gateNextGet: () => { release: () => void };
+} {
+  const storage: StorageMap = {};
+  let gate: Promise<void> | null = null;
+  (globalThis as { chrome?: unknown }).chrome = {
+    runtime: {},
+    storage: {
+      local: {
+        get: (keys: string[], cb: (res: Record<string, unknown>) => void) => {
+          const held = gate;
+          gate = null;
+          // Snapshot NOW, deliver later. The real API services the read when it
+          // is issued and hands that value to the callback even if a `set`
+          // lands in between — which is exactly the stale-snapshot condition
+          // under test. Re-reading at delivery time would hand the suspended
+          // caller fresh data and the race would silently disappear.
+          const out: Record<string, unknown> = {};
+          for (const k of keys) {
+            if (k in storage) out[k] = JSON.parse(JSON.stringify(storage[k]));
+          }
+          const deliver = () => cb(out);
+          if (held) void held.then(deliver);
+          else queueMicrotask(deliver);
+        },
+        set: (entries: Record<string, unknown>, cb: () => void) => {
+          for (const [k, v] of Object.entries(entries)) {
+            storage[k] = JSON.parse(JSON.stringify(v));
+          }
+          queueMicrotask(() => cb());
+        },
+        remove: (keys: string[] | string, cb?: () => void) => {
+          const arr = Array.isArray(keys) ? keys : [keys];
+          for (const k of arr) delete storage[k];
+          if (cb) queueMicrotask(() => cb());
+        },
+      },
+    },
+  };
+  return {
+    storage,
+    gateNextGet: () => {
+      let release!: () => void;
+      gate = new Promise<void>((r) => {
+        release = r;
+      });
+      return { release };
+    },
+  };
+}
+
+describe("concurrent container writers both land (H1)", () => {
+  // ONE real Argon2id derivation for the whole block: both writers under test
+  // use the cached MEK, so the race itself costs no derivations.
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+  let gateNextGet: () => { release: () => void };
+  let KEY: string;
+
+  beforeAll(async () => {
+    ({ storage, gateNextGet } = installGatedChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    await ks.createVaultFromNewMnemonic("correct horse battery staple 42");
+  }, 60_000);
+
+  afterAll(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("two interleaved vault-adds both survive — neither record is clobbered", async () => {
+    const startCount = (storage[KEY] as { vaults: unknown[] }).vaults.length;
+
+    // Hold the FIRST add's container read open, then start the second and give
+    // it a full macrotask turn to get as far as it can while the first is
+    // suspended.
+    //
+    // Deliberately NOT `await second` before releasing: once the writers are
+    // serialised the second CANNOT complete while the first holds the lock, so
+    // awaiting it first would deadlock the test rather than assert anything.
+    // Unserialised, the second runs start-to-finish in that turn and its write
+    // lands before the first resumes — which is precisely the losing
+    // interleaving this test must reproduce.
+    const gate = gateNextGet();
+    const first = ks.addVaultFreshV4("Concurrent A");
+    const second = ks.addVaultFreshV4("Concurrent B");
+    await new Promise((r) => setTimeout(r, 0));
+    gate.release();
+    await Promise.all([first, second]);
+
+    const labels = (storage[KEY] as { vaults: Array<{ label: string }> }).vaults.map(
+      (v) => v.label,
+    );
+    expect(labels).toContain("Concurrent B");
+    expect(labels).toContain("Concurrent A");
+    expect(labels.length).toBe(startCount + 2);
+  }, 60_000);
+});
