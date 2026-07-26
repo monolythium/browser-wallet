@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgNativeMarketOrderBookDeltas,
@@ -489,6 +490,7 @@ export function MrvNative({
           >
             MRV
           </span>
+          <DevBadge />
         </div>
         <div style={{ width: 36 }} />
       </div>

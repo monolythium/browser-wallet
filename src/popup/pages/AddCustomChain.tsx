@@ -10,6 +10,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { bgChainAddManual } from "../bg";
 
 interface AddCustomChainProps {
@@ -85,6 +86,7 @@ export function AddCustomChain({ existingChainIds, onBack, onAdded }: AddCustomC
           style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Add custom chain
+          <DevBadge />
         </div>
         <div style={{ width: 36 }} />
       </div>

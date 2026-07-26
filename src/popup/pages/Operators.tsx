@@ -11,6 +11,7 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { Modal } from "../components/Modal";
 import { useFeature } from "../hooks/useFeature";
 import {
@@ -347,6 +348,7 @@ export function Operators({
           style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Monolythium Testnet operators
+          <DevBadge />
         </div>
         <div style={{ width: 36 }} />
       </div>
