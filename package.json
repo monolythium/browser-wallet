@@ -34,7 +34,8 @@
   "pnpm": {
     "overrides": {
       "rollup@<2.80.0": "2.80.0",
-      "@babel/core": ">=7.29.6 <8"
+      "@babel/core": ">=7.29.6 <8",
+      "postcss": "8.5.18"
     }
   }
 }
