@@ -182,10 +182,16 @@ export function PasswordGate<T>({
     return () => clearInterval(t);
   }, [secondsRemaining]);
 
-  // Drop the password on unmount. JS cannot deterministically zero a string,
-  // so this releases the reference rather than wiping the bytes — the same
-  // honest limit RevealPhrase documents for the mnemonic. Neither existing
-  // re-auth step does this today.
+  // What drops the password is the UNMOUNT ITSELF: React discards this
+  // component's state and with it the last reference. The setter below adds
+  // nothing — a state update dispatched from an unmount cleanup is discarded,
+  // and with no StrictMode in this build the cleanup runs exactly once, at a
+  // real unmount. JS cannot deterministically zero a string either way, so no
+  // line here wipes the bytes.
+  //
+  // The clears that ARE load-bearing are in handleSubmit, and they are what
+  // stops a password outliving a submit: immediately after the verified value
+  // is handed to onVerified, on a failed verdict, and in the catch.
   useEffect(() => {
     return () => {
       setPassword("");

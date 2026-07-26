@@ -108,13 +108,16 @@ export function RevealPhrase({
     return () => clearInterval(t);
   }, [step, mnemonic, onBack]);
 
-  // Cleanup on unmount: drop the mnemonic from React state and FLUSH the
-  // shared clipboard auto-clear (best-effort wipe NOW). This screen
-  // auto-hides after 30 s — which unmounts it — so a self-managed timer
-  // would have been cancelled and left the copied phrase on the OS
-  // clipboard; the flush wipes it on the way out instead. The mnemonic
-  // string itself can't be deterministically zeroed in JS, but releasing
-  // the reference is what we can do.
+  // Unmount cleanup. The load-bearing half is the clipboard FLUSH: this screen
+  // auto-hides after 30 s — which unmounts it — so the shared auto-clear timer
+  // would otherwise be torn down with the phrase still on the OS clipboard.
+  // The flush wipes it on the way out instead.
+  //
+  // The setMnemonic(null) beside it is NOT what drops the phrase: a state
+  // update dispatched from an unmount cleanup is discarded, the unmount itself
+  // releases the reference, and JS cannot deterministically zero the string in
+  // any case. What actually bounds how long the phrase stays decrypted is the
+  // auto-hide countdown above (`autoHideArmed`), which unmounts this screen.
   useEffect(() => {
     return () => {
       setMnemonic(null);
