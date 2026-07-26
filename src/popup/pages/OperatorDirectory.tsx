@@ -39,6 +39,7 @@ import {
   type OperatorRiskKind,
 } from "../../shared/operator-risk";
 import { displayableRegion } from "../../shared/operators";
+import { operatorDisplayName } from "../../shared/operator-display";
 
 interface OperatorDirectoryProps {
   onBack: () => void;
@@ -131,6 +132,9 @@ export function OperatorDirectory({
 
   const confirmUse = async (op: OperatorHealthRow) => {
     if (usingRpc || operators === null) return;
+    // Name the operator the way the list does, so the modal copy matches the
+    // row the user tapped.
+    const label = operatorDisplayName(op.name, op.rpc);
     setUsingRpc(op.rpc);
     setConnectFlow({ op, phase: "checking" });
     try {
@@ -145,7 +149,7 @@ export function OperatorDirectory({
           op,
           phase: "result",
           ok: false,
-          message: `Can't connect to ${op.name} — ${block}`,
+          message: `Can't connect to ${label} — ${block}`,
         });
         return;
       }
@@ -156,7 +160,7 @@ export function OperatorDirectory({
           op,
           phase: "result",
           ok: false,
-          message: `Couldn't connect to ${op.name} — it's unreachable or on a different chain.`,
+          message: `Couldn't connect to ${label} — it's unreachable or on a different chain.`,
         });
         return;
       }
@@ -181,7 +185,7 @@ export function OperatorDirectory({
         op,
         phase: "result",
         ok: true,
-        message: `Connected to ${op.name}.`,
+        message: `Connected to ${label}.`,
       });
       setReloadKey((k) => k + 1);
     } finally {
@@ -340,7 +344,10 @@ export function OperatorDirectory({
                           : "on automatic operator selection"}
                         . Connect to{" "}
                         <strong style={{ color: "var(--fg-100)" }}>
-                          {connectFlow.op.name}
+                          {operatorDisplayName(
+                            connectFlow.op.name,
+                            connectFlow.op.rpc,
+                          )}
                         </strong>
                         ? The wallet runs a health &amp; security check first.
                       </div>
@@ -372,7 +379,10 @@ export function OperatorDirectory({
                     >
                       Running a health &amp; security check on{" "}
                       <strong style={{ color: "var(--fg-100)" }}>
-                        {connectFlow.op.name}
+                        {operatorDisplayName(
+                          connectFlow.op.name,
+                          connectFlow.op.rpc,
+                        )}
                       </strong>
                       …
                     </div>
@@ -664,6 +674,7 @@ function OperatorAccordionRow({
   const host = op.rpc.replace(/^https?:\/\//, "");
   // Absent/placeholder region → the tag is omitted entirely, not blanked.
   const region = displayableRegion(op.region);
+  const displayName = operatorDisplayName(op.name, op.rpc);
   // Plain-language status shown to every user (the host/latency line below is
   // developer-only). Quarantined = the operator self-reported a checkpoint
   // state-root mismatch and refuses RPC, so it must not be chosen.
@@ -725,7 +736,7 @@ function OperatorAccordionRow({
                 flexShrink: 0,
               }}
             />
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{op.name}</span>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{displayName}</span>
             {region !== null && (
               <span style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
                 {region}
@@ -1007,6 +1018,7 @@ function LegendEntry({
         >
           {affected.map((op) => {
             const region = displayableRegion(op.region);
+            const displayName = operatorDisplayName(op.name, op.rpc);
             return (
             <div
               key={op.rpc}
@@ -1018,7 +1030,7 @@ function LegendEntry({
                 fontSize: 10.5,
               }}
             >
-              <span style={{ fontWeight: 600 }}>{op.name}</span>
+              <span style={{ fontWeight: 600 }}>{displayName}</span>
               <span
                 style={{
                   fontFamily: "var(--f-mono)",

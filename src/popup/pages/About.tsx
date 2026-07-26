@@ -58,6 +58,7 @@ import {
 } from "../../shared/operator-risk";
 import { CHAIN_RETURNS_LEGACY_WEI } from "../../shared/chain-units";
 import { displayableRegion } from "../../shared/operators";
+import { operatorDisplayName } from "../../shared/operator-display";
 
 interface AboutProps {
   onBack: () => void;
@@ -1260,7 +1261,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
             gap: 6,
           }}
         >
-          <span>{row.name}</span>
+          <span>{operatorDisplayName(row.name, row.rpc)}</span>
           {region !== null && (
             <span
               style={{
