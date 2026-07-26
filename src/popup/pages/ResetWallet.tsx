@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
 import { bgKeystoreReset } from "../bg";
 import { PasswordInput } from "../components/PasswordInput";
+// Aliased to the name this file already used, so the three call sites below
+// are untouched. Same value as the local duplicate it replaces ("DELETE"), and
+// now the single constant the service worker's wipe check reads too.
+import { WIPE_CONFIRM_WORD as CONFIRM_WORD } from "../../shared/constants";
 
 interface ResetWalletProps {
   /** Returns to Settings (also used by the in-flow Cancel buttons). */
@@ -12,8 +16,6 @@ interface ResetWalletProps {
 }
 
 type Step = "reauth" | "confirm";
-
-const CONFIRM_WORD = "DELETE";
 
 export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
   const [step, setStep] = useState<Step>("reauth");
