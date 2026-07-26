@@ -87,11 +87,10 @@ export function displayableRegion(region: string): string | null {
  *     (0-32 chars; allow blank for the user-supplied case), and a `rpc`
  *     that parses via `new URL()`.
  */
-/** Upper bound on a user/override-supplied operator list. The live fleet — the
- *  v0.4.0 four-cluster DVT set, whose exact operator count comes from the SDK
- *  registry and can change — is well under this; 64 is generous headroom while
- *  bounding a pathological input (a tampered override could otherwise
- *  materialize an unbounded array). */
+/** Upper bound on a user/override-supplied operator list. The live fleet —
+ *  whose operator count comes from the SDK registry and can change — is well
+ *  under this; 64 is generous headroom while bounding a pathological input (a
+ *  tampered override could otherwise materialize an unbounded array). */
 export const MAX_OPERATORS = 64;
 
 export function validateOperatorList(input: unknown): OperatorEntry[] | null {

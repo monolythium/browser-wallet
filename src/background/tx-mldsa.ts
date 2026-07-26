@@ -180,8 +180,9 @@ const SUBMIT_METHOD = "mesh_submitTx";
  *  admission decision about a tx (propagate — every operator answers the same). */
 const UPSTREAM_UNAVAILABLE_CODE = -32047;
 /** D1: cap read-failover attempts so one bad call doesn't walk the whole fleet
- *  (the v0.4.0 four-cluster DVT set; its exact size comes from the SDK registry
- *  and can change) — after this many failover-band errors, surface the last one. */
+ *  (the configured operator list — the SDK-published defaults, or the user's
+ *  override; its size can change) — after this many failover-band errors,
+ *  surface the last one. */
 const READ_FAILOVER_ATTEMPT_CAP = 4;
 /** D2: how long a read-failover-band error deprioritizes an operator (soft, in
  *  memory) so subsequent reads try healthier operators first. Never a hard
@@ -667,7 +668,14 @@ export interface NameResolveConsensusResult {
 /** Minimum genesis-trusted operators that must agree before a name resolution
  *  is trusted for a SIGNED recipient. ≥2 so no single operator is the sole
  *  authority: a lone roge is outvoted (→ disagreement → fail-closed), and a
- *  rogue that is the ONLY responder fails the quorum (→ insufficient). */
+ *  rogue that is the ONLY responder fails the quorum (→ insufficient).
+ *
+ *  DO NOT LOWER THIS TO 1. When the configured list holds a single operator the
+ *  quorum cannot be met and resolution returns `insufficient` — that is the
+ *  DESIGNED-SAFE outcome, not a bug to fix. At 1, one rogue or on-path operator
+ *  could return a false owner address and have it signed as the recipient,
+ *  which is precisely what this threshold exists to prevent. More operators,
+ *  not a lower threshold, is what makes name resolution succeed again. */
 const NAME_RESOLVE_QUORUM_MIN = 2;
 
 export async function testnetResolveNameConsensus(
