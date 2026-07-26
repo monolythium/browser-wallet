@@ -2555,3 +2555,177 @@ describe("removeVaultV4 — password-verified single-vault removal", () => {
     60_000,
   );
 });
+
+// ---------------------------------------------------------------------------
+// exportMnemonicForVaultV4 — per-vault recovery-phrase export.
+//
+// Same argon2 discipline as the removeVaultV4 block above: one container built
+// in beforeAll, module instance kept warm, snapshot restored per test.
+// ---------------------------------------------------------------------------
+describe("exportMnemonicForVaultV4 — per-vault recovery-phrase export", () => {
+  const PASSWORD = "correct-horse-battery-staple";
+  type Ks = typeof import("./keystore-mldsa.js");
+
+  interface TestVault {
+    id: string;
+    label: string;
+    addr: string;
+    envelope: unknown;
+    wrappedKey: unknown;
+  }
+  interface TestContainer {
+    vaults: TestVault[];
+    activeVaultId: string;
+  }
+
+  let storage: StorageMap;
+  let ks: Ks;
+  let KEY: string;
+  let snapshot: string;
+  let idActive: string;
+  let idOther: string;
+  let mnemonicActive: string;
+  let mnemonicOther: string;
+
+  const container = (): TestContainer =>
+    JSON.parse(JSON.stringify(storage[KEY])) as TestContainer;
+
+  beforeAll(async () => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+
+    const first = await ks.createVaultFromNewMnemonic(PASSWORD);
+    mnemonicActive = first.mnemonic;
+    const second = await ks.addVaultFreshV4("Wallet 2");
+    mnemonicOther = second.mnemonic;
+
+    const c = container();
+    idActive = c.vaults[0]!.id;
+    idOther = c.vaults[1]!.id;
+    // addVaultFreshV4 does not change activeVaultId, but it does leave the new
+    // vault's backend held; resync so "active" means the same thing on disk and
+    // in memory.
+    await ks.selectActiveVaultV4(idActive);
+    snapshot = JSON.stringify(storage[KEY]);
+  }, 120_000);
+
+  beforeEach(() => {
+    storage[KEY] = JSON.parse(snapshot);
+  });
+
+  it(
+    "returns the NON-active vault's own phrase, not the active one's",
+    async () => {
+      const r = await ks.exportMnemonicForVaultV4(PASSWORD, idOther);
+      expect(r.mnemonic).toBe(mnemonicOther);
+      expect(r.mnemonic).not.toBe(mnemonicActive);
+      expect(r.mnemonic.split(/\s+/)).toHaveLength(24);
+    },
+    60_000,
+  );
+
+  it(
+    "agrees with exportMnemonicV4 for the active vault",
+    async () => {
+      const viaId = await ks.exportMnemonicForVaultV4(PASSWORD, idActive);
+      const viaActive = await ks.exportMnemonicV4(PASSWORD);
+      expect(viaId.mnemonic).toBe(mnemonicActive);
+      expect(viaActive.mnemonic).toBe(viaId.mnemonic);
+    },
+    60_000,
+  );
+
+  it(
+    "fails with no mnemonic when the password is wrong",
+    async () => {
+      await expect(
+        ks.exportMnemonicForVaultV4("not-the-password", idOther),
+      ).rejects.toThrow();
+    },
+    60_000,
+  );
+
+  it(
+    "rejects an unknown vault id before deriving anything",
+    async () => {
+      await expect(
+        ks.exportMnemonicForVaultV4(PASSWORD, "no-such-vault"),
+      ).rejects.toThrow(/unknown vault id/);
+    },
+    60_000,
+  );
+
+  it("binds every envelope to its own vaultId at the AEAD tag", async () => {
+    // The load-bearing property for per-wallet reveal: a ciphertext cannot be
+    // opened under a different vault's id. Exercised at the primitive level so
+    // it costs no derivation.
+    const { generateVekV4, sealVaultEnvelopeV4, openVaultEnvelopeV4 } =
+      ks.__internalV4Multi;
+    const vek = generateVekV4();
+    const seed = new Uint8Array(32).fill(9);
+    const sealed = sealVaultEnvelopeV4(vek, seed, "phrase for vault A", "vault-A");
+
+    // Same id round-trips.
+    expect(openVaultEnvelopeV4(vek, sealed, "vault-A").mnemonic).toBe(
+      "phrase for vault A",
+    );
+    // A different id fails the tag rather than yielding the phrase.
+    expect(() => openVaultEnvelopeV4(vek, sealed, "vault-B")).toThrow();
+  });
+
+  it(
+    "refuses a lifted envelope rather than surfacing a neighbour's phrase",
+    async () => {
+      // End-to-end version of the same property: tamper the container so the
+      // OTHER vault's record carries the ACTIVE vault's envelope. If the AAD
+      // binding were absent this would hand back the active vault's phrase
+      // under the other vault's id.
+      const c = container();
+      const activeRec = c.vaults.find((v) => v.id === idActive)!;
+      const otherRec = c.vaults.find((v) => v.id === idOther)!;
+      otherRec.envelope = activeRec.envelope;
+      storage[KEY] = JSON.parse(JSON.stringify(c));
+
+      await expect(
+        ks.exportMnemonicForVaultV4(PASSWORD, idOther),
+      ).rejects.toThrow();
+    },
+    60_000,
+  );
+
+  it(
+    "writes nothing and logs nothing while exporting",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      const spies = (["log", "warn", "error", "debug", "info"] as const).map(
+        (m) => vi.spyOn(console, m).mockImplementation(() => {}),
+      );
+
+      let mnemonic: string;
+      try {
+        mnemonic = (await ks.exportMnemonicForVaultV4(PASSWORD, idOther))
+          .mnemonic;
+        const logged = spies
+          .flatMap((s) => s.mock.calls)
+          .flat()
+          .map((a) => String(a))
+          .join(" ");
+        // Not just "the phrase is absent" — no word of it may appear.
+        expect(logged).not.toContain(mnemonic);
+        for (const word of mnemonic.split(/\s+/)) {
+          expect(logged).not.toContain(word);
+        }
+      } finally {
+        for (const s of spies) s.mockRestore();
+      }
+
+      // A read must not mutate the container, and must not stash the phrase
+      // anywhere in storage.
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+      expect(JSON.stringify(storage)).not.toContain(mnemonic);
+    },
+    60_000,
+  );
+});

@@ -2196,14 +2196,42 @@ export async function exportMnemonicV4(
   if (!container) throw new Error("no v4 vault — run onboarding first");
   const active = container.vaults.find((v) => v.id === container.activeVaultId);
   if (!active) throw new Error("container is missing its active vault");
+  return exportMnemonicForVaultV4(password, active.id);
+}
+
+/**
+ * Re-derive the MEK from `password` and decrypt a SPECIFIC vault's stored
+ * mnemonic. Same pipeline as {@link exportMnemonicV4} — which now delegates
+ * here — but targeted by id, so a wallet list can reveal a non-active wallet
+ * without switching the active vault first.
+ *
+ * Does NOT cache the MEK: this is a read, not an unlock, and the derived key is
+ * zeroed on every exit path. Nothing is persisted or logged; the phrase exists
+ * only in the returned value.
+ *
+ * Safety note for the per-wallet reveal that consumes this. Every ciphertext is
+ * AEAD-bound to its own vaultId through `buildVaultAadV4` — the wrapped VEK and
+ * both envelope halves all carry it as additional authenticated data. Opening a
+ * record under any other id therefore fails the Poly1305 tag. A stale, guessed,
+ * or tampered `vaultId` cannot surface a different vault's phrase; it throws,
+ * and the dispatcher maps any throw to wrong-password.
+ */
+export async function exportMnemonicForVaultV4(
+  password: string,
+  vaultId: string,
+): Promise<{ mnemonic: string }> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vault — run onboarding first");
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
   const mek = await deriveMekV4(password, container.masterKdf);
   try {
     // Wrong password → MEK mismatch → AEAD failure here (unwrap or open),
     // which throws — the handler maps any throw to wrong-password.
-    const vek = unwrapVekV4(mek, active.wrappedKey, active.id);
+    const vek = unwrapVekV4(mek, target.wrappedKey, target.id);
     let opened: { seed: Uint8Array; mnemonic: string };
     try {
-      opened = openVaultEnvelopeV4(vek, active.envelope, active.id);
+      opened = openVaultEnvelopeV4(vek, target.envelope, target.id);
     } finally {
       vek.fill(0);
     }
