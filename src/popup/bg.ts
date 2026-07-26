@@ -272,7 +272,26 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
 // not a decision a transport layer should be making on the user's behalf. The
 // user is on a confirm dialog for this op; a surfaced error they retry by hand
 // is the honest outcome.
-const NO_RETRY_POPUP_OPS = new Set<string>(["vault-remove"]);
+//
+// `wallet-send-tx` is the same defect on the money path, and worse, because a
+// resend is not a duplicate. `submitTrackedTx` picks the nonce with
+// `nextNonceHex` = max(committed, pending + 1) and records the used nonce on the
+// SUCCESS path only. So: sign N, broadcast, record N, worker dies before the
+// reply lands, the resend computes N+1 and broadcasts a SECOND VALID
+// transaction. Two nonces, two hashes — the chain cannot dedupe them, and the
+// funds move twice. Every ordinary value-moving popup flow rides this op (Send,
+// stake/unstake/redelegate, claim, auto-compound, agent funding), because they
+// all build calldata and submit through it.
+//
+// THIS IS A PARTIAL MITIGATION AND MUST NOT BE READ AS A FIX. It removes only
+// the AUTOMATIC, INVISIBLE resend. It does NOT close the path: the user now sees
+// a failure, presses send again, and the manual retry advances the nonce exactly
+// as the automatic one did. What is gained is the chance for a human to check
+// their activity before retrying — real, and partial.
+//
+// Closing it needs an idempotency token so a retry is recognisable as the same
+// logical send. That is planned separately; do not approximate it here.
+const NO_RETRY_POPUP_OPS = new Set<string>(["vault-remove", "wallet-send-tx"]);
 
 function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
   // Single retry against the MV3 idle/wake race. Pure transport-

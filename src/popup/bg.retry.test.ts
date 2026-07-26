@@ -13,7 +13,7 @@
 // path rather than a private predicate.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bgKeystoreStatus, bgVaultRemove } from "./bg";
+import { bgKeystoreStatus, bgVaultRemove, bgWalletSendTx } from "./bg";
 
 type Outcome = { error: string } | { result: unknown };
 
@@ -147,6 +147,84 @@ describe("DA-009 — the destructive vault op is excluded from the blanket retry
   });
 
   it("CONTROL: an ordinary read op still retries — the policy narrowed, it did not disappear", async () => {
+    const ok = { hasVault: true, unlocked: true } as unknown;
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: ok }];
+
+    await expect(bgKeystoreStatus()).resolves.toEqual(ok);
+    expect(calls).toBe(2);
+  });
+});
+
+// The send op is the same defect as the removal above, on the money path, and
+// worse: a resend is not a duplicate. submitTrackedTx picks the nonce with
+// nextNonceHex = max(committed, pending + 1) and records the used nonce on the
+// SUCCESS path only. So sign N -> broadcast -> record N -> worker dies before
+// replying -> the resend computes N+1 and broadcasts a SECOND VALID
+// transaction. Two different nonces, two different hashes; the chain cannot
+// dedupe them.
+//
+// PARTIAL MITIGATION ONLY. This stops the automatic, invisible resend. It does
+// NOT close the path: the user sees a failure, presses send again, and the
+// manual retry computes N+1 exactly as the automatic one did. The win is that a
+// human now gets the chance to check their activity first. The real fix is an
+// idempotency token and is planned separately.
+describe("the send op is excluded from the blanket retry (partial mitigation)", () => {
+  it("does NOT resend wallet-send-tx when the SW drops the response", async () => {
+    // The second outcome is a success the retry WOULD have consumed — that is
+    // the second broadcast. If the exclusion regresses, `calls` becomes 2.
+    outcomes = [
+      { error: CHANNEL_CLOSED },
+      { result: { ok: true, txHash: "0xsecond", via: "op-2" } },
+    ];
+
+    await expect(
+      bgWalletSendTx({
+        to: "0xdead",
+        valueWeiHex: "0x1",
+        chainIdHex: "0x10F2C",
+      }),
+    ).rejects.toThrow(/message channel closed/);
+    expect(calls).toBe(1);
+  });
+
+  it("does not resend it for the legacy 'message port closed' phrasing either", async () => {
+    outcomes = [
+      { error: "The message port closed before a response was received." },
+      { result: { ok: true, txHash: "0xsecond", via: "op-2" } },
+    ];
+
+    await expect(
+      bgWalletSendTx({ to: "0xdead", valueWeiHex: "0x1", chainIdHex: "0x10F2C" }),
+    ).rejects.toThrow(/message port/);
+    expect(calls).toBe(1);
+  });
+
+  it("SUCCESS PATH UNCHANGED: a normal send resolves on the first attempt", async () => {
+    outcomes = [{ result: { ok: true, txHash: "0xabc", via: "operator-1" } }];
+
+    await expect(
+      bgWalletSendTx({ to: "0xdead", valueWeiHex: "0x1", chainIdHex: "0x10F2C" }),
+    ).resolves.toEqual({
+      ok: true,
+      result: { txHash: "0xabc", via: "operator-1" },
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("SUCCESS PATH UNCHANGED: an application-level refusal is delivered verbatim", async () => {
+    // A resolved `{ ok: false }` is not a transport error and never reached the
+    // retry. Insufficient funds, a rejected passkey elevation, a chain refusal —
+    // all must still arrive at the caller untouched.
+    const refusal = { ok: false, reason: "insufficient funds" } as unknown;
+    outcomes = [{ result: refusal }];
+
+    await expect(
+      bgWalletSendTx({ to: "0xdead", valueWeiHex: "0x1", chainIdHex: "0x10F2C" }),
+    ).resolves.toEqual(refusal);
+    expect(calls).toBe(1);
+  });
+
+  it("CONTROL: a read op still retries alongside the send exclusion", async () => {
     const ok = { hasVault: true, unlocked: true } as unknown;
     outcomes = [{ error: CHANNEL_CLOSED }, { result: ok }];
 
