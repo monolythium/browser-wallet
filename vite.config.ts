@@ -7,6 +7,7 @@ import { getRpcEndpoints } from "@monolythium/core-sdk";
 import manifest from "./manifest.json" with { type: "json" };
 import { applyHardenedCsp } from "./src/buildtime/csp";
 import { applyDynamicWarUrl } from "./src/buildtime/manifest-war";
+import { assertPopupOnlyInvariant } from "./src/buildtime/popup-only-invariant";
 
 // Read the ACTUALLY-INSTALLED @monolythium/core-sdk version at build time and
 // inject it into the bundle (the About page reads it via __SDK_INSTALLED_VERSION__).
@@ -36,6 +37,11 @@ function readInstalledSdkVersion(): string {
  *    keep working, and the committed manifest.json stays CSP-free).
  *  - P6-003: flip `web_accessible_resources[].use_dynamic_url` to true
  *    (anti-fingerprinting), in BOTH prod and dev.
+ *  - DA-013: assert the popup-only invariant the service worker's popup-op gate
+ *    rests on — no web-accessible HTML, nothing web-accessible under
+ *    `src/popup/`. Checked on the FINAL text, after the two edits above, in
+ *    both prod and dev: a dev build that broke it would be loaded unpacked and
+ *    is exactly as embeddable. Throwing here fails the build.
  *
  * crxjs emits manifest.json from its own (later) generateBundle, so it isn't in
  * the bundle when an ordinary post-plugin's generateBundle runs — hook
@@ -54,6 +60,10 @@ function hardenedManifestPlugin(mode: string): Plugin {
         getRpcEndpoints("testnet-69420"),
         mode === "production", // prod-only
       );
+      // Assert on `out`, not `src`: this must judge the text that ships, and it
+      // runs even when nothing changed (the write below is conditional, the
+      // invariant is not).
+      assertPopupOnlyInvariant(out);
       if (out !== src) writeFileSync(file, out);
     },
   };
