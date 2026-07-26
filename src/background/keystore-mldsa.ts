@@ -1015,6 +1015,150 @@ export async function renameVaultV4(
   await saveVaultsContainerV4(container);
 }
 
+/** Outcome of a successful {@link removeVaultV4}. */
+export interface RemoveVaultResultV4 {
+  removedId: string;
+  /** The elected successor when the removed vault was active; otherwise the
+   *  unchanged active id. */
+  newActiveVaultId: string;
+  newActiveAddress: string;
+  /** Labels of multisig vaults whose signer roster referenced the removed
+   *  vault. Removing it does not corrupt their meta, but it destroys the key
+   *  those wallets need to approve — callers surface this so the user is told
+   *  which wallets lose a signer. */
+  affectedMultisigLabels: string[];
+}
+
+/** Successor rule: the survivor with the lowest `createdAt`. Ties are broken
+ *  by container order, taking the earlier record — `<=` keeps the accumulator,
+ *  which is the earlier element. Deterministic, so the same removal always
+ *  elects the same wallet. Callers guarantee a non-empty list. */
+function electSuccessorV4(survivors: VaultRecordV4[]): VaultRecordV4 {
+  return survivors.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+}
+
+/** Labels of multisig vaults referencing `target` in their signer roster.
+ *  Matched on the self-signer's `vaultId` where present and on the address
+ *  otherwise, so external entries that name the same address are caught too. */
+function multisigVaultsReferencingV4(
+  vaults: VaultRecordV4[],
+  target: VaultRecordV4,
+): string[] {
+  const addr = target.addr.toLowerCase();
+  return vaults
+    .filter(
+      (v) =>
+        v.id !== target.id &&
+        v.kind === "multisig" &&
+        (v.multisig?.signers ?? []).some(
+          (s) => s.vaultId === target.id || s.address.toLowerCase() === addr,
+        ),
+    )
+    .map((v) => v.label);
+}
+
+/**
+ * Permanently remove ONE vault from the container after re-verifying the
+ * master password.
+ *
+ * Verification is a fresh Argon2id derivation plus an authenticated decrypt of
+ * the TARGET vault's envelope. A wrong password yields a wrong MEK, which fails
+ * the Poly1305 tag — and that happens before anything is written. The cached
+ * MEK proves only that a session is open; it is never accepted in place of the
+ * password. No plaintext password is stored, compared, or logged, and the
+ * derived MEK is zeroed on every exit path.
+ *
+ * Fails CLOSED, in this order, with nothing persisted unless every check passes:
+ *   - locked container;
+ *   - unknown vault id;
+ *   - the LAST remaining vault. Removing it would leave `activeVaultId`
+ *     dangling, and `unlockContainerV4` would then throw "container is missing
+ *     its active vault" — a bricked wallet. Callers route the user to Reset
+ *     wallet, which wipes cleanly, instead.
+ *
+ * Atomicity: the new container is persisted BEFORE any in-memory state moves.
+ * If the write fails, the on-disk container is untouched, the held backend is
+ * still the original, and any successor backend opened in advance is disposed
+ * rather than abandoned. A half-applied removal is not reachable.
+ *
+ * Scope: this removes the vault RECORD only — its wrapped key, its sealed
+ * seed + mnemonic envelope, its cached address, and any per-vault passkey,
+ * SLH-DSA backup, and multisig meta. Address-keyed state that lives outside the
+ * container (contacts, connected-site grants, activity caches) is deliberately
+ * left alone; a targeted purge is a separate concern.
+ */
+export async function removeVaultV4(
+  password: string,
+  vaultId: string,
+): Promise<RemoveVaultResultV4> {
+  if (!mekCache) throw new Error("container is locked");
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
+  if (container.vaults.length <= 1) {
+    throw new Error("cannot remove the last vault — use Reset wallet instead");
+  }
+
+  const survivors = container.vaults.filter((v) => v.id !== vaultId);
+  const wasActive = container.activeVaultId === vaultId;
+  const successorId = wasActive
+    ? electSuccessorV4(survivors).id
+    : container.activeVaultId;
+
+  // Prove password knowledge, and (only if needed) open the successor while we
+  // still hold the derived MEK. Both happen before any mutation.
+  const mek = await deriveMekV4(password, container.masterKdf);
+  let nextState: UnlockedState | null = null;
+  try {
+    const vek = unwrapVekV4(mek, target.wrappedKey, target.id);
+    try {
+      const opened = openVaultEnvelopeV4(vek, target.envelope, target.id);
+      opened.seed.fill(0);
+    } finally {
+      vek.fill(0);
+    }
+    if (wasActive) {
+      nextState = await loadVaultBackend(mek, electSuccessorV4(survivors));
+    }
+  } finally {
+    mek.fill(0);
+  }
+
+  const affectedMultisigLabels = multisigVaultsReferencingV4(
+    container.vaults,
+    target,
+  );
+
+  container.vaults = survivors;
+  container.activeVaultId = successorId;
+  try {
+    await saveVaultsContainerV4(container);
+  } catch (e) {
+    // Nothing on disk changed and no in-memory state has moved yet. Dispose the
+    // successor we opened speculatively so its decrypted secret doesn't linger.
+    nextState?.backend.dispose();
+    throw e;
+  }
+
+  if (nextState) {
+    // S1-01: wipe the removed vault's ML-DSA-65 secret once the successor is
+    // installed, rather than leaving it for GC — same discipline as
+    // selectActiveVaultV4.
+    const prev = unlocked;
+    unlocked = nextState;
+    activeContainerVaultId = successorId;
+    prev?.backend.dispose();
+  }
+
+  return {
+    removedId: vaultId,
+    newActiveVaultId: successorId,
+    newActiveAddress: nextState?.address ?? unlocked?.address ?? "",
+    affectedMultisigLabels,
+  };
+}
+
 /** Generate a fresh recovery phrase and add a new vault to the
  *  container. Requires the container to be unlocked. Returns the new
  *  vault id, the mnemonic (one-time — treat like a private key), and

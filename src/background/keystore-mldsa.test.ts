@@ -12,7 +12,7 @@
 // dominates the per-test runtime (~1-2 s on a 2020-era laptop), so
 // every test carries a generous timeout.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 function bytesToHexLower(b: Uint8Array): string {
   let s = "";
@@ -2258,6 +2258,299 @@ describe("sent-address integrity HMAC (P5-007)", () => {
         entries: sa.addSentEntry(sa.parseSentEntries({ addrs: [RECIP] }), RECIP, tag),
       };
       expect(verifyFromStore(reSent, RECIP)).toBe(true);
+    },
+    60_000,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// removeVaultV4 — password-verified single-vault removal.
+//
+// Argon2id cost: this describe deliberately does NOT reset modules between
+// tests. The container is built once in beforeAll (one real derivation) and the
+// module instance is kept alive so the cached MEK stays warm; each test restores
+// a deep-cloned storage snapshot instead of rebuilding. The only derivation a
+// test pays is the one removeVaultV4 itself performs, which is the thing under
+// test. Cheapening the KDF is not an option — isVaultsContainerV4 floors the
+// params at m >= 64 MiB / t >= 2 and rejects anything weaker.
+// ---------------------------------------------------------------------------
+describe("removeVaultV4 — password-verified single-vault removal", () => {
+  const PASSWORD = "correct-horse-battery-staple";
+  type Ks = typeof import("./keystore-mldsa.js");
+
+  interface TestVault {
+    id: string;
+    label: string;
+    addr: string;
+    createdAt: number;
+    envelope: unknown;
+    wrappedKey: unknown;
+    kind?: string;
+    multisig?: unknown;
+  }
+  interface TestContainer {
+    vaults: TestVault[];
+    activeVaultId: string;
+  }
+
+  let storage: StorageMap;
+  let ks: Ks;
+  let KEY: string;
+  let snapshot: string;
+  let idA: string;
+  let idB: string;
+  let idC: string;
+
+  const container = (): TestContainer =>
+    JSON.parse(JSON.stringify(storage[KEY])) as TestContainer;
+
+  const writeContainer = (c: TestContainer) => {
+    storage[KEY] = JSON.parse(JSON.stringify(c));
+  };
+
+  beforeAll(async () => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+
+    await ks.createVaultFromNewMnemonic(PASSWORD);
+    await ks.addVaultFreshV4("Wallet 2");
+    await ks.addVaultFreshV4("Wallet 3");
+
+    const c = container();
+    // Deterministic ordering for the successor-election tests: once A (active)
+    // is gone, B is the oldest survivor.
+    c.vaults[0]!.createdAt = 3_000;
+    c.vaults[1]!.createdAt = 1_000;
+    c.vaults[2]!.createdAt = 2_000;
+    c.activeVaultId = c.vaults[0]!.id;
+    writeContainer(c);
+
+    idA = c.vaults[0]!.id;
+    idB = c.vaults[1]!.id;
+    idC = c.vaults[2]!.id;
+    snapshot = JSON.stringify(storage[KEY]);
+
+    // Make in-memory state coherent with the container: addVaultFreshV4 leaves
+    // the newest vault's backend held even though activeVaultId is unchanged.
+    await ks.selectActiveVaultV4(idA);
+  }, 120_000);
+
+  beforeEach(async () => {
+    storage[KEY] = JSON.parse(snapshot);
+    // A previous test may have locked or switched the active vault. Re-unlock
+    // only when actually locked, so the common path costs no derivation.
+    if (!ks.isUnlockedV4()) await ks.unlockContainerV4(PASSWORD);
+    await ks.selectActiveVaultV4(idA);
+  }, 60_000);
+
+  it(
+    "removes exactly the target vault and leaves every survivor byte-identical",
+    async () => {
+      const survivorsBefore = container().vaults.filter((v) => v.id !== idC);
+
+      await ks.removeVaultV4(PASSWORD, idC);
+
+      const after = container();
+      expect(after.vaults.map((v) => v.id)).toEqual([idA, idB]);
+      // Ciphertext, label, address, timestamps — nothing about the survivors
+      // may shift when a neighbour is removed.
+      expect(after.vaults).toEqual(survivorsBefore);
+    },
+    60_000,
+  );
+
+  it(
+    "reports the removed id and leaves the active id alone for a non-active vault",
+    async () => {
+      const r = await ks.removeVaultV4(PASSWORD, idC);
+      expect(r.removedId).toBe(idC);
+      expect(r.newActiveVaultId).toBe(idA);
+      expect(container().activeVaultId).toBe(idA);
+    },
+    60_000,
+  );
+
+  it(
+    "removes nothing when the password is wrong",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+
+      await expect(ks.removeVaultV4("not-the-password", idC)).rejects.toThrow();
+
+      // Byte-identical: a failed attempt must not rewrite the container at all.
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+      expect(container().vaults).toHaveLength(3);
+    },
+    60_000,
+  );
+
+  it(
+    "removes nothing when the vault id is unknown",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      await expect(
+        ks.removeVaultV4(PASSWORD, "00000000-0000-0000-0000-000000000000"),
+      ).rejects.toThrow(/unknown vault id/);
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+    },
+    60_000,
+  );
+
+  it(
+    "removes nothing when the vault id is malformed",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      await expect(ks.removeVaultV4(PASSWORD, "")).rejects.toThrow(
+        /unknown vault id/,
+      );
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+    },
+    60_000,
+  );
+
+  it(
+    "refuses to remove the last remaining vault, with a distinct catchable error",
+    async () => {
+      const c = container();
+      c.vaults = [c.vaults[0]!];
+      c.activeVaultId = c.vaults[0]!.id;
+      writeContainer(c);
+      const before = JSON.stringify(storage[KEY]);
+
+      // Distinct from "wrong password" and from "unknown vault id" so the UI
+      // can route the user to Reset wallet instead of blaming their typing.
+      await expect(ks.removeVaultV4(PASSWORD, idA)).rejects.toThrow(
+        /cannot remove the last vault/,
+      );
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+    },
+    60_000,
+  );
+
+  it(
+    "elects the survivor with the lowest createdAt when the active vault is removed",
+    async () => {
+      // A is active (createdAt 3000); survivors are B (1000) and C (2000).
+      const r = await ks.removeVaultV4(PASSWORD, idA);
+      expect(r.newActiveVaultId).toBe(idB);
+      expect(container().activeVaultId).toBe(idB);
+      expect(r.newActiveAddress).toMatch(/^0x[0-9a-f]{40}$/);
+    },
+    60_000,
+  );
+
+  it(
+    "breaks a createdAt tie by container order, taking the earlier record",
+    async () => {
+      const c = container();
+      // B and C both at 1000; B sits first in the array.
+      c.vaults[2]!.createdAt = 1_000;
+      writeContainer(c);
+
+      const r = await ks.removeVaultV4(PASSWORD, idA);
+      expect(r.newActiveVaultId).toBe(idB);
+    },
+    60_000,
+  );
+
+  it(
+    "disposes the outgoing backend so the removed vault's secret is zeroized",
+    async () => {
+      const outgoing = ks.getUnlockedBackendV4();
+      expect(outgoing).not.toBeNull();
+      const disposeSpy = vi.spyOn(outgoing!, "dispose");
+
+      await ks.removeVaultV4(PASSWORD, idA);
+
+      expect(disposeSpy).toHaveBeenCalled();
+      // And the held backend is genuinely the successor's, not the dead one.
+      expect(ks.getUnlockedBackendV4()).not.toBe(outgoing);
+    },
+    60_000,
+  );
+
+  it(
+    "leaves the container intact and usable when the persist fails",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      const held = ks.getUnlockedBackendV4();
+      const realSet = chrome.storage.local.set;
+      (chrome.storage.local as unknown as { set: unknown }).set = () => {
+        throw new Error("disk full");
+      };
+
+      try {
+        await expect(ks.removeVaultV4(PASSWORD, idC)).rejects.toThrow(
+          /disk full/,
+        );
+      } finally {
+        (chrome.storage.local as unknown as { set: unknown }).set = realSet;
+      }
+
+      // A half-applied removal must be impossible: the on-disk container is
+      // untouched AND the in-memory session still holds the same live backend.
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+      expect(container().vaults).toHaveLength(3);
+      expect(ks.getUnlockedBackendV4()).toBe(held);
+      expect(ks.isUnlockedV4()).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
+    "names the multisig wallets that listed the removed vault as a signer",
+    async () => {
+      const c = container();
+      const target = c.vaults.find((v) => v.id === idC)!;
+      c.vaults[1]!.kind = "multisig";
+      c.vaults[1]!.label = "Treasury";
+      c.vaults[1]!.multisig = {
+        signers: [
+          {
+            id: "s1",
+            label: "C",
+            address: target.addr,
+            pubkey: "0x00",
+            role: "self",
+            vaultId: idC,
+          },
+        ],
+        threshold: 1,
+        proposals: [],
+        governance: [],
+      };
+      writeContainer(c);
+
+      const r = await ks.removeVaultV4(PASSWORD, idC);
+      expect(r.affectedMultisigLabels).toEqual(["Treasury"]);
+    },
+    60_000,
+  );
+
+  it(
+    "returns an empty affected-multisig list when nothing referenced the vault",
+    async () => {
+      const r = await ks.removeVaultV4(PASSWORD, idC);
+      expect(r.affectedMultisigLabels).toEqual([]);
+    },
+    60_000,
+  );
+
+  // LAST: this test clears the cached MEK. beforeEach re-unlocks when needed,
+  // but keeping it last means no other test pays for that extra derivation.
+  it(
+    "removes nothing when the container is locked",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      ks.lockV4();
+      expect(ks.isUnlockedV4()).toBe(false);
+
+      await expect(ks.removeVaultV4(PASSWORD, idC)).rejects.toThrow(
+        /container is locked/,
+      );
+      expect(JSON.stringify(storage[KEY])).toBe(before);
     },
     60_000,
   );
