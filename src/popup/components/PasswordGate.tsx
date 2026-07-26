@@ -130,6 +130,16 @@ export interface PasswordGateProps<T> {
   busyLabel?: string;
   /** Field label. Default "Password", as on both existing surfaces. */
   label?: string;
+  /** Chrome only — the verification contract, the lockout countdown, the error
+   *  mapping and the unmount clear are identical in both.
+   *
+   *  `"screen"` (default) is the full-screen shell the existing re-auth steps
+   *  use: a centred prompt block and a `req-foot` page footer. It fills a route.
+   *
+   *  `"inline"` is for embedding inside a Modal — left-aligned prompt, compact
+   *  spacing, and a modal-shaped button row instead of the page footer. A
+   *  `req-foot` inside a Modal would try to pin itself to the page bottom. */
+  variant?: "screen" | "inline";
 }
 
 export function PasswordGate<T>({
@@ -139,6 +149,7 @@ export function PasswordGate<T>({
   verify,
   onVerified,
   onCancel,
+  variant = "screen",
   submitLabel = "Continue",
   busyLabel = "Checking…",
   label = "Password",
@@ -202,6 +213,59 @@ export function PasswordGate<T>({
   const disabled = submitting || secondsRemaining > 0 || password.length === 0;
   const errorText = passwordGateErrorText(error, secondsRemaining);
 
+  // Identical in both variants — only the surrounding chrome differs.
+  const field = (
+    <PasswordInput
+      label={label}
+      value={password}
+      onChange={setPassword}
+      autoComplete="current-password"
+      autoFocus
+      disabled={secondsRemaining > 0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") void handleSubmit();
+      }}
+    />
+  );
+  const errorLine = errorText ? (
+    <div style={ERROR_STYLE}>{errorText}</div>
+  ) : null;
+
+  if (variant === "inline") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {adornment}
+        <div style={INLINE_PROMPT_STYLE}>{prompt}</div>
+        {field}
+        {errorLine}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: onCancel ? "1fr 1fr" : "1fr",
+            gap: 8,
+            marginTop: 2,
+          }}
+        >
+          {onCancel && (
+            <button onClick={onCancel} disabled={submitting} style={INLINE_CANCEL_STYLE}>
+              Cancel
+            </button>
+          )}
+          <button
+            disabled={disabled}
+            onClick={() => void handleSubmit()}
+            style={{
+              ...INLINE_SUBMIT_STYLE,
+              ...(disabled ? DISABLED_SUBMIT_STYLE : null),
+            }}
+          >
+            {submitting ? busyLabel : submitLabel}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div style={{ padding: "32px 22px 8px", textAlign: "center" }}>
@@ -227,30 +291,8 @@ export function PasswordGate<T>({
           gap: 10,
         }}
       >
-        <PasswordInput
-          label={label}
-          value={password}
-          onChange={setPassword}
-          autoComplete="current-password"
-          autoFocus
-          disabled={secondsRemaining > 0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void handleSubmit();
-          }}
-        />
-
-        {errorText && (
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 11,
-              color: "var(--err)",
-              lineHeight: 1.4,
-            }}
-          >
-            {errorText}
-          </div>
-        )}
+        {field}
+        {errorLine}
       </div>
 
       <div
@@ -277,6 +319,45 @@ export function PasswordGate<T>({
     </>
   );
 }
+
+const ERROR_STYLE: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 11,
+  color: "var(--err)",
+  lineHeight: 1.4,
+};
+
+const INLINE_PROMPT_STYLE: CSSProperties = {
+  fontSize: 12.5,
+  color: "var(--fg-300)",
+  lineHeight: 1.5,
+};
+
+// Modal-shaped buttons, matching ConfirmWordDialog's footer so the two gates
+// read as one flow when they appear back to back.
+const INLINE_CANCEL_STYLE: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.04)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: "pointer",
+};
+
+const INLINE_SUBMIT_STYLE: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(124,127,255,0.6)",
+  background: "rgba(124,127,255,0.18)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
 const DISABLED_SUBMIT_STYLE: CSSProperties = {
   opacity: 0.45,

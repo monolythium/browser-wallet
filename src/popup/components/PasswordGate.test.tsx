@@ -168,6 +168,54 @@ describe("PasswordGate — rendered shell", () => {
     expect(paired).toContain(">Cancel<");
   });
 
+  it("defaults to the full-screen shell — the page footer, not a modal row", () => {
+    const html = renderToStaticMarkup(
+      <PasswordGate
+        prompt="p"
+        fallbackError={FALLBACK}
+        verify={neverVerifies}
+        onVerified={noop}
+      />,
+    );
+    expect(html).toContain('class="req-foot"');
+    expect(html).toContain('class="prim"');
+  });
+
+  it("inline drops the page chrome but keeps the same field", () => {
+    const html = renderToStaticMarkup(
+      <PasswordGate
+        variant="inline"
+        prompt="Confirm your password to remove this wallet."
+        fallbackError={FALLBACK}
+        verify={neverVerifies}
+        onVerified={noop}
+      />,
+    );
+    // req-foot pins itself to the page bottom; inside a Modal that is wrong.
+    expect(html).not.toContain('class="req-foot"');
+    expect(html).not.toContain('class="prim"');
+    // Same prompt, same field, same submit copy — only the chrome changed.
+    expect(html).toContain("Confirm your password to remove this wallet.");
+    expect(html).toMatch(/autocomplete="current-password"/i);
+    expect(html).toContain('type="password"');
+    expect(html).toContain("Continue");
+  });
+
+  it("inline still starts disabled and still offers Cancel when asked", () => {
+    const html = renderToStaticMarkup(
+      <PasswordGate
+        variant="inline"
+        prompt="p"
+        fallbackError={FALLBACK}
+        verify={neverVerifies}
+        onVerified={noop}
+        onCancel={noop}
+      />,
+    );
+    expect(html).toContain("disabled");
+    expect(html).toContain(">Cancel<");
+  });
+
   it("carries no password value into the markup", () => {
     // Belt-and-braces: the field starts empty, so a server-rendered gate can
     // never ship a secret in its HTML.
