@@ -789,6 +789,47 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
   return typeof ver === "number" && ver < SCHEMA_VERSION;
 }
 
+/**
+ * The container-write invariant (H1).
+ *
+ * THE RULE: every mutation of the vaults container runs inside
+ * `withKeyLock(VAULTS_CONTAINER_KEY_V4, …)`, and the container is re-read with
+ * `loadVaultsContainerV4()` INSIDE that lock. Acting on a snapshot taken before
+ * acquiring reintroduces the original defect with extra steps: the container is
+ * persisted as one blob, so a writer holding a stale snapshot overwrites
+ * whatever landed in between. When both writers touch the vault ARRAY —
+ * `removeVaultV4` and `appendVaultRecord` — what is overwritten is a vault
+ * record, destroying its wrapped VEK and sealed seed envelope for an address
+ * that stays funded on-chain.
+ *
+ * WHY THE LOCK IS AROUND THE STORAGE ROUND TRIPS, not around the KDF: the
+ * exposure is the genuine macrotask yields — the `chrome.storage.local` get and
+ * set, and a vault-backend load. It is NOT the Argon2id derivation, which
+ * yields only to microtasks (`@noble/hashes` `nextTick` is an empty async
+ * function) and so never returns control to the host. A lock scoped to the
+ * derivation would be scoped to the wrong thing.
+ *
+ * WHY DERIVING OUTSIDE THE LOCK IS SAFE: `removeVaultV4` and
+ * `commitVaultFromSeed` derive before acquiring. That is licensed by
+ * `masterKdf` being immutable — it is written once, into the fresh-container
+ * literal in `commitVaultFromSeed`, and no writer mutates it thereafter. Holding
+ * the lock across a ~1 s derivation would queue every other container op behind
+ * it. Nothing else read before the lock may be acted upon.
+ *
+ * ENROLMENT AT THE TIME OF WRITING: all fifteen writers in this module, plus
+ * `wipeAllLocalWalletState` in the service worker, which removes the container
+ * by `mono.`-prefix scan rather than through this helper and therefore takes the
+ * same lock via `vaultContainerLockKey()`.
+ *
+ * WHAT IS NOT ENFORCED — read this before adding a sixteenth writer. The raw
+ * `chrome.storage.local.set` for this key is confined to this one non-exported
+ * function, so no code outside the module can write the container. But nothing
+ * stops a NEW writer inside the module from calling this helper without taking
+ * the lock first: enrolment is a convention, not a guarantee. Making it a
+ * guarantee needs a lock-depth counter asserted here, which in turn needs every
+ * call site to go through a `withContainerLock` wrapper — deferred, not done.
+ * Until then, the rule above is what keeps the container consistent.
+ */
 async function saveVaultsContainerV4(
   container: VaultsContainerV4,
 ): Promise<void> {
