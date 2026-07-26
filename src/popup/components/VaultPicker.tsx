@@ -735,7 +735,12 @@ function VaultRow({ vault, onSelect, onRename }: VaultRowProps) {
           cursor: "pointer",
         }}
       >
-        <Icon name="more" size={14} />
+        {/* Rename, and only rename — the same `pen` the top-bar rename control
+           uses. This was a `more` kebab, which promised a menu the button never
+           had; the aria-label always said "Rename", so only sighted users were
+           misled. Seeing the same pencil in the top bar and on each row is
+           honest repetition: both do the same thing to different wallets. */}
+        <Icon name="pen" size={14} />
       </button>
     </div>
   );
