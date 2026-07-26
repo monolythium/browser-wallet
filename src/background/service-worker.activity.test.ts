@@ -8744,6 +8744,26 @@ describe("vault-remove / vault-export-seed — per-vault password ops", () => {
     expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
   });
 
+  it("vault-remove classifies a NOVEL keystore error as wrong_password, not structural", async () => {
+    // The fail-closed default is the whole guard against a lockout bypass: any
+    // message the classifier does not explicitly recognise must count against
+    // the brute-force budget. A future keystore error, a storage failure, or a
+    // typo'd message must never fall through as a free retry.
+    removeVaultThrows = "QuotaExceededError: storage write failed";
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-export-seed classifies a NOVEL keystore error as wrong_password, not structural", async () => {
+    exportSeedThrows = "TypeError: Cannot read properties of undefined";
+    const r = await exportSeed();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
   it("vault-remove surfaces the last-vault refusal verbatim WITHOUT burning an attempt", async () => {
     // The user's password may be perfectly correct here — the removal is
     // structurally impossible. Throttling them, or telling them the password

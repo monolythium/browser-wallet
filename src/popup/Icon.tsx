@@ -12,7 +12,7 @@ export type IconName =
   | "contacts" | "network" | "sliders" | "server" | "gem"
   | "mono-mark" | "github" | "grid"
   | "language" | "coins" | "palette" | "unstake" | "restake" | "reward"
-  | "name-tag";
+  | "name-tag" | "wallets";
 
 /** Distinct glyph per delegation action so delegate / undelegate / redelegate
  *  read apart at a glance (they all shared `stake` before). delegate keeps the
@@ -101,6 +101,22 @@ export function Icon({ name, size = 16 }: IconProps) {
           <circle cx="13.5" cy="6.5" r="1.1" fill="currentColor" stroke="none" />
           <circle cx="17.5" cy="10.5" r="1.1" fill="currentColor" stroke="none" />
           <circle cx="6.5" cy="12.5" r="1.1" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "wallets":
+      // A billfold with a second wallet's top edge rising behind it (the
+      // plural) and a right-edge clasp pocket with a filled stud (what makes it
+      // a wallet rather than a folder). Deliberately distinct from `server`
+      // (two equal full-width racks), `copy` (two hard rects offset down-left),
+      // `grid` (four tiles), and `contract` (document + text lines). The filled
+      // stud follows the `palette` precedent of overriding the shared stroke
+      // styling on a single element.
+      return (
+        <svg {...props}>
+          <rect x="2" y="7" width="18" height="13" rx="2.5" />
+          <path d="M5 7V5.4A1.4 1.4 0 0 1 6.4 4H18" />
+          <path d="M20 11.5h-3.2a1.9 1.9 0 0 0 0 3.8H20" />
+          <circle cx="18.2" cy="13.4" r="0.9" fill="currentColor" stroke="none" />
         </svg>
       );
     case "name-tag":
