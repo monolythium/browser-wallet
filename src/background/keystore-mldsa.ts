@@ -1205,6 +1205,23 @@ export async function removeVaultV4(
   // would be the original bug with extra steps.
   const pre = await loadVaultsContainerV4();
   if (!pre) throw new Error("no v4 vaults container");
+  // D4 — cheap structural pre-check on the pre-lock snapshot, so a bogus vault
+  // id or a single-vault container is refused BEFORE spending a ~2.76 s
+  // Argon2id derivation. Hoisting the KDF above the lock (D2) put these checks
+  // behind it; this puts a copy back in front.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. This snapshot is taken outside the
+  // container lock and can be stale, so it may let a request through that the
+  // authoritative checks inside the lock then refuse. That direction is safe;
+  // the reverse is not, which is why these checks are duplicated rather than
+  // moved. Both messages are structural refusals, so neither costs the user a
+  // brute-force attempt.
+  if (!pre.vaults.some((v) => v.id === vaultId)) {
+    throw new Error("unknown vault id");
+  }
+  if (pre.vaults.length <= 1) {
+    throw new Error("cannot remove the last vault — use Reset wallet instead");
+  }
   const mek = await deriveMekV4(password, pre.masterKdf);
   try {
     return await withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
