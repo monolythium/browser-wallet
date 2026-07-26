@@ -99,6 +99,24 @@ export function removeWarningHeading(label: string): string {
   return `This permanently deletes ${label} from this browser.`;
 }
 
+/**
+ * An open action sheet OWNS the target until it closes.
+ *
+ * A request to open a sheet for another wallet while one is already open is
+ * ignored — the open sheet keeps its target — rather than swapping it. The open
+ * sheet may be holding a verified master password and an armed typed-DELETE
+ * confirm, and neither may be carried onto a different wallet.
+ *
+ * This is reachable because the modal's backdrop only intercepts POINTER
+ * events: a wallet row behind it is still `tabIndex={0}` and still activates on
+ * Enter/Space, and that activation does not bubble to the portal backdrop, so
+ * the sheet does not close. Returns the target that should be showing after the
+ * request.
+ */
+export function sheetTargetAfterOpen<T>(current: T | null, requested: T): T {
+  return current ?? requested;
+}
+
 /** One multisig wallet's roster, as read for the pre-removal scan. */
 export interface MultisigRosterEntry {
   label: string;
@@ -286,7 +304,7 @@ export function Wallets({ chainIdHex, onBack, onRevealPhrase }: WalletsProps) {
             key={v.id}
             vault={v}
             balance={balances[v.id] ?? { kind: "pending" }}
-            onOpen={() => setSheetFor(v)}
+            onOpen={() => setSheetFor((cur) => sheetTargetAfterOpen(cur, v))}
           />
         ))}
       </div>
@@ -457,10 +475,23 @@ function WalletActionSheet({
   // forward. Held transiently because the KDF needs the plaintext; the keystore
   // re-derives from it and nothing here inspects or stores it.
   const [password, setPassword] = useState("");
-  // Snapshotted when the sheet opened. A background list refresh cannot
-  // retarget an in-flight removal, and the keystore re-finds by id anyway.
-  const targetId = vault.id;
-  const targetLabel = vault.label;
+  // Snapshotted when the sheet opened — captured into state by a lazy
+  // initializer, which runs once at mount and is never re-read from props.
+  // This is load-bearing, not tidiness: the sheet is rendered from the page's
+  // `sheetFor` and React keeps one instance across a change of that prop, so
+  // reading `vault.id` per render would let a re-render, a list reorder, a
+  // change of active wallet, or a row activated behind the modal retarget a
+  // removal that already holds a verified password and an armed typed-DELETE.
+  // Pinning here means the id submitted is the id the user authenticated for.
+  // The keystore re-finds by id and re-verifies the password regardless — that
+  // is the real boundary; this pins what the UI asks it to do.
+  const [target] = useState(() => ({
+    id: vault.id,
+    label: vault.label,
+    addr: vault.addr,
+  }));
+  const targetId = target.id;
+  const targetLabel = target.label;
 
   useEffect(() => {
     return () => {
@@ -489,13 +520,13 @@ function WalletActionSheet({
       }
       if (cancelled) return;
       setAffectedMultisig(
-        multisigLabelsReferencing(entries, targetId, vault.addr),
+        multisigLabelsReferencing(entries, targetId, target.addr),
       );
     })();
     return () => {
       cancelled = true;
     };
-  }, [allVaults, targetId, vault.addr]);
+  }, [allVaults, targetId, target.addr]);
 
   const close = () => {
     setPassword("");

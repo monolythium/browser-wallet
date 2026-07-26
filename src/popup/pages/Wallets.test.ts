@@ -21,6 +21,7 @@ import {
   multisigLabelsReferencing,
   removeWarningHeading,
   runWithConcurrency,
+  sheetTargetAfterOpen,
   walletBalanceText,
   type MultisigRosterEntry,
 } from "./Wallets";
@@ -243,5 +244,31 @@ describe("multisigLabelsReferencing — who loses a signer", () => {
 
   it("returns empty for no multisig wallets at all", () => {
     expect(multisigLabelsReferencing([], "target", "0xaaa")).toEqual([]);
+  });
+});
+
+describe("sheetTargetAfterOpen — an open sheet owns the target (DA-001)", () => {
+  // What this CAN observe: the rule that decides which wallet an open sheet is
+  // pointed at. What it CANNOT: the interaction itself. The sheet mounts Modal,
+  // which portals into document.body, and this suite has no jsdom — so the
+  // keyboard activation behind the backdrop, the preserved password, and the
+  // armed typed-DELETE are hand-verification only.
+  it("takes the requested wallet when no sheet is open", () => {
+    expect(sheetTargetAfterOpen(null, "wallet-b")).toBe("wallet-b");
+  });
+
+  it("KEEPS the open sheet's wallet when another is requested", () => {
+    expect(sheetTargetAfterOpen("wallet-a", "wallet-b")).toBe("wallet-a");
+  });
+
+  it("keeps the open wallet even when it is the one requested again", () => {
+    expect(sheetTargetAfterOpen("wallet-a", "wallet-a")).toBe("wallet-a");
+  });
+
+  it("works on the object identities the page actually stores", () => {
+    const a = { id: "a" };
+    const b = { id: "b" };
+    expect(sheetTargetAfterOpen(a, b)).toBe(a);
+    expect(sheetTargetAfterOpen(null, b)).toBe(b);
   });
 });
