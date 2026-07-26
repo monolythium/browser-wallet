@@ -26,6 +26,7 @@ import { hexToBytes, bytesToHex } from "@monolythium/core-sdk/crypto";
 import { deriveNativeMultisigAddress } from "../../shared/native-multisig.js";
 import type { MultisigVaultMeta } from "../../shared/multisig.js";
 import { bech32mDisplay } from "../../shared/bech32m.js";
+import { DevBadge } from "./DevBadge.js";
 import { parseHexQuantity, lythoshiToLythDecimal } from "../../shared/native-amount.js";
 import { formatLythDecimalDisplay } from "../../shared/lyth-units.js";
 import { lythToLythoshi } from "../../shared/spending-policy-tx.js";
@@ -134,7 +135,13 @@ export function NativeMultisigAddressCardView({
 }) {
   return (
     <div style={cardStyle}>
-      <div style={sectionLabelStyle}>{NATIVE_MULTISIG_HEADING}</div>
+      {/* The only in-app mount of this view is behind the wrapper's
+          `if (!devMode) return null`, so the marker cannot reach a user who
+          has developer mode off. */}
+      <div style={sectionLabelStyle}>
+        {NATIVE_MULTISIG_HEADING}
+        <DevBadge />
+      </div>
       {!result.ok ? (
         <div style={cannotDeriveStyle}>{NATIVE_MULTISIG_CANNOT_DERIVE_COPY}</div>
       ) : (

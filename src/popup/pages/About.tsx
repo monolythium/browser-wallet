@@ -8,6 +8,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon, type IconName } from "../Icon";
 import { Section } from "./OperatorDirectory";
+import { DevBadge } from "../components/DevBadge";
 import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
 import { useFeature } from "../hooks/useFeature";
 import {
@@ -759,7 +760,10 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
         {/* Chain card */}
         <div className="ext-card">
           <div className="ext-card__head">
+            {/* Marker rides the SAME `devMode` const the body below is gated
+                on, so it can never render while the body is hidden. */}
             <h3>Monolythium Testnet</h3>
+            {devMode && <DevBadge />}
           </div>
           {/* All chain-identity rows are developer-only — the network name
               (card title) is the only user-relevant signal here. */}
@@ -859,6 +863,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <div className="ext-card">
             <div className="ext-card__head">
               <h3>Runtime</h3>
+              <DevBadge />
               <div className="spacer" />
               <span
                 style={{
