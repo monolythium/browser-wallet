@@ -1147,7 +1147,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface KvRow {
-  k: string;
+  k: ReactNode;
   v: ReactNode;
   title?: string;
 }
@@ -1161,9 +1161,12 @@ function KvList({ rows }: { rows: ReadonlyArray<KvRow> }) {
         gap: 6,
       }}
     >
-      {rows.map((row) => (
+      {/* Positional key: `k` is ReactNode and can no longer key a list. Safe
+          here because every conditional row is appended last, so a fixed row's
+          index never shifts, and no row holds focus or input state. */}
+      {rows.map((row, i) => (
         <div
-          key={row.k}
+          key={i}
           style={{
             display: "flex",
             alignItems: "center",
@@ -1476,7 +1479,7 @@ function AboutSection({
   meta,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   meta?: string | undefined;
   children: ReactNode;
 }) {

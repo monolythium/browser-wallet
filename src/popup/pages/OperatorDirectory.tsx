@@ -559,7 +559,7 @@ export function Section({
   onToggle,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   meta?: string | undefined;
   open: boolean;
   onToggle: () => void;
@@ -1097,7 +1097,7 @@ function DetailKv({
   v,
   title,
 }: {
-  k: string;
+  k: ReactNode;
   v: ReactNode;
   title?: string | undefined;
 }) {

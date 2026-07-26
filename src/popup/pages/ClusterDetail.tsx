@@ -30,7 +30,7 @@
 //   §28.3.1— diversity scoring (rendered as region count + ASN proxy)
 //   §30.5  — Foundation-cluster sunset (entity flag badge)
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import { DevBadge } from "../components/DevBadge";
 import { useFeature } from "../hooks/useFeature";
@@ -648,7 +648,7 @@ function KeyValue({
   value,
   tooltip,
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   tooltip?: string;
 }) {
@@ -678,7 +678,7 @@ function KeyValueRow({
   tooltip,
   muted,
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   tooltip?: string;
   muted?: boolean;
