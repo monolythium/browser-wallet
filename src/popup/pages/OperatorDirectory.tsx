@@ -432,7 +432,12 @@ export function OperatorDirectory({
         {/* 2. Reported attributes — developer-only capability telemetry. */}
         {devMode && (
         <Section
-          title="Reported attributes"
+          title={
+            <span>
+              Reported attributes
+              <DevBadge />
+            </span>
+          }
           meta={capSummary.length ? `${capSummary.length} surfaces` : undefined}
           open={open === "attrs"}
           onToggle={() => setOpen((p) => (p === "attrs" ? null : "attrs"))}
@@ -848,7 +853,17 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
         gap: 8,
       }}
     >
-      {devMode && <DetailKv k="endpoint" v={<Mono>{op.rpc}</Mono>} />}
+      {devMode && (
+        <DetailKv
+          k={
+            <>
+              endpoint
+              <DevBadge />
+            </>
+          }
+          v={<Mono>{op.rpc}</Mono>}
+        />
+      )}
       <DetailKv
         k="Chain"
         title={devMode ? (op.observedGenesis ?? undefined) : undefined}
@@ -865,12 +880,33 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
       {devMode &&
         (op.ok ? (
           <>
-            <DetailKv k="chain id" v={<Mono>{op.chainIdDec ?? "—"}</Mono>} />
-            <DetailKv k="latency" v={<Mono>{op.latencyMs}ms</Mono>} />
+            <DetailKv
+              k={
+                <>
+                  chain id
+                  <DevBadge />
+                </>
+              }
+              v={<Mono>{op.chainIdDec ?? "—"}</Mono>}
+            />
+            <DetailKv
+              k={
+                <>
+                  latency
+                  <DevBadge />
+                </>
+              }
+              v={<Mono>{op.latencyMs}ms</Mono>}
+            />
           </>
         ) : (
           <DetailKv
-            k="probe"
+            k={
+              <>
+                probe
+                <DevBadge />
+              </>
+            }
             v={<span style={{ color: "var(--err)" }}>{op.reason}</span>}
           />
         ))}

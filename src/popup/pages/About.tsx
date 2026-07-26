@@ -372,7 +372,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               },
               ...(devMode
                 ? [{
-                k: "SDK",
+                k: (
+                  <>
+                    SDK
+                    <DevBadge />
+                  </>
+                ),
                 v: (() => {
                   const installed = `v${SDK_PACKAGE_VERSION}`;
                   if (latestSdk === null) {
@@ -670,7 +675,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 activeBackup.chainRegistrationTxHash !== undefined
                   ? [
                       {
-                        k: "Tx",
+                        k: (
+                          <>
+                            Tx
+                            <DevBadge />
+                          </>
+                        ),
                         v: `${activeBackup.chainRegistrationTxHash.slice(0, 10)}…${activeBackup.chainRegistrationTxHash.slice(-8)}`,
                       },
                     ]
@@ -680,7 +690,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 activeBackup.chainRegistrationBlock !== undefined
                   ? [
                       {
-                        k: "Block",
+                        k: (
+                          <>
+                            Block
+                            <DevBadge />
+                          </>
+                        ),
                         v: activeBackup.chainRegistrationBlock.toString(),
                       },
                     ]

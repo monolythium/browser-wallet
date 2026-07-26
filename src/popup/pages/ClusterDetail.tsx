@@ -253,7 +253,15 @@ function ClusterIdentityCard({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {devMode && (
-        <KeyValueRow label="Cluster id" value={String(cluster.clusterId)} />
+        <KeyValueRow
+          label={
+            <>
+              Cluster id
+              <DevBadge />
+            </>
+          }
+          value={String(cluster.clusterId)}
+        />
       )}
       <KeyValueRow
         label="Name"
