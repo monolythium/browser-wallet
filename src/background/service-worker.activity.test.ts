@@ -923,6 +923,110 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
   });
 
+  // H2 — the wipe removes mono.chains.user / mono.chain.active from DISK, but
+  // the SW mirrors both in memory (`userChains`, `session.chainId`) and nothing
+  // in the reset handler touched them. Until the next worker restart the new
+  // owner saw the previous owner's custom chains. Custom chains are not
+  // necessarily deliberate: a connected dApp can add one via
+  // wallet_addEthereumChain, so this is device-handoff residue like the P2-007
+  // set the same handler already clears.
+  const PRIOR_OWNER_CHAIN = {
+    chainId: "0xbeef01",
+    name: "Prior owner chain",
+    rpc: "http://127.0.0.1:9999",
+  };
+
+  async function addPriorOwnerChain() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "chain-add-manual",
+      payload: { chain: PRIOR_OWNER_CHAIN },
+    });
+  }
+
+  async function chainIdsFromList(): Promise<string[]> {
+    const list = (await dispatchPopup({
+      kind: "popup",
+      op: "chain-list",
+    })) as Array<{ chainId: string }>;
+    return list.map((c) => c.chainId.toLowerCase());
+  }
+
+  async function activeChainIdLower(): Promise<string> {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-active-chain",
+    })) as { chainId: string };
+    return r.chainId.toLowerCase();
+  }
+
+  it("H2: keystore-reset drops the prior owner's custom chains from SW MEMORY", async () => {
+    expect(await addPriorOwnerChain()).toMatchObject({ ok: true });
+    expect(await chainIdsFromList()).toContain(PRIOR_OWNER_CHAIN.chainId);
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+
+    // Disk was already handled by the mono.* scan; this asserts the in-memory
+    // registry, which is what chain-list actually reads.
+    expect(await chainIdsFromList()).not.toContain(PRIOR_OWNER_CHAIN.chainId);
+  });
+
+  it("H2: keystore-reset returns the active chain to the built-in default", async () => {
+    await addPriorOwnerChain();
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-set-active-chain",
+      payload: { chainId: PRIOR_OWNER_CHAIN.chainId },
+    });
+    // canonicalChainKey normalises the hex casing, so compare lowercased.
+    expect(await activeChainIdLower()).toBe(PRIOR_OWNER_CHAIN.chainId);
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+
+    expect(await activeChainIdLower()).toBe(TESTNET_CHAIN_ID_HEX.toLowerCase());
+  });
+
+  it("H2: the forgot-password wipe clears the SAME chain residue", async () => {
+    // keystore-wipe-unauth is the lost-control path and its own comment
+    // requires it to wipe at least as much as the re-auth path. Both share one
+    // teardown helper so they cannot drift.
+    await addPriorOwnerChain();
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-set-active-chain",
+      payload: { chainId: PRIOR_OWNER_CHAIN.chainId },
+    });
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    });
+
+    expect(await chainIdsFromList()).not.toContain(PRIOR_OWNER_CHAIN.chainId);
+    expect(await activeChainIdLower()).toBe(TESTNET_CHAIN_ID_HEX.toLowerCase());
+  });
+
+  it("H2: the built-in chain still survives a reset — this clears residue, not the registry", async () => {
+    await addPriorOwnerChain();
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+    expect(await chainIdsFromList()).toContain(
+      TESTNET_CHAIN_ID_HEX.toLowerCase(),
+    );
+  });
+
   it("keystore-wipe-unauth requires the SW-verified confirm token (P4-004)", async () => {
     storageLocal["mono.vaults.v4"] = { seeded: true };
     // No token → rejected, no wipe.

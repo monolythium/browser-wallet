@@ -692,13 +692,16 @@ function lookupChain(id: string): NetInfo | null {
   return null;
 }
 
+/** Hydrate `userChains` from storage. AUTHORITATIVE: storage is the source of
+ *  truth, so an absent or malformed key means "no user chains" and clears the
+ *  in-memory copy rather than leaving whatever was there before. Assigning only
+ *  on a hit made this unable to represent deletion — after a wipe removed the
+ *  key, re-running it would not have reset the registry. */
 async function loadUserChains(): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.get([USER_CHAINS_STORAGE_KEY], (res) => {
       const v = res?.[USER_CHAINS_STORAGE_KEY];
-      if (v && typeof v === "object") {
-        userChains = v as Record<string, NetInfo>;
-      }
+      userChains = v && typeof v === "object" ? (v as Record<string, NetInfo>) : {};
       resolve();
     });
   });
@@ -841,6 +844,36 @@ const session: SessionState = {
   connectedOrigins: new Set<string>(),
   autoLockMinutes: AUTO_LOCK_MINUTES_DEFAULT,
 };
+
+/**
+ * In-memory teardown shared by BOTH wipe paths (keystore-reset and the
+ * forgot-password keystore-wipe-unauth). Storage is wiped by the mono.* scan;
+ * this drops the copies the worker holds, which no scan can reach.
+ *
+ * H2 — `userChains` and `session.chainId` were missed. The wipe removes
+ * mono.chains.user and mono.chain.active from disk, but the SW mirrors both in
+ * memory, so until the next worker restart the new owner saw the previous
+ * owner's custom chains, with one of them possibly still active. Custom chains
+ * are not necessarily the prior owner's own doing — a connected dApp can add
+ * one through `wallet_addEthereumChain` — so this is exactly the device-handoff
+ * residue the P2-007 session-key block exists to clear, in memory rather than
+ * in storage. The chain-delete handler already performs the same reset when the
+ * active chain goes away.
+ *
+ * Called from a `finally` in both handlers for the F-B2V-1 reason lockV4 is:
+ * a rejection anywhere in the wipe sequence must not leave memory ahead of
+ * disk. lockV4 is sync + idempotent, so a later triggerAutoLock tail is a
+ * harmless no-op.
+ *
+ * Shared rather than written out twice because the two paths are required to
+ * wipe identically — the forgot-password path is the lost-control path and must
+ * clear at least as much as the re-auth one.
+ */
+function clearInMemoryWalletState(): void {
+  lockV4();
+  userChains = {};
+  session.chainId = TESTNET_CHAIN_ID_HEX;
+}
 
 // Hydrate user-added chains and the persisted active chain id as soon as
 // the worker spins up. Service-worker hibernation → we re-read on every
@@ -7351,7 +7384,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ]);
         await triggerAutoLock();
       } finally {
-        lockV4();
+        clearInMemoryWalletState();
       }
       // S6 closeout C2: clear the toolbar pip so a prior owner's unread COUNT
       // doesn't linger after the store is wiped (device-handoff #43). Best-
@@ -7416,7 +7449,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ]);
         await triggerAutoLock();
       } finally {
-        lockV4();
+        clearInMemoryWalletState();
       }
       // S6 closeout C2: clear the toolbar pip so a prior owner's unread COUNT
       // doesn't linger after the store is wiped (device-handoff #43). Best-
