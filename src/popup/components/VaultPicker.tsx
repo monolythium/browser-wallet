@@ -542,7 +542,14 @@ export function VaultPicker({
               top: anchor.top,
               left: anchor.left,
               width: anchor.width,
-              zIndex: 9999,
+              // Must stay strictly BELOW the shared Modal's z-index (1000) so
+              // modals opened from this list — rename, add, multisig — paint
+              // above it instead of underneath. The PORTAL below is what
+              // escapes `.ext`'s backdrop-filter stacking trap, NOT the
+              // magnitude: `.ext` sits at the auto/0 level of the body
+              // stacking context, so any positive value clears the frame.
+              // Do not "fix" this back up to a maximal value.
+              zIndex: 500,
               background: "var(--ink-100, #15161a)",
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 12,
