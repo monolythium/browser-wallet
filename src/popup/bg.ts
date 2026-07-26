@@ -1509,6 +1509,10 @@ export async function bgFocusApproval(id: string): Promise<{ focused: boolean }>
 }
 
 export interface ConnectedSiteRecord {
+  /** Popup-side mirror of the SW's record. See the note on
+   *  `background/connected-sites.ts`: this address is recorded only — no grant
+   *  check reads it, so a grant follows the connection rather than the account.
+   *  The Connected sites page sorts on `approvedAt` and ignores this field. */
   address: string;
   approvedAt: number;
 }

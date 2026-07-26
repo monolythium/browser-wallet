@@ -3,8 +3,21 @@ import type { CurrencyCode } from "./iso4217";
 export const AUTO_LOCK_MINUTES_DEFAULT = 5;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
 
-/** The exact word the user types to confirm the destructive no-re-auth wipe.
- *  Single source for the SW verify (P4-004) + both confirm screens. */
+/** The word the user types to confirm an irreversible destroy.
+ *
+ *  GLOBAL AND IDENTICAL EVERYWHERE. The same "DELETE" confirms the whole-wallet
+ *  wipe (`keystore-wipe-unauth`, which the SW compares against this constant),
+ *  Reset wallet, the unlock screen's no-phrase path, AND the removal of a single
+ *  wallet through ConfirmWordDialog. It is not derived from the thing being
+ *  destroyed and is never checked against it, so typing it proves intent to
+ *  destroy — never intent to destroy THIS one.
+ *
+ *  What identifies the target is the dialog's own copy: Wallets.tsx passes
+ *  `title={`Remove ${label}?`}` and a matching warning heading. Nothing in the
+ *  confirm step binds the typed word to that label. Anything that needs the
+ *  destroy bound to a target must pin the target itself — the removal flow does,
+ *  by snapshotting the vault id into state at mount so a re-render or a list
+ *  reorder cannot retarget an already-armed confirm. */
 export const WIPE_CONFIRM_WORD = "DELETE";
 
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
