@@ -1247,6 +1247,69 @@ async function gatedEnqueue(
 // Progressive brute-force lockout — state lives in chrome.storage.session
 // only (no module mirror, since SW hibernation would desync). Returns the
 // longest matching window for `fails`, or 0 if no threshold is met.
+/** Lock key for the shared brute-force counter. Distinct from any storage key
+ *  so it can never collide with a container lock. */
+const LOCKOUT_COUNTER_LOCK_KEY = "lock:mono.unlock-fail-counter";
+
+/** Whole seconds until `until`, or 0 when no window is open. Derived from the
+ *  deadline rather than from the window length, because the charge is now
+ *  computed inside the counter lock and the caller only sees its result. */
+function secondsUntil(until: number): number {
+  const remaining = until - Date.now();
+  return remaining > 0 ? Math.ceil(remaining / 1000) : 0;
+}
+
+/**
+ * Charge ONE failed password attempt, atomically.
+ *
+ * H8 — every call site reads the counter, spends a ~2.76 s Argon2id derivation,
+ * then writes read+1. Because all the reads are issued before any of the writes,
+ * N concurrent attempts all read the same value and all write the same value+1:
+ * N guesses cost a single attempt. Measured at ten concurrent attempts charging
+ * once, which lets the progressive lockout be prevented from ever tripping. The
+ * Argon2id cost bounds the RATE, not the COUNT — it does not close this.
+ *
+ * The lock wraps only this increment, and the counter is re-read INSIDE it, so
+ * the value written is derived from a read no other charge can have superseded.
+ * It deliberately does NOT span the caller's earlier read-through-derivation
+ * window: holding a lock across the KDF would serialise every password op
+ * behind a derivation, on the unlock path.
+ *
+ * SCOPE OF THIS CONTROL, stated because it is easy to overclaim: the counter is
+ * defence against a human at the keyboard, and against a compromised content
+ * script (which the router's popup-URL check already rejects). It is NOT a
+ * defence against code running in the popup — `chrome.storage.session` keeps
+ * its default TRUSTED_CONTEXTS access level, so popup-context script can clear
+ * these keys directly. Argon2id is what bounds an automated attacker.
+ */
+async function chargeFailedPasswordAttempt(): Promise<{
+  failCount: number;
+  lockoutUntil: number;
+}> {
+  return withKeyLock(LOCKOUT_COUNTER_LOCK_KEY, async () => {
+    const cur = await chrome.storage.session.get([
+      SESSION_KEY_UNLOCK_FAIL_COUNT,
+      SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+    ]);
+    const failCount =
+      (typeof cur[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+        ? (cur[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+        : 0) + 1;
+    const ms = lockoutMsFor(failCount);
+    const lockoutUntil =
+      ms > 0
+        ? Date.now() + ms
+        : typeof cur[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (cur[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+    await chrome.storage.session.set({
+      [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+      [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+    });
+    return { failCount, lockoutUntil };
+  });
+}
+
 function lockoutMsFor(fails: number): number {
   for (const t of LOCKOUT_THRESHOLDS) {
     if (fails >= t.fails) return t.ms;
@@ -7103,18 +7166,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         if (isStructuralVaultRefusal(msg)) {
             return { ok: false, reason: msg };
           }
-          failCount += 1;
-          const ms = lockoutMsFor(failCount);
-          if (ms > 0) lockoutUntil = Date.now() + ms;
-          await chrome.storage.session.set({
-            [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-            [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-          });
+          ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
           return {
             ok: false,
             reason: "wrong_password",
             failCount,
-            secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+            secondsRemaining: secondsUntil(lockoutUntil),
           };
         }
       }
@@ -7195,18 +7252,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
           failCount,
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
     }
@@ -7259,18 +7310,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
           failCount,
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
       // Password verified — default-deny wipe of ALL persisted wallet state
@@ -7604,18 +7649,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: verdict.reason };
       }
       if (!verdict.verified) {
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
           failCount,
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
       await chrome.storage.session.remove([
@@ -7688,18 +7727,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
           failCount,
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
     }
@@ -7763,18 +7796,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
           failCount,
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
     }
@@ -9032,10 +9059,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
       ]);
-      let failCount =
-        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
-          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
-          : 0;
+      // The count itself is not surfaced by this op; the charge is computed
+      // inside the counter lock (H8), so only the resulting deadline is needed.
       let lockoutUntil =
         typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
           ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
@@ -9055,17 +9080,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: verified.reason };
       }
       if (!verified.verified) {
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+        ({ lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
       // Correct password — clear the shared fail/lockout counters as the
@@ -11769,10 +11788,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 SESSION_KEY_UNLOCK_FAIL_COUNT,
                 SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
               ]);
-              let failCount =
-                typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
-                  ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
-                  : 0;
+              // The count itself is not surfaced by this op; the charge is
+              // computed inside the counter lock (H8), so only the resulting
+              // deadline is needed here.
               let lockoutUntil =
                 typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
                   ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
@@ -11794,18 +11812,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 return { ok: false, reason: verified.reason };
               }
               if (!verified.verified) {
-                failCount += 1;
-                const ms = lockoutMsFor(failCount);
-                if (ms > 0) lockoutUntil = Date.now() + ms;
-                await chrome.storage.session.set({
-                  [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-                  [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-                });
+                ({ lockoutUntil } = await chargeFailedPasswordAttempt());
                 return {
                   ok: false,
                   passkeyElevation: "wrong_password" as const,
                   reason: "wrong_password",
-                  secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+                  secondsRemaining: secondsUntil(lockoutUntil),
                 };
               }
               await chrome.storage.session.remove([

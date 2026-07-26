@@ -9283,3 +9283,42 @@ describe("post-verification failures are not wrong passwords (C9/C10)", () => {
     expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// H8 — the counter's read-modify-write must be atomic.
+//
+// Every charge site reads the counter, spends a ~2.76 s Argon2id derivation,
+// then writes read+1. The read happens BEFORE the derivation, so N concurrent
+// attempts all read the same value and all write the same value+1: N guesses
+// cost one attempt. Demonstrated before the fix at ten concurrent attempts
+// producing a single charge, which lets the progressive lockout be prevented
+// from ever tripping.
+//
+// The lock wraps ONLY the increment. Wrapping the original read-to-write span
+// would hold it across the KDF and serialise every password op behind a
+// derivation — the same trap the container lock had to avoid.
+// ---------------------------------------------------------------------------
+describe("the lockout counter increments atomically (H8)", () => {
+  it("two concurrent wrong-password attempts charge two", async () => {
+    const [, ] = await Promise.all([
+      dispatchPopup({ kind: "popup", op: "vault-verify-password", payload: { password: "wrong-a" } }),
+      dispatchPopup({ kind: "popup", op: "vault-verify-password", payload: { password: "wrong-b" } }),
+    ]);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(2);
+  });
+
+  it("ten concurrent wrong-password attempts charge ten", async () => {
+    const replies = (await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        dispatchPopup({
+          kind: "popup",
+          op: "vault-verify-password",
+          payload: { password: "wrong-" + i },
+        }),
+      ),
+    )) as Array<{ reason?: string }>;
+    // All ten were really evaluated — this is not ten no-ops.
+    expect(replies.every((r) => r.reason === "wrong_password")).toBe(true);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(10);
+  });
+});
