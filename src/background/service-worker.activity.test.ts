@@ -370,6 +370,18 @@ let correctElevatedPassword = "correct-horse-battery-staple";
 // null (no multisig vault) so it is inert for every non-multisig test.
 let multisigMetaForTest: unknown = null;
 
+// Per-vault password-op seams. Set a message to make the keystore call throw,
+// which is how the vault-remove / vault-export-seed handler tests drive the
+// wrong-password vs structural-refusal split.
+let removeVaultThrows: string | null = null;
+let exportSeedThrows: string | null = null;
+const REMOVE_VAULT_RESULT = {
+  removedId: "vault-removed",
+  newActiveVaultId: "vault-successor",
+  newActiveAddress: "0x00000000000000000000000000000000000000aa",
+  affectedMultisigLabels: [] as string[],
+};
+
 // M2 harness: governance-execute re-verifies co-signer signatures over the live
 // governance-proposal digest, which needs live ML-DSA sigs. This hoisted holder
 // lets each test control how many approvals re-verify (the mock reads it).
@@ -416,6 +428,14 @@ vi.mock("./keystore-mldsa.js", () => ({
     address: DETERMINISTIC_ADDRESS,
   })),
   exportMnemonicV4: vi.fn(async () => ({ mnemonic: "" })),
+  exportMnemonicForVaultV4: vi.fn(async () => {
+    if (exportSeedThrows) throw new Error(exportSeedThrows);
+    return { mnemonic: "abandon ".repeat(23) + "art" };
+  }),
+  removeVaultV4: vi.fn(async () => {
+    if (removeVaultThrows) throw new Error(removeVaultThrows);
+    return REMOVE_VAULT_RESULT;
+  }),
   personalSignV4: vi.fn(() => new Uint8Array(65)),
   signTypedDataV4FromV4: vi.fn(() => new Uint8Array(65)),
   // Multisig-execute seams (used only by the multisig-execute handler test).
@@ -755,6 +775,8 @@ beforeEach(() => {
   // Non-multisig active vault by default — the multisig-execute tests set this
   // to a roster and it must not leak into later single-signer submit paths.
   multisigMetaForTest = null;
+  removeVaultThrows = null;
+  exportSeedThrows = null;
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -8665,5 +8687,124 @@ describe("native-multisig-send", () => {
     const nonceCall = rpcCalls.find((c) => c.method === "lyth_getTransactionCount");
     expect(nonceCall?.params[0]).toBe(expectedMonom);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("vault-remove / vault-export-seed — per-vault password ops", () => {
+  const PW = "correct-horse-battery-staple";
+
+  const remove = (payload: unknown = { password: PW, vaultId: "v2" }) =>
+    dispatchPopup({ kind: "popup", op: "vault-remove", payload }) as Promise<{
+      ok: boolean;
+      reason?: string;
+      failCount?: number;
+      secondsRemaining?: number;
+      removedId?: string;
+      newActiveVaultId?: string;
+      newActiveAddress?: string;
+      affectedMultisigLabels?: string[];
+    }>;
+
+  const exportSeed = (payload: unknown = { password: PW, vaultId: "v2" }) =>
+    dispatchPopup({
+      kind: "popup",
+      op: "vault-export-seed",
+      payload,
+    }) as Promise<{
+      ok: boolean;
+      reason?: string;
+      failCount?: number;
+      mnemonic?: string;
+    }>;
+
+  it("vault-remove returns the keystore result and clears the lockout counters", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 3;
+    const r = await remove();
+    expect(r.ok).toBe(true);
+    expect(r.removedId).toBe(REMOVE_VAULT_RESULT.removedId);
+    expect(r.newActiveVaultId).toBe(REMOVE_VAULT_RESULT.newActiveVaultId);
+    expect(r.affectedMultisigLabels).toEqual([]);
+    // A correct password resets the shared brute-force state, exactly as
+    // keystore-unlock / keystore-export-seed / keystore-reset do.
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove rejects a payload missing the password or the vault id", async () => {
+    expect((await remove({ vaultId: "v2" })).ok).toBe(false);
+    expect((await remove({ password: PW })).ok).toBe(false);
+    expect((await remove({})).ok).toBe(false);
+  });
+
+  it("vault-remove maps an unrecognised keystore throw to wrong_password and bumps the counter", async () => {
+    removeVaultThrows = "wrong password";
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(r.failCount).toBe(1);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-remove surfaces the last-vault refusal verbatim WITHOUT burning an attempt", async () => {
+    // The user's password may be perfectly correct here — the removal is
+    // structurally impossible. Throttling them, or telling them the password
+    // was wrong, would both be lies.
+    removeVaultThrows = "cannot remove the last vault — use Reset wallet instead";
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/cannot remove the last vault/);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove treats a locked container and an unknown id as structural too", async () => {
+    removeVaultThrows = "container is locked";
+    expect((await remove()).reason).toBe("container is locked");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+
+    removeVaultThrows = "unknown vault id";
+    expect((await remove()).reason).toBe("unknown vault id");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove refuses while a lockout window is open", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("rate_limited");
+    expect(r.secondsRemaining).toBeGreaterThan(0);
+  });
+
+  it("vault-export-seed returns the targeted vault's phrase", async () => {
+    const r = await exportSeed();
+    expect(r.ok).toBe(true);
+    expect(r.mnemonic?.split(/\s+/)).toHaveLength(24);
+  });
+
+  it("vault-export-seed refuses while a lockout window is open", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    const r = await exportSeed();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("rate_limited");
+    expect(r.mnemonic).toBeUndefined();
+  });
+
+  it("vault-export-seed shares the lockout counter with vault-remove", async () => {
+    // One shared brute-force budget across every password-taking op — an
+    // attacker cannot get extra guesses by alternating between them.
+    removeVaultThrows = "wrong password";
+    await remove();
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+
+    exportSeedThrows = "wrong password";
+    const r = await exportSeed();
+    expect(r.failCount).toBe(2);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(2);
+  });
+
+  it("vault-export-seed does not leak a phrase on failure", async () => {
+    exportSeedThrows = "wrong password";
+    const r = await exportSeed();
+    expect(r.ok).toBe(false);
+    expect(r.mnemonic).toBeUndefined();
   });
 });

@@ -1931,6 +1931,85 @@ export async function bgVaultPubkey(
   return send("vault-pubkey", { vaultId });
 }
 
+// ---- Password-gated per-vault surface ----
+//
+// Both of these take the master password and are DELIBERATELY absent from
+// COALESCED_POPUP_OPS. Two independent reasons, either sufficient:
+//
+//   1. The coalesce key is `${op}|${JSON.stringify(payload)}`, so enrolling
+//      either op would place the PLAINTEXT PASSWORD into a Map key held in
+//      popup memory for the life of the request. No password-taking op is in
+//      that set today (keystore-unlock / -export-seed / -reset are all absent)
+//      and these two must not be the first.
+//   2. Coalescing is only ever sound for idempotent reads. `vault-remove` is a
+//      destructive write — two concurrent calls collapsing into one would
+//      return the first call's result to both callers, so a caller would
+//      believe it removed a wallet it did not. `vault-export-seed` returns a
+//      secret; sharing one in-flight promise between call sites widens where
+//      that secret lands for no benefit.
+
+/**
+ * Permanently remove one vault after re-verifying the master password.
+ * Wrong-password attempts share the SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL
+ * counters with `bgKeystoreUnlock`, so the brute-force lockout applies
+ * identically.
+ *
+ * Structural refusals — a locked container, an unknown id, and the last-vault
+ * guard — come back verbatim in `reason` rather than as `wrong_password`, and
+ * do NOT count against the lockout. `cannot remove the last vault …` is the
+ * one callers should special-case: route the user to Settings -> Reset wallet,
+ * which wipes cleanly, instead of leaving a dangling active vault.
+ *
+ * On success the SW broadcasts `accountsChanged` with the surviving active
+ * address.
+ */
+export async function bgVaultRemove(
+  password: string,
+  vaultId: string,
+): Promise<
+  | {
+      ok: true;
+      removedId: string;
+      newActiveVaultId: string;
+      newActiveAddress: string;
+      /** Labels of multisig wallets that listed the removed vault as a signer.
+       *  Those wallets keep their roster but lose the key that signs for it. */
+      affectedMultisigLabels: string[];
+    }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("vault-remove", { password, vaultId });
+}
+
+/**
+ * Re-auth and return a SPECIFIC vault's 24-word recovery phrase — the
+ * per-wallet counterpart to `bgKeystoreExportSeed`, which is fixed to the
+ * active vault. Same shared lockout counters.
+ *
+ * The returned phrase is not cached anywhere on this side of the boundary.
+ * Callers must hold it in component state only and drop it on unmount; it must
+ * never be persisted, logged, or written to storage.
+ */
+export async function bgVaultExportSeed(
+  password: string,
+  vaultId: string,
+): Promise<
+  | { ok: true; mnemonic: string }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("vault-export-seed", { password, vaultId });
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Proposal creation surface
 // ─────────────────────────────────────────────────────────────────────

@@ -10,7 +10,12 @@
 // merge; a later identical read is always a fresh round-trip.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bgWalletBalance, bgVaultsList } from "./bg";
+import {
+  bgWalletBalance,
+  bgVaultsList,
+  bgVaultRemove,
+  bgVaultExportSeed,
+} from "./bg";
 
 let sent: Array<{ op: string }>;
 
@@ -69,5 +74,26 @@ describe("popup send() read coalescing (C4 / T7)", () => {
       bgWalletBalance("0xbbb", "0x10f2c"),
     ]);
     expect(sent.filter((s) => s.op === "wallet-balance").length).toBe(2);
+  });
+
+  // The coalesce key is `${op}|${JSON.stringify(payload)}`. For a
+  // password-taking op that key would embed the PLAINTEXT PASSWORD in a Map
+  // held in popup memory — so no such op may ever join the allow-list. On top
+  // of that, vault-remove is a destructive write (two collapsed calls would
+  // report one removal twice) and vault-export-seed returns a secret.
+  it("vault-remove is NOT coalesced — a destructive write must never be shared", async () => {
+    await Promise.all([
+      bgVaultRemove("pw", "v1"),
+      bgVaultRemove("pw", "v1"),
+    ]);
+    expect(sent.filter((s) => s.op === "vault-remove").length).toBe(2);
+  });
+
+  it("vault-export-seed is NOT coalesced — a secret read must never be shared", async () => {
+    await Promise.all([
+      bgVaultExportSeed("pw", "v1"),
+      bgVaultExportSeed("pw", "v1"),
+    ]);
+    expect(sent.filter((s) => s.op === "vault-export-seed").length).toBe(2);
   });
 });

@@ -81,6 +81,8 @@ import {
   lockV4,
   createVaultFromMnemonic,
   exportMnemonicV4,
+  exportMnemonicForVaultV4,
+  removeVaultV4,
   personalSignV4,
   signTypedDataV4FromV4,
   getUnlockedPublicKeyV4,
@@ -1235,6 +1237,27 @@ function lockoutMsFor(fails: number): number {
     if (fails >= t.fails) return t.ms;
   }
   return 0;
+}
+
+/** Refusals the per-vault password ops raise BEFORE any key derivation: a
+ *  locked container, a missing container, an unknown id, and the last-vault
+ *  guard. None of these is a failed password guess, so none may burn a lockout
+ *  attempt — a user with the right password would otherwise be throttled for
+ *  asking something structurally impossible, and the "use Reset wallet instead"
+ *  refusal would surface as "wrong password".
+ *
+ *  The list is exact and the DEFAULT is to treat a throw as wrong-password, so
+ *  a message this function does not recognise still counts against the lockout.
+ *  That is the fail-closed direction: mis-classifying a password failure as
+ *  structural would hand out unlimited guesses. */
+function isStructuralVaultRefusal(message: string): boolean {
+  return (
+    message === "container is locked" ||
+    message === "no v4 vaults container" ||
+    message === "no v4 vault — run onboarding first" ||
+    message === "unknown vault id" ||
+    message.startsWith("cannot remove the last vault")
+  );
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -7433,6 +7456,127 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: true, meta };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-remove": {
+      // Password-gated removal of ONE vault. Shares the
+      // SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL counters with keystore-unlock /
+      // keystore-export-seed / keystore-reset, so wrong-password attempts here
+      // count toward the same brute-force lockout window.
+      const p = message.payload as { password?: string; vaultId?: string };
+      if (typeof p?.password !== "string" || typeof p?.vaultId !== "string") {
+        return { ok: false, reason: "missing password or vaultId" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+          failCount,
+        };
+      }
+      try {
+        const r = await removeVaultV4(p.password, p.vaultId);
+        await chrome.storage.session.remove([
+          SESSION_KEY_UNLOCK_FAIL_COUNT,
+          SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+        ]);
+        await resetAutoLock();
+        // Removing the active vault promotes a successor, so the address a
+        // connected dApp holds may now be stale. Same EIP-1193 contract as
+        // vault-select.
+        broadcastEvent("accountsChanged", [r.newActiveAddress]);
+        return { ok: true, ...r };
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
+        failCount += 1;
+        const ms = lockoutMsFor(failCount);
+        if (ms > 0) lockoutUntil = Date.now() + ms;
+        await chrome.storage.session.set({
+          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+        });
+        return {
+          ok: false,
+          reason: "wrong_password",
+          failCount,
+          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+        };
+      }
+    }
+    case "vault-export-seed": {
+      // Re-auth path returning a SPECIFIC vault's 24-word recovery phrase, for
+      // revealing a non-active wallet from a wallet list. Mirrors
+      // keystore-export-seed exactly, including the shared lockout counters —
+      // only the vault targeting differs. The phrase is returned to the caller
+      // and never cached, persisted, or logged here.
+      const p = message.payload as { password?: string; vaultId?: string };
+      if (typeof p?.password !== "string" || typeof p?.vaultId !== "string") {
+        return { ok: false, reason: "missing password or vaultId" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+          failCount,
+        };
+      }
+      try {
+        const r = await exportMnemonicForVaultV4(p.password, p.vaultId);
+        await chrome.storage.session.remove([
+          SESSION_KEY_UNLOCK_FAIL_COUNT,
+          SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+        ]);
+        await resetAutoLock();
+        return { ok: true, mnemonic: r.mnemonic };
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
+        failCount += 1;
+        const ms = lockoutMsFor(failCount);
+        if (ms > 0) lockoutUntil = Date.now() + ms;
+        await chrome.storage.session.set({
+          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+        });
+        return {
+          ok: false,
+          reason: "wrong_password",
+          failCount,
+          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+        };
       }
     }
     case "multisig-propose": {
