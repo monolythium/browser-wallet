@@ -1252,7 +1252,10 @@ export async function removeVaultV4(
         // the successor we opened speculatively so its decrypted secret doesn't
         // linger.
         nextState?.backend.dispose();
-        throw e;
+        // C9 — the AEAD above already passed, so the password was CORRECT. A
+        // write failure here is infrastructure, not a guess: it must not be
+        // charged to the brute-force counter or reported as a wrong password.
+        throw markPostVerificationFailure(e);
       }
 
       if (nextState) {
@@ -2173,6 +2176,39 @@ export function getActiveVaultIdV4(): string | null {
  * `structural: false` is a genuine password verdict — the Poly1305 tag was
  * checked and it failed. That one always counts.
  */
+/**
+ * Mark an error as having been raised AFTER the password was proven correct.
+ *
+ * The brute-force counter exists to charge password GUESSES. Once the AEAD tag
+ * has been checked and passed, the password is known-good, so anything that
+ * fails downstream — a storage write rejecting, infrastructure erroring — is
+ * not a guess and must not spend one of the user's attempts, nor be reported to
+ * them as "wrong password".
+ *
+ * This is a POSITIVE signal tied to the verification event, deliberately not a
+ * string in `isStructuralVaultRefusal`. That list is matched by message and
+ * shared across every op, so it can only express properties of WHAT an error
+ * says. This class is safe because of WHERE it is raised — downstream of the
+ * AEAD — which a message match cannot capture: the moment any op wrote before
+ * verifying, a message entry would silently hand out free guesses. Marking at
+ * the raise site keeps the property attached to the thing that makes it true.
+ */
+export function markPostVerificationFailure(err: unknown): unknown {
+  if (err && typeof err === "object") {
+    (err as { postVerification?: boolean }).postVerification = true;
+  }
+  return err;
+}
+
+/** True when `err` was raised downstream of a successful password check. */
+export function isPostVerificationFailure(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as { postVerification?: boolean }).postVerification === true
+  );
+}
+
 export type VerifyPasswordOutcomeV4 =
   | { verified: true }
   | {

@@ -378,6 +378,9 @@ let exportSeedThrows: string | null = null;
 // Same seam for the unlock path, so the structural-vs-wrong-password split can
 // be driven at keystore-unlock / keystore-reset (both call unlockContainerV4).
 let unlockThrows: string | null = null;
+// C9/C10 seam: throw an error MARKED as raised downstream of a successful
+// password check, the way removeVaultV4 marks a failed post-AEAD write.
+let removeVaultThrowsPostVerification: string | null = null;
 const REMOVE_VAULT_RESULT = {
   removedId: "vault-removed",
   newActiveVaultId: "vault-successor",
@@ -407,6 +410,13 @@ vi.mock("./keystore-mldsa.js", () => ({
   // real key string so the wipe contends on the same lock the keystore writers
   // use, rather than an isolated one that would make the test vacuous.
   vaultContainerLockKey: vi.fn(() => "mono.vaults.v4"),
+  // C9/C10 — real implementation, not a stub: the whole point is that the
+  // decision follows the MARKER on the error, so a mock that always said false
+  // (or always true) would make these tests prove nothing.
+  isPostVerificationFailure: (err: unknown) =>
+    !!err &&
+    typeof err === "object" &&
+    (err as { postVerification?: boolean }).postVerification === true,
   hasContainerV4: vi.fn(async () => true),
   storedContainerNeedsRestoreV4: vi.fn(async () => false),
   unlockContainerV4: vi.fn(async () => {
@@ -442,6 +452,11 @@ vi.mock("./keystore-mldsa.js", () => ({
     return { mnemonic: "abandon ".repeat(23) + "art" };
   }),
   removeVaultV4: vi.fn(async () => {
+    if (removeVaultThrowsPostVerification) {
+      const err = new Error(removeVaultThrowsPostVerification);
+      (err as { postVerification?: boolean }).postVerification = true;
+      throw err;
+    }
     if (removeVaultThrows) throw new Error(removeVaultThrows);
     return REMOVE_VAULT_RESULT;
   }),
@@ -787,6 +802,7 @@ beforeEach(() => {
   removeVaultThrows = null;
   exportSeedThrows = null;
   unlockThrows = null;
+  removeVaultThrowsPostVerification = null;
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -9214,6 +9230,50 @@ describe("structural allowlist — every entry refuses without evaluating a pass
 
   it("a message NOT on the list still charges (the fail-closed default)", async () => {
     removeVaultThrows = "container is locked "; // trailing space — not an exact match
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-remove",
+      payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+    })) as { reason?: string };
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C9 / C10 — a failure AFTER the password was proven correct is not a guess.
+//
+// Two shapes: the container write rejecting once the AEAD has already passed
+// (C9), and infrastructure failing on the success path after a correct unlock
+// (C10). Both currently return `wrong_password` and burn an attempt for a
+// password that was RIGHT — the exact defect DA-004 exists to remove.
+//
+// Deliberately NOT solved by adding a string to isStructuralVaultRefusal: that
+// list is matched by message and shared across ops, and this class is safe only
+// because of WHERE it is raised (downstream of the AEAD), not WHAT it says. A
+// message entry would be enforced nowhere, and the moment some future op writes
+// before verifying it would hand out free guesses. The signal is positive and
+// tied to the verification event instead.
+// ---------------------------------------------------------------------------
+describe("post-verification failures are not wrong passwords (C9/C10)", () => {
+  it("vault-remove: a failure after the AEAD passed does not charge", async () => {
+    removeVaultThrowsPostVerification =
+      "failed to persist the vault container: QUOTA_BYTES quota exceeded";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-remove",
+      payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("an UNMARKED storage-shaped error still charges (fail-closed preserved)", async () => {
+    // The marker is the signal, not the wording. An error that merely LOOKS
+    // like a storage failure but was not raised downstream of the AEAD keeps
+    // counting — this is the invariant pinned by the NOVEL-error tests.
+    removeVaultThrows = "failed to persist the vault container: whatever";
     const r = (await dispatchPopup({
       kind: "popup",
       op: "vault-remove",

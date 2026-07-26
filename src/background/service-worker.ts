@@ -84,6 +84,7 @@ import {
   exportMnemonicForVaultV4,
   removeVaultV4,
   vaultContainerLockKey,
+  isPostVerificationFailure,
   personalSignV4,
   signTypedDataV4FromV4,
   getUnlockedPublicKeyV4,
@@ -7093,7 +7094,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // must not spend one of the user's attempts. The default stays
           // fail-closed: anything the allowlist does not recognise counts.
           const msg = (e as Error).message;
-          if (isStructuralVaultRefusal(msg)) {
+          // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
+        if (isStructuralVaultRefusal(msg)) {
             return { ok: false, reason: msg };
           }
           failCount += 1;
@@ -7179,6 +7186,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         // DA-004 — see keystore-unlock. Fail-closed default preserved.
         const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
@@ -7237,6 +7250,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // user out of Reset wallet, which is the recovery path they are already
         // on. Fail-closed default preserved.
         const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
@@ -7660,6 +7679,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: true, ...r };
       } catch (e) {
         const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
@@ -7729,6 +7754,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: true, mnemonic: r.mnemonic };
       } catch (e) {
         const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
         if (isStructuralVaultRefusal(msg)) {
           return { ok: false, reason: msg };
         }
