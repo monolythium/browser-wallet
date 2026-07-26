@@ -47,6 +47,7 @@ import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { Names } from "./pages/Names";
+import { Wallets } from "./pages/Wallets";
 import { Theme } from "./pages/Theme";
 import { DisplayPreferences } from "./pages/DisplayPreferences";
 import { LanguageSettings } from "./pages/LanguageSettings";
@@ -184,6 +185,7 @@ type Screen =
   | "display-currency-settings"
   | "main-menu"
   | "contacts"
+  | "wallets"
   | "new-wallet-flow"
   | "notifications";
 
@@ -1316,6 +1318,7 @@ export default function App() {
     // continuous when the user navigates between menu sub-pages.
     screen === "main-menu" ||
     screen === "contacts" ||
+    screen === "wallets" ||
     screen === "multisig-list";
 
   // Fullscreen brand wordmark. Read once at render
@@ -1744,6 +1747,13 @@ export default function App() {
         <Names chainIdHex={activeChain.chainId} onBack={navigateBack} />
       )}
 
+      {/* Wallets — see and manage every wallet. Password-gated on entry (the
+         gate lives inside the page, matching RevealPhrase / ResetWallet; this
+         codebase has no route-guard mechanism). */}
+      {screen === "wallets" && (
+        <Wallets chainIdHex={activeChain.chainId} onBack={navigateBack} />
+      )}
+
       {/* Theme page. Reached from the Display & Preferences hub via navigateTo,
          so onBack (navigateBack) returns to the hub. */}
       {screen === "theme" && <Theme onBack={navigateBack} />}
@@ -1927,6 +1937,7 @@ export default function App() {
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
           {...(registryEnabled ? { onOpenNames: () => navigateTo("names") } : {})}
+          onOpenWallets={() => navigateTo("wallets")}
           onSettings={() => navigateTo("settings")}
           // Display & Preferences — the same hub the Settings page routes to.
           // navigateTo pushes "main-menu" so back returns here.

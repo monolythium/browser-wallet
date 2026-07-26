@@ -2,7 +2,7 @@
 //
 // One screen, logical sections:
 //   1. Quick action — Notifications, full screen, popup/sidebar toggle.
-//   2. Manage — Contacts, Connected sites, Networks, Multisig, RISC-V.
+//   2. Manage — Wallets, Contacts, Connected sites, Networks, Multisig, RISC-V.
 //   3. Security — Security, Features, Emergency recovery.
 //   4. Settings — Settings, Display & Preferences, Operators.
 //   5. Info — About, Resources, Why Monolythium.
@@ -29,6 +29,9 @@ interface MainMenuProps {
    *  chrome.tabs.create with ?mode=fullscreen. Always available. */
   onOpenFullscreen: () => void;
   onContacts: () => void;
+  /** Wallets page — see, rename, reveal and remove the extension's wallets.
+   *  Always wired: there is always at least one wallet. */
+  onOpenWallets: () => void;
   onConnectedSites: () => void;
   onNetworks: () => void;
   /** Open the Operators directory (read-only operator health + risk
@@ -79,6 +82,7 @@ export function MainMenu({
   onSwitchMode,
   onOpenFullscreen,
   onContacts,
+  onOpenWallets,
   onConnectedSites,
   onNetworks,
   onOperators,
@@ -166,6 +170,12 @@ export function MainMenu({
         </MenuSection>
 
         <MenuSection title="Manage">
+          <MenuItem
+            icon="wallets"
+            label="Wallets"
+            onClick={onOpenWallets}
+            hasChevron
+          />
           <MenuItem
             icon="contacts"
             label="Contacts"

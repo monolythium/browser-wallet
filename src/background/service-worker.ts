@@ -7458,6 +7458,65 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
+    case "vault-verify-password": {
+      // Pure password re-verification for a UI gate — proves the caller knows
+      // the master password WITHOUT retrieving any secret. Deliberately NOT
+      // routed through vault-export-seed: using a seed export as an "is this
+      // the right password" check would pull a 24-word mnemonic into popup
+      // memory for a question that does not need it.
+      //
+      // verifyContainerPasswordV4 re-derives the MEK and attempts the AEAD
+      // unwrap, returns false rather than throwing, and zeroes everything it
+      // derived. Shares the same lockout counters as every other password op,
+      // so this gate cannot be used as an unthrottled oracle.
+      const p = message.payload as { password?: string };
+      if (typeof p?.password !== "string") {
+        return { ok: false, reason: "missing password" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const now = Date.now();
+      // Honour an open lockout BEFORE spending an Argon2id derivation.
+      if (lockoutUntil > now) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+          failCount,
+        };
+      }
+      if (!(await verifyContainerPasswordV4(p.password))) {
+        failCount += 1;
+        const ms = lockoutMsFor(failCount);
+        if (ms > 0) lockoutUntil = Date.now() + ms;
+        await chrome.storage.session.set({
+          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+        });
+        return {
+          ok: false,
+          reason: "wrong_password",
+          failCount,
+          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+        };
+      }
+      await chrome.storage.session.remove([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      await resetAutoLock();
+      return { ok: true };
+    }
     case "vault-remove": {
       // Password-gated removal of ONE vault. Shares the
       // SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL counters with keystore-unlock /

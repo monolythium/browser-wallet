@@ -1949,6 +1949,32 @@ export async function bgVaultPubkey(
 //      that secret lands for no benefit.
 
 /**
+ * Re-verify the master password without retrieving anything. Backs the Wallets
+ * page's entry gate.
+ *
+ * Deliberately NOT implemented as a seed export: using `bgVaultExportSeed` to
+ * answer "is this the right password" would pull a 24-word mnemonic into popup
+ * memory for a question that does not need it. The service worker re-derives
+ * the MEK and attempts the AEAD unwrap, then discards everything.
+ *
+ * Shares the lockout counters with every other password op, so the gate is not
+ * an unthrottled password oracle.
+ */
+export async function bgVaultVerifyPassword(
+  password: string,
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("vault-verify-password", { password });
+}
+
+/**
  * Permanently remove one vault after re-verifying the master password.
  * Wrong-password attempts share the SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL
  * counters with `bgKeystoreUnlock`, so the brute-force lockout applies
