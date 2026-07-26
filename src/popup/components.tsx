@@ -1090,6 +1090,9 @@ interface TopProps {
    *  refreshKeystoreStatus and the chip shows the new vault's name
    *  immediately (no need to lock/unlock or reopen). */
   onVaultComplete?: () => void;
+  /** VaultPicker's "Manage wallets" entry — routes to the Wallets page.
+   *  Threaded through Home for App-level routing, same as onNewWalletFlow. */
+  onManageWallets?: () => void;
 }
 
 // Chip replaced with <VaultPicker /> (multi-vault
@@ -1107,7 +1110,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (earlier design).
-export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete }: TopProps) {
+export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete, onManageWallets }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       {/* The ML-DSA-65 algo label moved INTO the picker pill (its left column)
@@ -1118,6 +1121,7 @@ export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplet
         {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
+        {...(onManageWallets ? { onManageWallets } : {})}
       />
     </div>
   );
@@ -2146,9 +2150,12 @@ interface HomeProps {
    *  completion (import or multisig) can re-run App's hydration and the
    *  chip shows the new vault's name without lock/unlock or reopen. */
   onVaultComplete?: () => void;
+  /** Threaded through Top → VaultPicker so the dropdown's "Manage wallets"
+   *  entry routes to App's Wallets screen. */
+  onManageWallets?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, topSlot, onNewWalletFlow, onVaultComplete, onManageWallets }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2273,6 +2280,7 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
         {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
+        {...(onManageWallets ? { onManageWallets } : {})}
       />
       <div className="ext-body">
         {topSlot}

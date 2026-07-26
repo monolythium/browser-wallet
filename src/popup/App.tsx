@@ -1594,6 +1594,10 @@ export default function App() {
           // shows the new vault's name immediately, instead of waiting
           // for a lock/unlock or reopen to remount the tree.
           onVaultComplete={() => void refreshKeystoreStatus()}
+          // The dropdown's "Manage wallets" entry. navigateTo pushes "home"
+          // onto the stack, so the Wallets page's back button returns here.
+          // The page gates itself on entry — this link does not pre-satisfy it.
+          onManageWallets={() => navigateTo("wallets")}
           topSlot={
             activeVaultSummary ? (
               <>
