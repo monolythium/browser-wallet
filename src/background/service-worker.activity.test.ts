@@ -8875,3 +8875,154 @@ describe("vault-remove / vault-export-seed — per-vault password ops", () => {
     expect(r.mnemonic).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// `vault-verify-password` — CHARACTERISATION (DA-015)
+//
+// READ THIS BEFORE "FIXING" A FAILING TEST HERE.
+//
+// These tests document what the op does TODAY. They are not a statement that
+// today's behaviour is correct: two of them deliberately pin KNOWN DEFECTS,
+// and each of those is labelled DA-004 / DA-003 in its own name and comment.
+// FG-LOCKOUT (the next remediation pass) is expected to CHANGE those, and when
+// it does the right response is to update the test to the new behaviour — NOT
+// to "repair" the production code back to what the test says.
+//
+// The op had zero coverage anywhere before this block, which is why it is
+// pinned first: FG-LOCKOUT is about to change its lockout accounting, and this
+// is the diff that will show exactly what moved.
+//
+// Cost note: `verifyContainerPasswordV4` is mocked at the top of this file
+// (`pw === correctElevatedPassword`), so nothing here runs a real Argon2id
+// derivation.
+// ---------------------------------------------------------------------------
+describe("vault-verify-password — characterisation (DA-015)", () => {
+  const GOOD = "correct-horse-battery-staple";
+
+  it("CORRECT password returns ok and clears both lockout counters", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 2;
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = 0;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    // Success REMOVES the keys rather than zeroing them.
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+    expect(storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]).toBeUndefined();
+  });
+
+  it("WRONG password returns wrong_password and increments the shared counter", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "nope" },
+    })) as { ok: boolean; reason?: string; failCount?: number; secondsRemaining?: number };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(r.failCount).toBe(1);
+    // Below the first threshold (5 fails) there is no lockout window yet.
+    expect(r.secondsRemaining).toBe(0);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("EMPTY password is refused as a malformed payload, spending no attempt", async () => {
+    // This op DOES carry the empty-password guard. DA-003 is about the three
+    // ops that DON'T (keystore-unlock / -export-seed / -reset) — see the guard
+    // table in Appendix D. Pinned here so a future refactor that "unifies" the
+    // password ops cannot quietly remove the guard from this one.
+    const keystore = await import("./keystore-mldsa.js");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password");
+    expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("a non-string password is refused the same way", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: 1234 },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("DA-004 (KNOWN DEFECT, pinned): a STRUCTURAL failure burns a lockout attempt", async () => {
+    // `verifyContainerPasswordV4` returns FALSE — never throws — for the
+    // structural cases "no container" and "container is missing its active
+    // vault". The op therefore cannot distinguish them from a wrong guess and
+    // charges the brute-force counter for both. Modelled here by forcing the
+    // helper false while supplying the CORRECT password.
+    //
+    // This is DA-004. FG-LOCKOUT IS EXPECTED TO CHANGE THIS: structural
+    // failures should stop charging the counter, at which point this test
+    // should be updated to assert the counter is untouched.
+    const keystore = await import("./keystore-mldsa.js");
+    vi.mocked(keystore.verifyContainerPasswordV4).mockResolvedValueOnce(false);
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    // A structurally broken container is reported to the user as a bad password.
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("an OPEN lockout is honoured before any derivation is spent", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 5;
+    const keystore = await import("./keystore-mldsa.js");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean; reason?: string; secondsRemaining?: number; failCount?: number };
+    expect(r.ok).toBe(false);
+    // NOTE the reason string: this op says "rate_limited" where the sibling
+    // `slh-dsa-backup-clear` says "locked_out" for the same condition. Pinned
+    // as-is; the inconsistency is recorded in Appendix D, not fixed here.
+    expect(r.reason).toBe("rate_limited");
+    expect(r.secondsRemaining).toBeGreaterThan(0);
+    expect(r.failCount).toBe(5);
+    // A CORRECT password is still refused while the window is open, and the
+    // helper is never called — the point of checking the lockout first.
+    expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+  });
+
+  it("the 5th consecutive wrong password opens a 30 s lockout window", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 4;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "nope" },
+    })) as { ok: boolean; failCount?: number; secondsRemaining?: number };
+    expect(r.ok).toBe(false);
+    expect(r.failCount).toBe(5);
+    expect(r.secondsRemaining).toBe(30);
+    expect(storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]).toBeGreaterThan(
+      Date.now(),
+    );
+  });
+
+  it("a correct password AFTER the window expires succeeds and resets the count", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 5;
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() - 1_000;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+});
