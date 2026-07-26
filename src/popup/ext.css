@@ -281,6 +281,13 @@ html[data-mode="sidepanel"] .ext > .ext-body {
 .ext.light .ext-badge-bridged { background:#f3eaf6; color:#6b2d8e; border-color:#d8b7e3; }
 .ext-badge-att { font-family: var(--f-mono); font-size:8px; letter-spacing:0.1em; padding: 1px 5px; border-radius:3px; background: rgba(88,200,140,0.12); color: var(--ok); text-transform:uppercase; border:1px solid rgba(88,200,140,0.3); display:inline-flex; align-items:center; gap:3px; }
 .ext.light .ext-badge-att { background:#e8f5ec; color:#2a7a3f; border-color:#a8d9b8; }
+/* Developer-mode surface marker (DevBadge). Same geometry as the badges
+   above; deliberately NEUTRAL so it never reads as an ok/warn/err status.
+   Colors are theme tokens, so it tracks all theme variants without a
+   per-theme override. margin-left lives here, not at the call sites, so
+   spacing stays uniform across every surface it marks. */
+.ext-badge-dev { font-family: var(--f-mono); font-size:8px; letter-spacing:0.1em; padding: 1px 5px; border-radius:3px; background: rgba(255,255,255,0.05); color: var(--fg-400); text-transform:uppercase; border:1px solid var(--fg-700); display:inline-flex; align-items:center; vertical-align:1px; margin-left:6px; flex-shrink:0; }
+.ext.light .ext-badge-dev { background: rgba(0,0,0,0.04); }
 
 /* Activity row */
 .ext-act-row { display:grid; grid-template-columns: 28px 1fr auto; gap:12px; padding: 11px 0; align-items:center; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); }
