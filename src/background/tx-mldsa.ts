@@ -1158,9 +1158,45 @@ export async function submitMlDsaTx(
   via: string;
   innerSighashHex: string;
 }> {
+  return submitMlDsaTxWithHooks(req, boundVaultId);
+}
+
+/**
+ * `submitMlDsaTx` with a hook between SIGNING and BROADCAST.
+ *
+ * The hook exists so a caller can persist the signed bytes BEFORE they reach
+ * the chain. That ordering is the whole point: if the worker dies at any moment
+ * from here on, the bytes are already recoverable, and a retry re-broadcasts
+ * THEM rather than deriving a new nonce and signing a second transaction.
+ *
+ * Identical to `submitMlDsaTx` when no hook is passed — same front-door guard,
+ * same build, same broadcast, same return — so the unhooked path is unchanged.
+ *
+ * The hook must not mutate `built`; it is handed the bytes that are about to be
+ * broadcast, not a chance to alter them. If it throws, the broadcast never
+ * happens, which is the safe direction: no transaction exists to be orphaned.
+ */
+export async function submitMlDsaTxWithHooks(
+  req: EthSendTxFields,
+  boundVaultId: string,
+  onBuilt?: (built: {
+    signedTxWireHex: string;
+    innerTxHashHex: string;
+  }) => Promise<void>,
+): Promise<{
+  txHash: string;
+  via: string;
+  innerSighashHex: string;
+}> {
   // Front-door guard (defense in depth; also enforced at the sign point in
   // buildPlaintextSubmission): a native multisig (0x40) tx must never reach the
   // full-sighash single-key path — it would be chain-rejected.
   assertNoMultisigExtension(req);
-  return submitPlaintextMlDsaTx(req, boundVaultId);
+  const built = await buildPlaintextSubmission({ txReq: req, boundVaultId });
+  if (onBuilt !== undefined) await onBuilt(built);
+  const { txHash, via } = await broadcastPlaintextTransaction(
+    built.signedTxWireHex,
+    built.innerTxHashHex,
+  );
+  return { txHash, via, innerSighashHex: built.innerSighashHex };
 }

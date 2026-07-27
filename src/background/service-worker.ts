@@ -311,6 +311,7 @@ import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
   submitMlDsaTx,
+  submitMlDsaTxWithHooks,
   broadcastPlaintextTransaction,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
@@ -318,6 +319,13 @@ import {
   testnetReverseNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
+import {
+  completeSendBinding,
+  deleteSendBinding,
+  isCompleted,
+  readSendBinding,
+  writeSendBinding,
+} from "./send-binding.js";
 import { hexToBytes, type NativeEvmTxFields } from "@monolythium/core-sdk/crypto";
 import { isFeatureEnabled } from "../shared/two-tier-features.js";
 import {
@@ -1954,18 +1962,84 @@ export async function recordSubmittedNonce(
 export async function submitTrackedTx(
   req: Omit<EthSendTxFields, "nonce"> & { nonce?: string },
   boundVaultId: string,
-  opts: { from: string; chainIdHex: string; preferredNonceHex?: string | undefined },
+  opts: {
+    from: string;
+    chainIdHex: string;
+    preferredNonceHex?: string | undefined;
+    /** Identifies one user CONFIRMATION. Present → this submit is idempotent
+     *  under that key. Absent → the path below is byte-identical to before. */
+    idempotencyKey?: string | undefined;
+  },
 ): Promise<{ txHash: string; via: string; nonceHex: string }> {
+  const key = opts.idempotencyKey;
+
+  // A repeat of the SAME confirmation. Never re-derive, never re-sign: ML-DSA
+  // is hedged, so a re-sign at this nonce would produce different bytes, and in
+  // the pooled window the chain answers ReplaceUnderpriced — which the fan-out
+  // classifies as a reject and throws, reporting a landed send as failed.
+  if (key !== undefined) {
+    const bound = await readSendBinding(key, Date.now());
+    if (bound !== null) {
+      if (isCompleted(bound)) {
+        // Already accepted once. There is nothing left to broadcast; answer
+        // with the hash the first attempt produced.
+        return { txHash: bound.txHashHex, via: bound.via, nonceHex: bound.nonceHex };
+      }
+      // Signed, outcome unknown. Re-broadcast the IDENTICAL bytes: the chain
+      // returns DuplicateKnown / AlreadyConsumed, both counted as acceptance,
+      // and the original hash comes back.
+      const replay = await broadcastPlaintextTransaction(
+        bound.wireHex,
+        bound.txHashHex,
+      );
+      await completeSendBinding(key, replay.txHash, replay.via, Date.now());
+      return { ...replay, nonceHex: bound.nonceHex };
+    }
+  }
+
   const nonceHex =
     opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
-  const { txHash, via } = await submitMlDsaTx(
-    { ...req, nonce: nonceHex },
-    boundVaultId,
-  );
-  // Success path only (a reject threw above). Awaited so a rapid next send sees
-  // it immediately. Once per logical tx — the fan-out already happened inside.
-  await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
-  return { txHash, via, nonceHex };
+
+  if (key === undefined) {
+    const { txHash, via } = await submitMlDsaTx(
+      { ...req, nonce: nonceHex },
+      boundVaultId,
+    );
+    // Success path only (a reject threw above). Awaited so a rapid next send sees
+    // it immediately. Once per logical tx — the fan-out already happened inside.
+    await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
+    return { txHash, via, nonceHex };
+  }
+
+  try {
+    const { txHash, via } = await submitMlDsaTxWithHooks(
+      { ...req, nonce: nonceHex },
+      boundVaultId,
+      // BEFORE broadcast, by construction: the hook fires between signing and
+      // the fan-out, so from this point on a dead worker leaves recoverable
+      // bytes rather than an unrepeatable transaction.
+      async (built) => {
+        await writeSendBinding(key, {
+          nonceHex,
+          wireHex: built.signedTxWireHex,
+          txHashHex: built.innerTxHashHex,
+          via: "",
+          ts: Date.now(),
+        });
+      },
+    );
+    await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
+    // Drop the wire bytes, keep the hash — see completeSendBinding.
+    await completeSendBinding(key, txHash, via, Date.now());
+    return { txHash, via, nonceHex };
+  } catch (e) {
+    // Nothing was accepted (broadcastPlaintextTransaction throws only when no
+    // operator took it), so the bytes are worthless and the nonce is unspent.
+    // Drop the binding so a later attempt signs afresh rather than replaying a
+    // transaction the chain never saw.
+    await deleteSendBinding(key);
+    throw e;
+  }
 }
 
 // ── Name-registry (0x110E) submit helpers ────────────────────────────────────
@@ -11637,6 +11711,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // verifies the assertion before signing (verifyPasskeyAssertionForSend).
         passkeyChallengeId?: unknown;
         passkeyAssertion?: unknown;
+        /** One user CONFIRMATION. Present → this submit is idempotent under
+         *  that key; a retry re-broadcasts the bytes already signed. */
+        idempotencyKey?: string;
       };
       if (
         typeof p?.to !== "string" ||
@@ -11945,7 +12022,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const { txHash, via, nonceHex } = await submitTrackedTx(
           txReq,
           boundVaultId,
-          { from: fromAddr, chainIdHex: p.chainIdHex },
+          {
+            from: fromAddr,
+            chainIdHex: p.chainIdHex,
+            // Present only once the popup mints one at Confirm; absent keeps
+            // the pre-existing path exactly.
+            ...(typeof p.idempotencyKey === "string" && p.idempotencyKey.length > 0
+              ? { idempotencyKey: p.idempotencyKey }
+              : {}),
+          },
         );
         // Part 3: SW-authoritative daily-cap count. A daily-mode passkey-
         // unlocked send was just submitted — append to the usage ledger here

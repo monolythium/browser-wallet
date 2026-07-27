@@ -137,7 +137,57 @@ vi.mock("./tx-mldsa.js", () => ({
       innerSighashHex: "0x" + "b".repeat(64),
     };
   }),
+  // The idempotent variant: identical, plus the between-sign-and-broadcast
+  // hook. It records what the binding map looked like at the MOMENT the hook
+  // returned, which is how the "written BEFORE broadcast" ordering is asserted
+  // rather than inferred.
+  submitMlDsaTxWithHooks: vi.fn(
+    async (
+      args: Record<string, unknown>,
+      _boundVaultId: string,
+      onBuilt?: (b: {
+        signedTxWireHex: string;
+        innerTxHashHex: string;
+      }) => Promise<void>,
+    ) => {
+      submitMlDsaCalls.push(args);
+      if (onBuilt !== undefined) {
+        await onBuilt({
+          signedTxWireHex: SIGNED_WIRE_HEX,
+          innerTxHashHex: SUBMITTED_TX_HASH,
+        });
+        bindingsAtBroadcast = JSON.parse(
+          JSON.stringify(storageLocal["mono.send.binding.v1"] ?? null),
+        ) as unknown;
+      }
+      if (submitFailure !== null) {
+        throw submitFailure;
+      }
+      return {
+        txHash: SUBMITTED_TX_HASH,
+        via: "mock-operator",
+        innerSighashHex: "0x" + "b".repeat(64),
+      };
+    },
+  ),
+  // Re-broadcast of stored bytes. Counts calls so a replay can be told apart
+  // from a fresh submit, and echoes the hash it was given — the real helper
+  // returns the ORIGINAL hash on `already-known`, which is the property the
+  // replay path depends on.
+  broadcastPlaintextTransaction: vi.fn(
+    async (wireHex: string, expectedTxHashHex: string) => {
+      rebroadcasts.push(wireHex);
+      return { txHash: expectedTxHashHex, via: "mock-operator-replay" };
+    },
+  ),
 }));
+
+const SIGNED_WIRE_HEX = "0x" + "f1".repeat(32);
+/** Snapshot of the binding map taken inside the submit hook, i.e. after the
+ *  binding was written and before the broadcast ran. */
+let bindingsAtBroadcast: unknown = null;
+/** Wire bytes handed to every re-broadcast, in order. */
+const rebroadcasts: string[] = [];
 
 const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
 const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
@@ -858,6 +908,138 @@ describe("keystore-status address privacy", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // keystore wipe-scope — default-deny (S6 #43 B2)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Send idempotency. The headline case is a worker that signed, broadcast,
+// recorded the nonce, and died BEFORE its reply landed: today's retry derives
+// max(committed, pending+1) = N+1 and broadcasts a SECOND VALID transaction.
+//
+// The key identifies one user CONFIRMATION. With one present, a repeat must
+// never re-derive or re-sign — it re-broadcasts the bytes already signed, or,
+// once those have landed, answers with the hash they produced.
+describe("send idempotency — a repeat of one confirmation never signs twice", () => {
+  const KEY = "confirm-abc";
+
+  function sendWith(key?: string) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0x000000000000000000000000000000000000dEaD",
+        valueWeiHex: "0x1",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        ...(key !== undefined ? { idempotencyKey: key } : {}),
+      },
+    }) as Promise<{ ok: boolean; txHash?: string; reason?: string }>;
+  }
+
+  beforeEach(() => {
+    bindingsAtBroadcast = null;
+    rebroadcasts.length = 0;
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  });
+
+  it("a repeat of the SAME confirmation does not sign again", async () => {
+    const first = await sendWith(KEY);
+    expect(first.ok).toBe(true);
+    const signsAfterFirst = submitMlDsaCalls.length;
+
+    const repeat = await sendWith(KEY);
+
+    expect(repeat.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(signsAfterFirst);
+    expect(repeat.txHash).toBe(first.txHash);
+  });
+
+  it("a DIFFERENT confirmation signs again — a genuine second send still works", async () => {
+    await sendWith(KEY);
+    const signsAfterFirst = submitMlDsaCalls.length;
+
+    const second = await sendWith("confirm-xyz");
+
+    expect(second.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(signsAfterFirst + 1);
+  });
+
+  it("the binding is written BEFORE the broadcast, not after", async () => {
+    await sendWith(KEY);
+    // Snapshot taken inside the hook, i.e. while the broadcast had not run.
+    const atBroadcast = bindingsAtBroadcast as Record<
+      string,
+      { wireHex: string }
+    > | null;
+    expect(atBroadcast).not.toBeNull();
+    expect(atBroadcast![KEY]!.wireHex).toBe(SIGNED_WIRE_HEX);
+  });
+
+  it("completion discards the wire bytes but keeps the hash", async () => {
+    const first = await sendWith(KEY);
+    const map = storageLocal["mono.send.binding.v1"] as Record<
+      string,
+      { wireHex: string; txHashHex: string }
+    >;
+    expect(map[KEY]!.wireHex).toBe("");
+    expect(map[KEY]!.txHashHex).toBe(first.txHash);
+  });
+
+  it("a repeat AFTER completion is answered without re-broadcasting", async () => {
+    await sendWith(KEY);
+    expect(rebroadcasts).toHaveLength(0);
+
+    await sendWith(KEY);
+
+    // Nothing left to broadcast — the answer came from the stored hash.
+    expect(rebroadcasts).toHaveLength(0);
+  });
+
+  it("a repeat before completion re-broadcasts the SAME bytes", async () => {
+    await sendWith(KEY);
+    // Put the binding back into the pre-completion state a dead worker would
+    // have left: bytes present, never completed.
+    (storageLocal["mono.send.binding.v1"] as Record<string, unknown>)[KEY] = {
+      nonceHex: "0x0",
+      wireHex: SIGNED_WIRE_HEX,
+      txHashHex: SUBMITTED_TX_HASH,
+      via: "",
+      ts: Date.now(),
+    };
+    const signsBefore = submitMlDsaCalls.length;
+
+    const repeat = await sendWith(KEY);
+
+    expect(repeat.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(signsBefore); // never re-signed
+    expect(rebroadcasts).toEqual([SIGNED_WIRE_HEX]); // the identical bytes
+    expect(repeat.txHash).toBe(SUBMITTED_TX_HASH); // the original hash
+  });
+
+  it("a FAILED broadcast drops the binding so a later attempt signs afresh", async () => {
+    submitFailure = new Error("no Monolythium Testnet operator accepted the broadcast");
+    const failed = await sendWith(KEY);
+    expect(failed.ok).toBe(false);
+
+    const map = storageLocal["mono.send.binding.v1"] as Record<string, unknown>;
+    expect(map[KEY]).toBeUndefined();
+
+    submitFailure = null;
+    const retryAfterFailure = await sendWith(KEY);
+    expect(retryAfterFailure.ok).toBe(true);
+  });
+
+  it("WITHOUT a key the path is unchanged — every send signs", async () => {
+    await sendWith();
+    const afterFirst = submitMlDsaCalls.length;
+    await sendWith();
+    expect(submitMlDsaCalls.length).toBe(afterFirst + 1);
+    expect(storageLocal["mono.send.binding.v1"]).toBeUndefined();
+  });
+});
 
 describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
   // The sensitive families (+ the vault entries) the wipe must remove, per the

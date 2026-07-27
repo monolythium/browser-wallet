@@ -15,14 +15,14 @@
 // followed by a retry is a real double-send path, and session storage is gone
 // by then. The cost is that for a short window the disk holds a VALID,
 // UNBROADCAST signed transaction — the user authorised it, so the exposure is
-// narrow, but it is why the binding is deleted the moment the send completes
-// rather than left to expire. The TTL only reaps orphans from a worker that
-// died before it could clean up.
+// narrow, but it is why the wire bytes are discarded the moment the broadcast
+// succeeds (`completeSendBinding`) rather than left to expire. The TTL only
+// reaps orphans from a worker that died before it could clean up.
 //
-// WHAT IT HOLDS. The nonce, the signed wire bytes, the canonical tx hash, and a
-// timestamp. Nothing else — no password, no mnemonic, no key material. The
-// wire bytes are the same bytes already handed to every operator, so they are
-// public by the time they matter. A test pins this shape.
+// WHAT IT HOLDS. The nonce, the signed wire bytes, the canonical tx hash, the
+// accepting operator, and a timestamp. Nothing else — no password, no mnemonic,
+// no key material. The wire bytes are the same bytes already handed to every
+// operator, so they are public by the time they matter. A test pins this shape.
 
 /** Versioned `chrome.storage.local` key for the binding map. */
 export const STORAGE_KEY_SEND_BINDINGS = "mono.send.binding.v1";
@@ -42,6 +42,9 @@ export interface SendBinding {
   wireHex: string;
   /** The canonical inner-tx hash the chain indexes. */
   txHashHex: string;
+  /** Operator that accepted the broadcast. Empty until completion; carried so
+   *  a replayed answer reports the same origin the first reply did. */
+  via: string;
   /** Written at bind time; the TTL is measured from here. */
   ts: number;
 }
@@ -58,6 +61,7 @@ function isWellFormed(v: unknown): v is SendBinding {
     typeof b.nonceHex === "string" &&
     typeof b.wireHex === "string" &&
     typeof b.txHashHex === "string" &&
+    typeof b.via === "string" &&
     typeof b.ts === "number"
   );
 }
@@ -134,10 +138,54 @@ export async function writeSendBinding(
   await saveMap(withBinding(pruneExpired(map, binding.ts), key, binding));
 }
 
-/** Drop `key` — called the moment a send completes, success or failure, so the
- *  signed bytes do not sit on disk waiting for the TTL. */
+/** Drop `key` — used when a send FAILED to broadcast, so the signed bytes do
+ *  not sit on disk waiting for the TTL. On the success path use
+ *  {@link completeSendBinding} instead; see the note there. */
 export async function deleteSendBinding(key: string): Promise<void> {
   const map = await loadMap();
   if (!(key in map)) return;
   await saveMap(withoutBinding(map, key));
+}
+
+/**
+ * Retire `key` once the broadcast has SUCCEEDED: discard the wire bytes, keep
+ * the resulting hash.
+ *
+ * D1 asked for eager deletion on completion, to bound how long the disk holds a
+ * valid unbroadcast signed transaction. Deleting the row outright would reopen
+ * the very failure this mechanism exists to close: the headline case is a
+ * worker that finished everything and died BEFORE its reply landed, so a retry
+ * that finds nothing takes the normal path and derives the next nonce — a
+ * second transaction.
+ *
+ * So completion drops the sensitive half and keeps the answer. `wireHex` is
+ * emptied, which satisfies D1's actual concern — no unbroadcast signed
+ * transaction remains on disk — while a retry can still be answered with the
+ * original hash instead of signing again. The TTL then reaps the stub.
+ */
+export async function completeSendBinding(
+  key: string,
+  txHashHex: string,
+  via: string,
+  now: number,
+): Promise<void> {
+  const map = await loadMap();
+  const existing = map[key];
+  if (existing === undefined) return;
+  await saveMap(
+    withBinding(map, key, {
+      nonceHex: existing.nonceHex,
+      wireHex: "",
+      txHashHex,
+      via,
+      ts: now,
+    }),
+  );
+}
+
+/** True once the send behind this binding has landed — the bytes are gone and
+ *  only the hash remains. A retry is answered from `txHashHex` and must NOT be
+ *  re-broadcast (there is nothing left to broadcast). */
+export function isCompleted(binding: SendBinding): boolean {
+  return binding.wireHex.length === 0;
 }

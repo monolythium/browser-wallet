@@ -14,7 +14,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   SEND_BINDING_TTL_MS,
   STORAGE_KEY_SEND_BINDINGS,
+  completeSendBinding,
   deleteSendBinding,
+  isCompleted,
   pruneExpired,
   readSendBinding,
   readValidBinding,
@@ -28,7 +30,7 @@ import {
 const T0 = 1_700_000_000_000;
 
 function bindingAt(ts: number): SendBinding {
-  return { nonceHex: "0x7", wireHex: "0xdeadbeef", txHashHex: "0xabc", ts };
+  return { nonceHex: "0x7", wireHex: "0xdeadbeef", txHashHex: "0xabc", via: "", ts };
 }
 
 describe("SEND_BINDING_TTL_MS", () => {
@@ -145,6 +147,7 @@ describe("storage wrappers", () => {
       "nonceHex",
       "ts",
       "txHashHex",
+      "via",
       "wireHex",
     ]);
   });
@@ -163,5 +166,78 @@ describe("storage wrappers", () => {
 
   it("reading an absent store yields null, not a throw", async () => {
     expect(await readSendBinding("k1", T0)).toBeNull();
+  });
+});
+
+// Completion. D1 asked for eager deletion on completion; deleting the row
+// outright would reopen the headline case (worker finished, died before
+// replying, retry finds nothing and derives the next nonce). So completion
+// discards the WIRE BYTES — D1's actual concern, an unbroadcast signed
+// transaction on disk — and keeps the hash so a retry can be answered.
+describe("completeSendBinding — drops the bytes, keeps the answer", () => {
+  let local: Record<string, unknown>;
+
+  beforeEach(() => {
+    local = {};
+    (globalThis as { chrome?: unknown }).chrome = {
+      storage: {
+        local: {
+          get: (keys: string[], cb: (r: Record<string, unknown>) => void) => {
+            const out: Record<string, unknown> = {};
+            for (const k of keys) if (k in local) out[k] = local[k];
+            cb(out);
+          },
+          set: (items: Record<string, unknown>, cb: () => void) => {
+            Object.assign(local, items);
+            cb();
+          },
+        },
+      },
+    };
+  });
+
+  it("clears the wire bytes so no unbroadcast signed tx remains on disk", async () => {
+    await writeSendBinding("k1", bindingAt(T0));
+    await completeSendBinding("k1", "0xlanded", "op-1", T0 + 5);
+    const stored = (local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap).k1!;
+    expect(stored.wireHex).toBe("");
+  });
+
+  it("keeps the landed hash so a retry is answered, not re-sent", async () => {
+    await writeSendBinding("k1", bindingAt(T0));
+    await completeSendBinding("k1", "0xlanded", "op-1", T0 + 5);
+    const after = await readSendBinding("k1", T0 + 10);
+    expect(after).not.toBeNull();
+    expect(after!.txHashHex).toBe("0xlanded");
+    expect(isCompleted(after!)).toBe(true);
+  });
+
+  it("a binding that has NOT completed is not reported as completed", async () => {
+    await writeSendBinding("k1", bindingAt(T0));
+    expect(isCompleted((await readSendBinding("k1", T0 + 1))!)).toBe(false);
+  });
+
+  it("completing an unknown key is a no-op, not a resurrection", async () => {
+    await completeSendBinding("ghost", "0xlanded", "op-1", T0);
+    expect(await readSendBinding("ghost", T0)).toBeNull();
+  });
+
+  it("the completion stub still expires — the TTL reaps it", async () => {
+    await writeSendBinding("k1", bindingAt(T0));
+    await completeSendBinding("k1", "0xlanded", "op-1", T0);
+    expect(await readSendBinding("k1", T0 + SEND_BINDING_TTL_MS + 1)).toBeNull();
+  });
+
+  it("a completion record still carries no secret-bearing field", async () => {
+    await writeSendBinding("k1", bindingAt(T0));
+    await completeSendBinding("k1", "0xlanded", "op-1", T0);
+    const stored = (local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap).k1!;
+    expect(Object.keys(stored).sort()).toEqual([
+      "nonceHex",
+      "ts",
+      "txHashHex",
+      "via",
+      "wireHex",
+    ]);
   });
 });
