@@ -13,7 +13,16 @@
 // path rather than a private predicate.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bgKeystoreStatus, bgVaultRemove, bgWalletSendTx } from "./bg";
+import {
+  bgKeystoreStatus,
+  bgMultisigExecute,
+  bgVaultRemove,
+  bgWalletNameAccept,
+  bgWalletNamePropose,
+  bgWalletNameRegister,
+  bgWalletSendTx,
+  bgWalletSubmitMrvNativePlan,
+} from "./bg";
 
 type Outcome = { error: string } | { result: unknown };
 
@@ -228,6 +237,95 @@ describe("the send op is excluded from the blanket retry (partial mitigation)", 
     const ok = { hasVault: true, unlocked: true } as unknown;
     outcomes = [{ error: CHANNEL_CLOSED }, { result: ok }];
 
+    await expect(bgKeystoreStatus()).resolves.toEqual(ok);
+    expect(calls).toBe(2);
+  });
+});
+
+// The remaining submit ops, classified rather than blanket-excluded.
+//
+// The retry is the trigger; the PENDING-NONCE TRACKER is the cause. It turns a
+// retry from "same nonce, chain-rejected" into "next nonce, accepted". So an op
+// only needs excluding when it BOTH rides the retry AND takes its nonce from
+// `nextNonceHex`. An op that resubmits at the same nonce is fail-safe: the chain
+// rejects or dedupes it, and its retry is a genuine recovery worth keeping.
+//
+// Excluded here (all reach nextNonceHex through submitTrackedTx with no
+// preferredNonceHex): multisig-execute, wallet-name-register / -propose /
+// -accept.
+//
+// Deliberately NOT excluded — see the controls at the end:
+//   wallet-mrv-submit-plan  — passes preferredNonceHex from the plan's
+//                             build-time nonce, so a retry reuses that nonce.
+//   native-multisig-send    — reads only the MONOM account's committed nonce and
+//                             bypasses submitTrackedTx entirely.
+describe("tracker-backed submit ops are excluded; fail-safe ones are not", () => {
+  const NAME_ARGS = ["alice.mono", "0x10F2C"] as const;
+
+  it("does NOT resend multisig-execute", async () => {
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: { ok: true } }];
+    await expect(
+      bgMultisigExecute({ vaultId: "v1", proposalId: "p1" }),
+    ).rejects.toThrow(/message channel closed/);
+    expect(calls).toBe(1);
+  });
+
+  it("does NOT resend wallet-name-register", async () => {
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: { ok: true } }];
+    await expect(bgWalletNameRegister(...NAME_ARGS)).rejects.toThrow(
+      /message channel closed/,
+    );
+    expect(calls).toBe(1);
+  });
+
+  it("does NOT resend wallet-name-propose", async () => {
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: { ok: true } }];
+    await expect(
+      bgWalletNamePropose("alice.mono", "0xdead", "0x10F2C"),
+    ).rejects.toThrow(/message channel closed/);
+    expect(calls).toBe(1);
+  });
+
+  it("does NOT resend wallet-name-accept", async () => {
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: { ok: true } }];
+    await expect(bgWalletNameAccept(...NAME_ARGS)).rejects.toThrow(
+      /message channel closed/,
+    );
+    expect(calls).toBe(1);
+  });
+
+  it("SUCCESS PATH UNCHANGED: an excluded op still resolves on the first attempt", async () => {
+    const ok = { ok: true, txHash: "0xabc", via: "operator-1" } as unknown;
+    outcomes = [{ result: ok }];
+    await expect(bgWalletNameRegister(...NAME_ARGS)).resolves.toEqual(ok);
+    expect(calls).toBe(1);
+  });
+
+  it("SUCCESS PATH UNCHANGED: an excluded op still delivers a refusal verbatim", async () => {
+    const refusal = { ok: false, reason: "name already taken" } as unknown;
+    outcomes = [{ result: refusal }];
+    await expect(bgMultisigExecute({ vaultId: "v1", proposalId: "p1" })).resolves.toEqual(refusal);
+    expect(calls).toBe(1);
+  });
+
+  it("CONTROL: wallet-mrv-submit-plan STILL retries — it reuses the plan's nonce, so it is fail-safe", async () => {
+    // Excluding this would trade a working recovery for a dropped submit and
+    // gain nothing: the resend carries the same build-time nonce, so the chain
+    // rejects or dedupes it rather than accepting a second transaction.
+    const ok = { ok: true, txHash: "0xabc", via: "op-1" } as unknown;
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: ok }];
+    await expect(
+      bgWalletSubmitMrvNativePlan({
+        plan: { nonce: "0x7" } as never,
+        chainIdHex: "0x10F2C",
+      }),
+    ).resolves.toBeDefined();
+    expect(calls).toBe(2);
+  });
+
+  it("CONTROL: a read op still retries — the policy narrowed, it did not disappear", async () => {
+    const ok = { hasVault: true, unlocked: true } as unknown;
+    outcomes = [{ error: CHANNEL_CLOSED }, { result: ok }];
     await expect(bgKeystoreStatus()).resolves.toEqual(ok);
     expect(calls).toBe(2);
   });

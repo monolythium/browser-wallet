@@ -291,7 +291,39 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
 //
 // Closing it needs an idempotency token so a retry is recognisable as the same
 // logical send. That is planned separately; do not approximate it here.
-const NO_RETRY_POPUP_OPS = new Set<string>(["vault-remove", "wallet-send-tx"]);
+//
+// The same reasoning selects the other submit ops — but it SELECTS, it does not
+// sweep. The retry is the trigger; the pending-nonce tracker is the cause,
+// because it turns a retry from "same nonce, chain-rejected" into "next nonce,
+// accepted". An op therefore needs excluding only when BOTH hold: it rides this
+// retry, and it takes its nonce from `nextNonceHex`.
+//
+// Excluded on that test (all reach `nextNonceHex` through `submitTrackedTx`
+// with no `preferredNonceHex`):
+//   multisig-execute, wallet-name-register, wallet-name-propose,
+//   wallet-name-accept.
+//
+// DELIBERATELY LEFT ON THE RETRY, because a resend reuses the SAME nonce and the
+// chain rejects or dedupes it — for these two the retry is a real recovery and
+// removing it would trade a working one for a dropped submit:
+//   wallet-mrv-submit-plan — passes `preferredNonceHex` from the plan's
+//     build-time nonce, which the resend carries unchanged.
+//   native-multisig-send   — reads only the MONOM account's committed nonce and
+//     never routes through `submitTrackedTx`; its own comment records that a
+//     reused nonce is a chain-reject and therefore fail-safe.
+//
+// Same residual as the send op, for every entry here: this converts a silent
+// automatic double-submit into a visible failure the user can check before
+// retrying. It does NOT close the path — a manual retry advances the nonce
+// identically.
+const NO_RETRY_POPUP_OPS = new Set<string>([
+  "vault-remove",
+  "wallet-send-tx",
+  "multisig-execute",
+  "wallet-name-register",
+  "wallet-name-propose",
+  "wallet-name-accept",
+]);
 
 function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
   // Single retry against the MV3 idle/wake race. Pure transport-
