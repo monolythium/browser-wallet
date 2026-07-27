@@ -1203,6 +1203,15 @@ export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
   chainIdHex: string;
+  /** Identifies one user CONFIRMATION, not one attempt — that distinction is
+   *  the whole mechanism. Retrying the same confirmation must carry the same
+   *  key so the SW re-broadcasts the bytes it already signed; going back to the
+   *  form and confirming again must mint a fresh one so a genuinely second send
+   *  takes the normal path and gets its own nonce.
+   *
+   *  Optional: omit it and the field never reaches the payload, so the SW sees
+   *  exactly the shape it always has. */
+  idempotencyKey?: string;
   /** Optional EVM calldata for contract calls; omit for native LYTH
    *  transfers. The SW forwards the bytes verbatim into the
    *  ML-DSA-65 envelope path; signing semantics are unchanged. */
