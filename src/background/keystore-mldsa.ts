@@ -821,14 +821,26 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
  * by `mono.`-prefix scan rather than through this helper and therefore takes the
  * same lock via `vaultContainerLockKey()`.
  *
- * WHAT IS NOT ENFORCED — read this before adding a sixteenth writer. The raw
- * `chrome.storage.local.set` for this key is confined to this one non-exported
- * function, so no code outside the module can write the container. But nothing
- * stops a NEW writer inside the module from calling this helper without taking
- * the lock first: enrolment is a convention, not a guarantee. Making it a
- * guarantee needs a lock-depth counter asserted here, which in turn needs every
- * call site to go through a `withContainerLock` wrapper — deferred, not done.
- * Until then, the rule above is what keeps the container consistent.
+ * WHAT IS NOT ENFORCED — read this before adding a sixteenth writer. Two gaps,
+ * and the second was previously described here as closed when it is not:
+ *
+ *   1. Nothing stops a NEW writer inside this module from calling this helper
+ *      without taking the lock, or from taking the lock and then persisting a
+ *      snapshot read BEFORE it. The second is the dangerous one: it looks
+ *      correct in review, because the lock is visibly present.
+ *
+ *   2. This function is NOT private to the module. It is re-exported on
+ *      `__internalV4Multi` at the foot of this file, so any module can import it
+ *      and write the container unlocked. An earlier version of this note claimed
+ *      the opposite — "confined to this one non-exported function, so no code
+ *      outside the module can write the container". That was false. Today only
+ *      `keystore-mldsa.test.ts` imports it, so nothing exploits the gap, but the
+ *      door is ajar rather than shut.
+ *
+ * Closing either one needs every call site to go through a primitive that owns
+ * the lock, the read and the write — deferred, not done. Until then, the rule
+ * above is what keeps the container consistent, and this note claims no more
+ * than that.
  */
 async function saveVaultsContainerV4(
   container: VaultsContainerV4,
