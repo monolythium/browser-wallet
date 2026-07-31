@@ -30,6 +30,21 @@ import {
 const T0 = 1_700_000_000_000;
 
 function bindingAt(ts: number): SendBinding {
+  return {
+    nonceHex: "0x7",
+    wireHex: "0xdeadbeef",
+    txHashHex: "0xabc",
+    via: "",
+    ts,
+    from: "0xsender",
+    chainIdHex: "0x10F2C",
+  };
+}
+
+/** A record in the pre-`from`/`chainIdHex` shape — what is already on disk when
+ *  this change lands. Used to prove those records stay valid and keep replaying,
+ *  which is why the new fields are optional and unvalidated. */
+function legacyBindingAt(ts: number): SendBinding {
   return { nonceHex: "0x7", wireHex: "0xdeadbeef", txHashHex: "0xabc", via: "", ts };
 }
 
@@ -140,16 +155,36 @@ describe("storage wrappers", () => {
 
   it("stores ONLY signed-transaction fields — never a password or mnemonic", async () => {
     // The binding is written to DISK. Pin its shape so no future field can
-    // smuggle a secret into local storage.
+    // smuggle a secret into local storage. Every key here is a public chain
+    // value or a public address.
+    //
+    // PAIRED with "a completion record carries the same fields" below. The two
+    // must move together: updating only this one would leave a field that
+    // survives the bind and vanishes at completion, which is the one state an
+    // account-level lookup actually reads.
     await writeSendBinding("k1", bindingAt(T0));
     const stored = (local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap).k1!;
     expect(Object.keys(stored).sort()).toEqual([
+      "chainIdHex",
+      "from",
       "nonceHex",
       "ts",
       "txHashHex",
       "via",
       "wireHex",
     ]);
+  });
+
+  it("a record written before the account fields existed is still valid", async () => {
+    // Those fields are optional and unvalidated on purpose. If they were
+    // required, every record already on disk would read as null — and null means
+    // the caller signs afresh and derives a NEW nonce, which is the double-send
+    // this store exists to prevent.
+    await writeSendBinding("k1", legacyBindingAt(T0));
+    const read = await readSendBinding("k1", T0 + 1);
+    expect(read).not.toBeNull();
+    expect(read!.wireHex).toBe("0xdeadbeef");
+    expect(read!.from).toBeUndefined();
   });
 
   it("deletes eagerly — the entry is gone, not just expired", async () => {
@@ -228,16 +263,37 @@ describe("completeSendBinding — drops the bytes, keeps the answer", () => {
     expect(await readSendBinding("k1", T0 + SEND_BINDING_TTL_MS + 1)).toBeNull();
   });
 
-  it("a completion record still carries no secret-bearing field", async () => {
+  it("a completion record carries the same fields, and still no secret", async () => {
+    // PAIRED with "stores ONLY signed-transaction fields" above — see the note
+    // there. Completion used to REBUILD the record field by field, so anything
+    // not named in that literal was silently dropped. This assertion is what
+    // proves the record is preserved rather than reconstructed.
     await writeSendBinding("k1", bindingAt(T0));
     await completeSendBinding("k1", "0xlanded", "op-1", T0);
     const stored = (local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap).k1!;
     expect(Object.keys(stored).sort()).toEqual([
+      "chainIdHex",
+      "from",
       "nonceHex",
       "ts",
       "txHashHex",
       "via",
       "wireHex",
     ]);
+  });
+
+  it("the account fields SURVIVE completion — the stub is what a lookup reads", async () => {
+    // The values, not just the keys. A completed stub is how "did my send land?"
+    // is answered, so losing the account here would make that question
+    // unanswerable for the one record that has the answer.
+    await writeSendBinding("k1", bindingAt(T0));
+    await completeSendBinding("k1", "0xlanded", "op-1", T0);
+    const stored = (local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap).k1!;
+    expect(stored.from).toBe("0xsender");
+    expect(stored.chainIdHex).toBe("0x10F2C");
+    expect(stored.nonceHex).toBe("0x7");
+    // …and completion still did its job.
+    expect(stored.wireHex).toBe("");
+    expect(stored.txHashHex).toBe("0xlanded");
   });
 });

@@ -20,9 +20,14 @@
 // reaps orphans from a worker that died before it could clean up.
 //
 // WHAT IT HOLDS. The nonce, the signed wire bytes, the canonical tx hash, the
-// accepting operator, and a timestamp. Nothing else — no password, no mnemonic,
-// no key material. The wire bytes are the same bytes already handed to every
-// operator, so they are public by the time they matter. A test pins this shape.
+// accepting operator, a timestamp, and — for an account-level lookup — the
+// sending address and the chain id. Nothing else: no password, no mnemonic, no
+// key material. Every field is either a public chain value or a public address;
+// the wire bytes are the same bytes already handed to every operator, so they
+// are public by the time they matter. Two tests pin this shape — one on the
+// written record and one on the completion stub, and they must move together:
+// a field that survives the bind but not the completion is invisible to exactly
+// the lookup the completion stub exists to serve.
 
 /** Versioned `chrome.storage.local` key for the binding map. */
 export const STORAGE_KEY_SEND_BINDINGS = "mono.send.binding.v1";
@@ -35,8 +40,19 @@ export const SEND_BINDING_TTL_MS = 15 * 60 * 1000;
 
 /** The signed transaction produced for one confirmation. */
 export interface SendBinding {
-  /** The nonce that was signed. Returned to the caller so a re-broadcast still
-   *  reports the nonce the transaction actually carries. */
+  /** The nonce carried by the signed bytes in `wireHex`.
+   *
+   *  ITS PROVENANCE DIFFERS BY SUBMIT PATH, and one field is safe ONLY because
+   *  nothing interprets the value. The tracked path takes it from the local
+   *  pending-nonce tracker; a direct-broadcast path would take it from the
+   *  sending account's own committed nonce. Today it is stored, handed back to
+   *  the caller, and used as pending-row display metadata — never compared,
+   *  never sorted, never used to look anything up, and never fed to
+   *  `recordSubmittedNonce` (the replay returns before reaching it).
+   *
+   *  THE DAY A CONSUMER NEEDS TO INTERPRET IT, this field must first carry its
+   *  provenance — a tagged union, not a second nonce field, because a second
+   *  field would make the replay branch on which one to trust. */
   nonceHex: string;
   /** The signed wire bytes, re-broadcast verbatim on a retry. */
   wireHex: string;
@@ -47,6 +63,23 @@ export interface SendBinding {
   via: string;
   /** Written at bind time; the TTL is measured from here. */
   ts: number;
+  /** The TRANSACTION'S SENDER — scoping for an account-level lookup ("is there
+   *  an unresolved send for this account?").
+   *
+   *  It is the sender, not the initiating vault, because a field named for an
+   *  account must hold the account. The consequence is recorded rather than
+   *  hidden: a native-multisig send binds under the `monom` address, so it will
+   *  NOT be found by a lookup scoped to the user's own address. That path is
+   *  developer-gated with no users today; when it has some, the lookup gets
+   *  extended and those surfaces need their own treatment regardless.
+   *
+   *  OPTIONAL, and deliberately absent from `isWellFormed`: records written
+   *  before this field existed stay valid and keep replaying by key. They are
+   *  merely invisible to the account lookup, and age out within the TTL. */
+  from?: string;
+  /** The chain the send was made on — the second half of the account lookup.
+   *  Same absence semantics as `from`. */
+  chainIdHex?: string;
 }
 
 export type SendBindingMap = Record<string, SendBinding>;
@@ -57,6 +90,11 @@ export type SendBindingMap = Record<string, SendBinding>;
 function isWellFormed(v: unknown): v is SendBinding {
   if (v === null || typeof v !== "object") return false;
   const b = v as Partial<SendBinding>;
+  // OPTIONAL FIELDS ARE DELIBERATELY NOT CHECKED. Requiring one would invalidate
+  // every record written before it existed — and "invalid" here means the caller
+  // signs afresh and derives a new nonce, which is the double-send this store
+  // exists to prevent. Leaving them unchecked means an older record still
+  // replays correctly and is only invisible to the newer lookup.
   return (
     typeof b.nonceHex === "string" &&
     typeof b.wireHex === "string" &&
@@ -172,9 +210,15 @@ export async function completeSendBinding(
   const map = await loadMap();
   const existing = map[key];
   if (existing === undefined) return;
+  // PRESERVE the record and override only what completion changes. This was a
+  // field-by-field rebuild, which silently dropped anything not named here — so
+  // a field could survive the bind and vanish at completion, and the completed
+  // stub is exactly what an account-level lookup reads ("did my send land?").
+  // The spread fixes the PATTERN: every future field is carried without anyone
+  // having to remember to add it.
   await saveMap(
     withBinding(map, key, {
-      nonceHex: existing.nonceHex,
+      ...existing,
       wireHex: "",
       txHashHex,
       via,
