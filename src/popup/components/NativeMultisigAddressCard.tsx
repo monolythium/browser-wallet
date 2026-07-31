@@ -23,6 +23,11 @@ import type { CSSProperties } from "react";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes, bytesToHex } from "@monolythium/core-sdk/crypto";
 
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
 import { deriveNativeMultisigAddress } from "../../shared/native-multisig.js";
 import type { MultisigVaultMeta } from "../../shared/multisig.js";
 import { bech32mDisplay } from "../../shared/bech32m.js";
@@ -254,7 +259,9 @@ function NativeMultisigSendForm({
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [result, setResult] = useState<
+    { ok: true; text: string } | { ok: false; failure: SubmitFailure } | null
+  >(null);
 
   const submit = () => {
     setBusy(true);
@@ -264,18 +271,31 @@ function NativeMultisigSendForm({
       try {
         valueWeiHex = "0x" + lythToLythoshi(amount.trim() || "0").toString(16);
       } catch {
-        setResult({ ok: false, text: "Invalid amount." });
+        setResult({ ok: false, failure: verbatimFailure(undefined, "Invalid amount.") });
         setBusy(false);
         return;
       }
-      const r = await bgNativeMultisigSend({
-        vaultId,
-        to: to.trim(),
-        valueWeiHex,
-        chainIdHex: chainId,
-      });
-      setResult(r.ok ? { ok: true, text: `Broadcast: ${r.txHash}` } : { ok: false, text: r.reason ?? "Send failed." });
-      setBusy(false);
+      try {
+        const r = await bgNativeMultisigSend({
+          vaultId,
+          to: to.trim(),
+          valueWeiHex,
+          chainIdHex: chainId,
+        });
+        setResult(
+          r.ok
+            ? { ok: true, text: `Broadcast: ${r.txHash}` }
+            : { ok: false, failure: verbatimFailure(r.reason, "Send failed.") },
+        );
+      } catch (e) {
+        // Previously uncaught: neither setResult nor setBusy ran, so the button
+        // stayed disabled on "Broadcasting…" for good with both inputs frozen and
+        // no error anywhere. This op moves value, so a stuck form with no
+        // explanation is the worst combination on this card.
+        setResult({ ok: false, failure: submitThrowFailure(e) });
+      } finally {
+        setBusy(false);
+      }
     })();
   };
 
@@ -317,7 +337,18 @@ function NativeMultisigSendForm({
             color: result.ok ? "var(--fg-200)" : "var(--err)",
           }}
         >
-          {result.text}
+          {result.ok ? (
+            result.text
+          ) : (
+            <>
+              {result.failure.headline !== null && (
+                <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                  {result.failure.headline}
+                </div>
+              )}
+              {result.failure.body}
+            </>
+          )}
         </div>
       )}
     </div>
