@@ -1166,13 +1166,10 @@ export async function renameVaultV4(
   const trimmed = newLabel.trim();
   if (trimmed.length === 0) throw new Error("label must be non-empty");
   if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
     const target = container.vaults.find((v) => v.id === vaultId);
     if (!target) throw new Error("unknown vault id");
     target.label = trimmed;
-    await saveVaultsContainerV4(container);
   });
 }
 
@@ -1797,9 +1794,7 @@ export async function generateSlhDsaBackupV4(
     throw new Error("keystore locked");
   }
   const mek = mekCache;
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
     if (!v) throw new Error("unknown vault id");
     if (v.slhDsaBackup && v.slhDsaBackup.publicKey.length > 0) {
@@ -1820,7 +1815,6 @@ export async function generateSlhDsaBackupV4(
     }
 
     v.slhDsaBackup = cloneBackupForWrite(prepared.backup);
-    await saveVaultsContainerV4(container);
     // Return the in-memory record (with mnemonic) — the caller
     // forwards mnemonic to the popup and lets it fall out of scope.
     return prepared;
@@ -1907,9 +1901,7 @@ export async function setSlhDsaRegistrationStatusV4(
     error?: string | null;
   },
 ): Promise<SlhDsaBackup> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
   const v = container.vaults.find((rec) => rec.id === vaultId);
   if (!v) throw new Error("unknown vault id");
   if (!v.slhDsaBackup) {
@@ -1957,7 +1949,6 @@ export async function setSlhDsaRegistrationStatusV4(
   }
 
   v.slhDsaBackup = cloneBackupForWrite(next);
-  await saveVaultsContainerV4(container);
   return cloneBackupForRead(v.slhDsaBackup) ?? next;
   });
 }
