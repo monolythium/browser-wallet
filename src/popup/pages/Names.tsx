@@ -90,7 +90,21 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
 
   // Live quote on a short debounce whenever the client-valid name changes.
   useEffect(() => {
-    setSubmit({ status: "idle" });
+    // Editing the name invalidates a stale confirm card or error — that is what
+    // this reset is for, and it still happens.
+    //
+    // It must NOT reset a success receipt. The success path clears the input
+    // (`setName("")`) so the form comes back empty, which changes `trimmed` and
+    // re-runs this effect one commit later. An unconditional reset therefore
+    // wiped the "done" state — and with it the transaction hash — roughly a
+    // frame after it rendered, leaving a fee-paying registration with no
+    // confirmation the user could read. The receipt is dismissed by its own
+    // "Register another" button, not by the input clear that produced it.
+    //
+    // Functional updater on purpose: reading `submit` here would mean listing it
+    // as a dependency, and every submit-state change would then re-trigger the
+    // debounced quote.
+    setSubmit((prev) => (prev.status === "done" ? prev : { status: "idle" }));
     if (!clientValid) {
       setQuote({ status: "idle" });
       return;
