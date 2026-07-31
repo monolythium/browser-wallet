@@ -180,6 +180,14 @@ vi.mock("./tx-mldsa.js", () => ({
       return { txHash: expectedTxHashHex, via: "mock-operator-replay" };
     },
   ),
+  // The real structural predicate, not a stub: this mock replaces the module
+  // wholesale, so omitting it would make the SW call `undefined` on the submit
+  // failure path. Faithful here means an unmarked error reads as a genuine
+  // decline, which is what the failure tests below rely on.
+  bytesMayBeLive: (err: unknown) =>
+    !!err &&
+    typeof err === "object" &&
+    (err as { bytesMayBeLive?: boolean }).bytesMayBeLive === true,
 }));
 
 const SIGNED_WIRE_HEX = "0x" + "f1".repeat(32);

@@ -314,6 +314,7 @@ import {
   submitMlDsaTx,
   submitMlDsaTxWithHooks,
   broadcastPlaintextTransaction,
+  bytesMayBeLive,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   testnetResolveNameConsensus,
@@ -1993,6 +1994,10 @@ export async function submitTrackedTx(
     key,
     now: () => Date.now(),
     rebroadcast: broadcastPlaintextTransaction,
+    // The fan-out marks a failure whose bytes may already have reached an
+    // operator; the binding is kept in that case so a retry re-broadcasts them
+    // instead of signing a second transaction at the next nonce.
+    bytesMayBeLive,
     submit: async (bind) => {
       const nonceHex =
         opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));

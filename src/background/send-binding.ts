@@ -281,11 +281,20 @@ export async function withSendBinding(args: {
     wireHex: string,
     txHashHex: string,
   ) => Promise<{ txHash: string; via: string }>;
+  /** True when a failed submit may already have put its bytes on the network.
+   *
+   *  INJECTED, like `rebroadcast`, and for the same reason: the answer is
+   *  transport knowledge and this module stays free of transport imports.
+   *
+   *  REQUIRED, deliberately — neither default is safe. Defaulting to `false`
+   *  reinstates the double-send this closes; defaulting to `true` would keep
+   *  dead bytes bound and replay them at a stale nonce. A caller must decide. */
+  bytesMayBeLive: (err: unknown) => boolean;
   submit: (
     bind: (fields: SendBindingFields) => Promise<void>,
   ) => Promise<SendBindingResult>;
 }): Promise<SendBindingResult> {
-  const { key, now, rebroadcast, submit } = args;
+  const { key, now, rebroadcast, bytesMayBeLive, submit } = args;
 
   const bound = await readSendBinding(key, now());
   if (bound !== null) {
@@ -310,10 +319,21 @@ export async function withSendBinding(args: {
     await completeSendBinding(key, result.txHash, result.via, now());
     return result;
   } catch (e) {
-    // Nothing was accepted, so the bytes are worthless and the nonce is unspent.
-    // Drop the binding so a later attempt signs afresh rather than replaying a
-    // transaction the chain never saw.
-    await deleteSendBinding(key);
+    // DELETE ONLY ON A GENUINE DECLINE. When every operator refused admission —
+    // or nothing was ever sent — the bytes are worthless and the nonce unspent,
+    // so dropping the binding is right: a later attempt must sign afresh rather
+    // than replay a transaction the chain never saw at a nonce that has moved on.
+    //
+    // But a failure is NOT proof of non-admission. A transport fault can follow
+    // an operator taking the transaction, and one operator is enough for it to be
+    // live and gossiping. Deleting there loses the only record of a real
+    // transaction, and the retry signs a SECOND one at the next nonce.
+    //
+    // So the failure direction is chosen: keeping a binding that need not have
+    // been kept only means the retry re-broadcasts bytes the chain never saw,
+    // which is exactly what a fresh sign would have done. Keeping is harmless;
+    // deleting is not.
+    if (!bytesMayBeLive(e)) await deleteSendBinding(key);
     throw e;
   }
 }

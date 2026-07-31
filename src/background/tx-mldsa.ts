@@ -984,6 +984,49 @@ function stampSubmitError(
   return err;
 }
 
+/**
+ * Mark a broadcast failure whose signed bytes MAY ALREADY BE ON THE NETWORK.
+ *
+ * `transient` is NOT a decline. It is returned in four places, and in every one
+ * the signed bytes had already been handed to `fetch`: a throwing fetch, a
+ * non-OK response, an unparseable body, and a bare (non-mempool) error body. The
+ * last three prove the request reached the operator and a response came back —
+ * an admission followed by a proxy error looks exactly like this.
+ *
+ * `reject` and `mailbox-full` ARE declines: the operator said it did not take
+ * this transaction. Only `transient` is an absence of information, and absence
+ * of information is not evidence of non-admission.
+ *
+ * WHY THIS EXISTS. A caller that discards a signed transaction on failure must
+ * not discard it here. One operator admitting is enough for the transaction to
+ * be live and gossiping, so a later attempt that signs afresh at the next nonce
+ * is a SECOND transaction — the funds move twice.
+ *
+ * Like `markPostVerificationFailure`, this is a POSITIVE signal tied to the
+ * raise site rather than a message match: the property is true because of WHERE
+ * it is raised, which no message can capture.
+ *
+ * It carries a BOOLEAN and nothing else — no wire bytes, no hash, no operator
+ * payload. Handlers surface `(e as Error).message` only, so it never crosses the
+ * IPC boundary.
+ */
+export function markBytesMayBeLive(err: unknown): unknown {
+  if (err && typeof err === "object") {
+    (err as { bytesMayBeLive?: boolean }).bytesMayBeLive = true;
+  }
+  return err;
+}
+
+/** True when a failed broadcast may already have reached an operator, so its
+ *  signed bytes must be kept rather than discarded. */
+export function bytesMayBeLive(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as { bytesMayBeLive?: boolean }).bytesMayBeLive === true
+  );
+}
+
 /** Submit the SAME signed bytes to ONE operator and classify the response. Never
  *  throws (all faults become an outcome) so the parallel fan-out can aggregate.
  *  The echoed canonical hash is validated per operator — a wallet never trusts a
@@ -1121,9 +1164,18 @@ export async function broadcastPlaintextTransaction(
     (o): o is Extract<FanoutOutcome, { kind: "reject" }> => o.kind === "reject",
   );
   if (rejects.length === targets.length) {
+    // Every operator refused ADMISSION of this exact tx. Nothing was taken, so
+    // the bytes are genuinely dead and a caller may discard them.
     throw rejects[0]!.err;
   }
-  throw new Error("no Monolythium Testnet operator accepted the broadcast");
+  // Reached when at least one outcome was not a reject — i.e. `transient` or
+  // `mailbox-full`. Only `transient` means the bytes may have been admitted
+  // without us learning; `mailbox-full` is the operator saying it did not take
+  // them, so a set of rejects + mailbox-full is still genuinely dead.
+  const err = new Error("no Monolythium Testnet operator accepted the broadcast");
+  throw settled.some((o) => o.kind === "transient")
+    ? markBytesMayBeLive(err)
+    : err;
 }
 
 /** One-shot PLAINTEXT helper used by the service worker — the tx path on the

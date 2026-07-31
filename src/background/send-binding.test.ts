@@ -346,10 +346,26 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     });
   }
 
+  /** The predicate's real structural contract, restated here rather than
+   *  imported: the point of injecting it is that this module never pulls in the
+   *  transport layer, and importing it for a test would undo that. */
+  const bytesMayBeLive = (err: unknown) =>
+    !!err &&
+    typeof err === "object" &&
+    (err as { bytesMayBeLive?: boolean }).bytesMayBeLive === true;
+
+  /** A failure the fan-out marked because an outcome was `transient` — the bytes
+   *  may already be on the network. */
+  function transientFailure(message = "no operator accepted the broadcast") {
+    const e = new Error(message) as Error & { bytesMayBeLive?: boolean };
+    e.bytesMayBeLive = true;
+    return e;
+  }
+
   it("signs and binds when there is nothing bound yet", async () => {
     const submit = submitter();
     const rebroadcast = vi.fn();
-    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(rebroadcast).not.toHaveBeenCalled();
@@ -369,7 +385,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
       via: "op-replay",
     }));
 
-    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
 
     expect(submit).not.toHaveBeenCalled();
     expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");
@@ -382,7 +398,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     const submit = submitter();
     const rebroadcast = vi.fn();
 
-    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
 
     expect(submit).not.toHaveBeenCalled();
     expect(rebroadcast).not.toHaveBeenCalled();
@@ -398,6 +414,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
       key: KEY,
       now: () => T0 + SEND_BINDING_TTL_MS + 1,
       rebroadcast,
+      bytesMayBeLive,
       submit,
     });
 
@@ -413,12 +430,102 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     });
 
     await expect(
-      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), submit }),
+      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
     ).rejects.toThrow(boom);
 
     // The bytes are worthless and the nonce unspent — a later attempt must sign
     // afresh rather than re-broadcast a transaction the chain never saw.
     expect(await readSendBinding(KEY, T0)).toBeNull();
+  });
+
+  // ── The failure was NOT a decline ─────────────────────────────────────────
+  //
+  // A `transient` fan-out outcome means the signed bytes were already handed to
+  // an operator. One operator admitting is enough for the transaction to be live,
+  // so discarding the binding here loses the only record of it and the retry
+  // signs a SECOND transaction at the next nonce.
+  //
+  // These assert the STORED STATE, not the predicate: the property is that the
+  // bytes survive a failure whose outcome was unknown.
+
+  it("KEEPS the binding when the failure says the bytes may already be live", async () => {
+    const boom = transientFailure();
+    const submit = vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind(fields);
+      throw boom;
+    });
+
+    await expect(
+      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
+    ).rejects.toThrow(boom);
+
+    const kept = await readSendBinding(KEY, T0);
+    expect(kept).not.toBeNull();
+    // The bytes specifically — a stub would be useless to a retry.
+    expect(kept!.wireHex).toBe("0xdeadbeef");
+  });
+
+  it("a kept binding REPLAYS the stored bytes on the next attempt — never re-signs", async () => {
+    // The point of keeping it: the retry must reach `rebroadcast`, not `submit`.
+    const boom = transientFailure();
+    const failing = vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind(fields);
+      throw boom;
+    });
+    await expect(
+      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit: failing }),
+    ).rejects.toThrow(boom);
+
+    const retry = submitter("0xsecond-signature-that-must-not-happen");
+    const rebroadcast = vi.fn(async (_w: string, h: string) => ({
+      txHash: h,
+      via: "op-replay",
+    }));
+    const r = await withSendBinding({
+      key: KEY,
+      now: () => T0,
+      rebroadcast,
+      bytesMayBeLive,
+      submit: retry,
+    });
+
+    expect(retry).not.toHaveBeenCalled();
+    expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");
+    expect(r.txHash).toBe("0xabc");
+  });
+
+  it("still deletes when the failure was a genuine decline", async () => {
+    // Every operator refused admission: the bytes are dead and the nonce unspent,
+    // so keeping them would replay a doomed transaction at a stale nonce.
+    const declined = new Error("insufficient balance") as Error & {
+      bytesMayBeLive?: boolean;
+    };
+    const submit = vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind(fields);
+      throw declined;
+    });
+
+    await expect(
+      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
+    ).rejects.toThrow(declined);
+
+    expect(await readSendBinding(KEY, T0)).toBeNull();
+  });
+
+  it("keeps it when the marker is present alongside a decline-shaped message", async () => {
+    // A MIXED fan-out — some rejects, at least one transient — still marks. The
+    // decision must follow the marker, never the message.
+    const mixed = transientFailure("insufficient balance");
+    const submit = vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind(fields);
+      throw mixed;
+    });
+
+    await expect(
+      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
+    ).rejects.toThrow(mixed);
+
+    expect(await readSendBinding(KEY, T0)).not.toBeNull();
   });
 
   it("replays a record written before the account fields existed", async () => {
@@ -430,7 +537,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
       via: "op-replay",
     }));
 
-    await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+    await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
 
     expect(submit).not.toHaveBeenCalled();
     expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");

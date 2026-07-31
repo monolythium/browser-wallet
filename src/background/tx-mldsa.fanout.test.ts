@@ -24,7 +24,7 @@ vi.mock("./keystore-mldsa.js", () => ({
   getActiveVaultIdV4: vi.fn(() => "v1"),
 }));
 
-import { broadcastPlaintextTransaction } from "./tx-mldsa.js";
+import { broadcastPlaintextTransaction, bytesMayBeLive } from "./tx-mldsa.js";
 import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
 
 // A canonical 32-byte hash the wallet computed locally; an operator must echo
@@ -163,6 +163,87 @@ describe("broadcast fan-out — failure semantics", () => {
     await expect(broadcastPlaintextTransaction(WIRE, EXPECTED)).rejects.toThrow(
       /accepted the broadcast/,
     );
+  });
+});
+
+// ── Did the bytes reach anyone? ─────────────────────────────────────────────
+//
+// A caller that discards a signed transaction on failure needs to know whether
+// the failure was a DECLINE or merely an absence of information. `transient` is
+// returned only after the bytes were handed to `fetch` — a non-OK response and
+// an unparseable body both prove the operator answered — so an admission
+// followed by a proxy error is indistinguishable from never being taken.
+// `reject` and `mailbox-full` are the operator saying it did not take them.
+//
+// Asserted via the exported predicate rather than the property name, so the
+// marker's representation stays free to change.
+
+async function failureOf(): Promise<unknown> {
+  return broadcastPlaintextTransaction(WIRE, EXPECTED).then(
+    () => null,
+    (e: unknown) => e,
+  );
+}
+
+describe("broadcast fan-out — whether a failure means the bytes are dead", () => {
+  it("all transient → marked, because any of them may have been admitted", async () => {
+    installFetch({
+      [OP1.rpc]: { kind: "transport" },
+      [OP2.rpc]: { kind: "transport" },
+      [OP3.rpc]: { kind: "transport" },
+    });
+    expect(bytesMayBeLive(await failureOf())).toBe(true);
+  });
+
+  it("mixed reject + transient → marked; one unknown outcome is enough", async () => {
+    installFetch({
+      [OP1.rpc]: { kind: "error", code: -32047, message: wrapped("insufficient balance") },
+      [OP2.rpc]: { kind: "transport" },
+      [OP3.rpc]: { kind: "error", code: -32047, message: wrapped("insufficient balance") },
+    });
+    expect(bytesMayBeLive(await failureOf())).toBe(true);
+  });
+
+  it("a bare (non-mempool) error body is transient → marked", async () => {
+    installFetch({
+      [OP1.rpc]: { kind: "error", code: -32047, message: "upstream unavailable: p2p: down" },
+      [OP2.rpc]: { kind: "error", code: -32047, message: "upstream unavailable: p2p: down" },
+      [OP3.rpc]: { kind: "error", code: -32047, message: "upstream unavailable: p2p: down" },
+    });
+    expect(bytesMayBeLive(await failureOf())).toBe(true);
+  });
+
+  it("EVERY operator declines admission → NOT marked, the bytes are dead", async () => {
+    installFetch({
+      [OP1.rpc]: { kind: "error", code: -32047, message: wrapped("insufficient balance") },
+      [OP2.rpc]: { kind: "error", code: -32047, message: wrapped("insufficient balance") },
+      [OP3.rpc]: { kind: "error", code: -32047, message: wrapped("insufficient balance") },
+    });
+    expect(bytesMayBeLive(await failureOf())).toBe(false);
+  });
+
+  it("rejects + mailbox-full → NOT marked; backpressure IS a decline", async () => {
+    // This reaches the same throw as the mixed case above, so it pins that the
+    // marker follows the OUTCOME KIND and not merely which branch threw.
+    installFetch({
+      [OP1.rpc]: { kind: "error", code: -32047, message: wrapped("insufficient balance") },
+      [OP2.rpc]: { kind: "error", code: -32047, message: wrapped("mailbox full") },
+      [OP3.rpc]: { kind: "error", code: -32047, message: wrapped("insufficient balance") },
+    });
+    expect(bytesMayBeLive(await failureOf())).toBe(false);
+  });
+
+  it("no genesis-trusted operator → NOT marked; nothing was ever sent", async () => {
+    vi.mocked(verifyOperatorGenesis).mockImplementation(async () => false);
+    installFetch({});
+    expect(bytesMayBeLive(await failureOf())).toBe(false);
+  });
+
+  it("an unmarked value reads as dead — the predicate never guesses", async () => {
+    expect(bytesMayBeLive(new Error("plain"))).toBe(false);
+    expect(bytesMayBeLive(null)).toBe(false);
+    expect(bytesMayBeLive(undefined)).toBe(false);
+    expect(bytesMayBeLive("a string")).toBe(false);
   });
 });
 
