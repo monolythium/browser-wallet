@@ -29,6 +29,7 @@ import {
   nameProposeKeyParams,
   nameRegisterKeyParams,
   nextSendKey,
+  multisigExecuteKeyParams,
   unstakeAllKeyParams,
   type SendKeyState,
 } from "./send-key";
@@ -480,6 +481,84 @@ describe("no builder embeds live-moving data", () => {
       nameRegisterKeyParams(N, C),
       nameProposeKeyParams(N, "0xab", C),
       nameAcceptKeyParams(N, C),
+    ];
+    expect(new Set(all).size).toBe(3);
+  });
+});
+
+// ── Multisig execute ────────────────────────────────────────────────────────
+//
+// The user composes nothing here: they pick a proposal and press Execute. So the
+// proposal IS the request, and the fee — re-quoted at execute time — is the one
+// thing that reliably differs between two attempts at the same proposal.
+
+describe("multisig execute: the proposal is the request", () => {
+  const V = "vault-1";
+  const PID = "proposal-abc";
+
+  it("carries the key when the user retries the SAME proposal", () => {
+    const p = multisigExecuteKeyParams(V, PID);
+    expect(keyAfterRetry(p, p)).toBe("original");
+  });
+
+  it("reuses WITHOUT minting — proving it replayed rather than regenerated", () => {
+    // Asserting the returned value equalled the original would pass even if it
+    // had been minted again to the same string. The property is that the minting
+    // function is never reached.
+    const p = multisigExecuteKeyParams(V, PID);
+    const first = nextSendKey(null, "submit", p, minter("k1"));
+    const mint = vi.fn(() => "SHOULD-NOT-BE-USED");
+    const retry = nextSendKey(first.next, "retry", p, mint);
+
+    expect(mint).not.toHaveBeenCalled();
+    expect(retry.use).toBe("k1");
+  });
+
+  it("MINTS FRESH when a different proposal is executed", () => {
+    expect(
+      keyAfterRetry(
+        multisigExecuteKeyParams(V, PID),
+        multisigExecuteKeyParams(V, "proposal-xyz"),
+      ),
+    ).toBe("fresh");
+  });
+
+  it("MINTS FRESH for the same proposal id under a different vault", () => {
+    expect(
+      keyAfterRetry(
+        multisigExecuteKeyParams(V, PID),
+        multisigExecuteKeyParams("vault-2", PID),
+      ),
+    ).toBe("fresh");
+  });
+
+  it("is STABLE across a re-quoted fee — the params carry no fee at all", () => {
+    // The trap this surface was most likely to hit: `multisig-execute` calls
+    // suggestFee at execute time, so maxFeePerGas, the tip and the fee-derived
+    // gas limit can all differ between attempts. If any were in params every
+    // retry would look like an edit and the mechanism would never fire.
+    const before = multisigExecuteKeyParams(V, PID);
+    const after = multisigExecuteKeyParams(V, PID);
+    expect(before).toBe(after);
+    expect(before).not.toMatch(/0x[0-9a-f]*fee|gas|maxFee|priority/i);
+  });
+
+  it("releases on success, so a genuine second execute is independent", () => {
+    const p = multisigExecuteKeyParams(V, PID);
+    const first = nextSendKey(null, "submit", p, minter("k1"));
+    const cleared = nextSendKey(first.next, "success", p, minter("unused"));
+    expect(cleared.use).toBeNull();
+    expect(cleared.next).toBeNull();
+
+    const again = nextSendKey(cleared.next, "submit", p, minter("k2"));
+    expect(again.use).toBe("k2");
+  });
+
+  it("cannot carry into another op's key space", () => {
+    const all = [
+      multisigExecuteKeyParams(V, PID),
+      claimKeyParams("0x10F2C"),
+      unstakeAllKeyParams(7, "0x10F2C"),
     ];
     expect(new Set(all).size).toBe(3);
   });

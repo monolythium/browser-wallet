@@ -8089,6 +8089,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = (message.payload ?? {}) as {
         vaultId?: string;
         proposalId?: string;
+        /** Identifies one user CONFIRMATION of this execution. Present → the
+         *  submit below is idempotent under that key. Absent → the path is
+         *  byte-identical to before. */
+        idempotencyKey?: unknown;
       };
       if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
         return { ok: false, reason: "missing vaultId or proposalId" };
@@ -8205,7 +8209,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               chainIdHex: action.chainIdHex,
             },
             p.vaultId,
-            { from: fromAddr, chainIdHex: action.chainIdHex },
+            {
+              from: fromAddr,
+              chainIdHex: action.chainIdHex,
+              // Same hook, same route as the `wallet-send-tx` call site — not a
+              // parallel path. Absent (or not a non-empty string) spreads
+              // nothing, so the options object is exactly
+              // `{ from, chainIdHex }` as before and submitTrackedTx's
+              // `key !== undefined` branch is never entered.
+              ...(typeof p.idempotencyKey === "string" &&
+              p.idempotencyKey.length > 0
+                ? { idempotencyKey: p.idempotencyKey }
+                : {}),
+            },
           );
           txHash = r.txHash;
         } catch (e) {

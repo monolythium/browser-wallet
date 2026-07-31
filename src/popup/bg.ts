@@ -2258,6 +2258,14 @@ export async function bgMultisigReject(args: {
 export async function bgMultisigExecute(args: {
   vaultId: string;
   proposalId: string;
+  /** Identifies one user CONFIRMATION of this execution, not one attempt.
+   *  Retrying the same confirmation must carry the same key so the SW
+   *  re-broadcasts the bytes it already signed instead of deriving a second
+   *  nonce; executing a different proposal mints a fresh one.
+   *
+   *  Optional: omit it and the field never reaches the payload, so the SW sees
+   *  exactly the shape it always has. */
+  idempotencyKey?: string;
 }): Promise<
   | { ok: true; txHash: string | null }
   | { ok: false; reason?: string }

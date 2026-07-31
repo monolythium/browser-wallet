@@ -88,6 +88,35 @@ export function unstakeAllKeyParams(clusterId: number, chainIdHex: string): stri
   return `unstake-all|${clusterId}|${chainIdHex}`;
 }
 
+/** Execute a multisig proposal whose approvals have reached threshold.
+ *
+ *  THE PROPOSAL IS THE WHOLE REQUEST. The user composes nothing here — they pick
+ *  a proposal and press Execute. `(vaultId, proposalId)` is therefore the
+ *  complete identity of the logical execution, and two executes differ exactly
+ *  when those differ. Executing a DIFFERENT proposal changes them and mints a
+ *  fresh key, which is the case that must not carry.
+ *
+ *  WHAT IS EXCLUDED, and why each is safe to leave out:
+ *
+ *  - The FEE. `multisig-execute` calls `suggestFee` at execute time and clamps
+ *    the result, so `maxFeePerGas`, the tip and the fee-derived gas limit can all
+ *    differ between two attempts at the same proposal. Including any of them
+ *    would make every retry look like an edit and the mechanism would never
+ *    fire — the trap this module's header names.
+ *
+ *  - The ACTION — recipient, value, calldata, chain. All are read from the stored
+ *    proposal rather than chosen at execute time, so `proposalId` already pins
+ *    them. They also cannot drift unnoticed: T3-03 re-verifies the collected
+ *    approval signatures against the LIVE action digest before executing, so an
+ *    edited action fails closed BEFORE any submit is reached. There is no path
+ *    where a carried key replays one action while the screen shows another. */
+export function multisigExecuteKeyParams(
+  vaultId: string,
+  proposalId: string,
+): string {
+  return `multisig-execute|${vaultId}|${proposalId}`;
+}
+
 // ── Name operations ─────────────────────────────────────────────────────────
 //
 // WHAT IS DELIBERATELY ABSENT: the quoted registration cost. `submitNameTx`
