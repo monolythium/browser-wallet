@@ -25,6 +25,9 @@ import {
   autoCompoundKeyParams,
   claimKeyParams,
   emergencyKeyParams,
+  nameAcceptKeyParams,
+  nameProposeKeyParams,
+  nameRegisterKeyParams,
   nextSendKey,
   type SendKeyState,
 } from "./send-key";
@@ -250,6 +253,140 @@ describe("claim: no editable field, so the release is what keeps it safe", () =>
   });
 });
 
+// ── Name operations ─────────────────────────────────────────────────────────
+//
+// Row 3 with a permanent on-chain consequence: replaying under an edit here
+// means the user pays real LYTH to register a name they just decided against,
+// while the screen shows the new one. Two of the three ops spend real value.
+
+describe("name register: the name is the request", () => {
+  const CHAIN = "0x10F2C";
+
+  it("carries the key when the user retries the SAME name", () => {
+    const p = nameRegisterKeyParams("alice.mono", CHAIN);
+    expect(keyAfterRetry(p, p)).toBe("original");
+  });
+
+  it("MINTS FRESH when the user edits the name and retries", () => {
+    // The assertion this whole pass exists for. Without it the wallet would
+    // re-broadcast the signed registration of `alice.mono` while the form —
+    // and the confirm card — say `bob.mono`.
+    expect(
+      keyAfterRetry(
+        nameRegisterKeyParams("alice.mono", CHAIN),
+        nameRegisterKeyParams("bob.mono", CHAIN),
+      ),
+    ).toBe("fresh");
+  });
+
+  it("MINTS FRESH on a one-character edit", () => {
+    expect(
+      keyAfterRetry(
+        nameRegisterKeyParams("alice.mono", CHAIN),
+        nameRegisterKeyParams("alicee.mono", CHAIN),
+      ),
+    ).toBe("fresh");
+  });
+
+  it("treats a case-only difference as the SAME name", () => {
+    // The chain-side validator canonicalises to lower case, so these are one
+    // registration. Minting here would silently disable the mechanism for any
+    // user whose keyboard capitalised the first letter.
+    expect(nameRegisterKeyParams("Alice.Mono", CHAIN)).toBe(
+      nameRegisterKeyParams("alice.mono", CHAIN),
+    );
+  });
+
+  it("MINTS FRESH across a chain switch", () => {
+    expect(
+      keyAfterRetry(
+        nameRegisterKeyParams("alice.mono", CHAIN),
+        nameRegisterKeyParams("alice.mono", "0x1"),
+      ),
+    ).toBe("fresh");
+  });
+});
+
+describe("name propose: the resolved recipient is part of the request", () => {
+  const CHAIN = "0x10F2C";
+  const A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+  it("carries the key on an unchanged retry", () => {
+    const p = nameProposeKeyParams("alice.mono", A, CHAIN);
+    expect(keyAfterRetry(p, p)).toBe("original");
+  });
+
+  it("MINTS FRESH when the recipient changes", () => {
+    // Including the case where the user re-typed the same `.mono` recipient and
+    // it resolved to a different owner: the signed address changed, so the
+    // request changed.
+    expect(
+      keyAfterRetry(
+        nameProposeKeyParams("alice.mono", A, CHAIN),
+        nameProposeKeyParams("alice.mono", B, CHAIN),
+      ),
+    ).toBe("fresh");
+  });
+
+  it("MINTS FRESH when the name changes but the recipient does not", () => {
+    expect(
+      keyAfterRetry(
+        nameProposeKeyParams("alice.mono", A, CHAIN),
+        nameProposeKeyParams("bob.mono", A, CHAIN),
+      ),
+    ).toBe("fresh");
+  });
+
+  it("treats recipient address casing as display-only", () => {
+    expect(nameProposeKeyParams("alice.mono", A.toUpperCase().replace("0X", "0x"), CHAIN)).toBe(
+      nameProposeKeyParams("alice.mono", A, CHAIN),
+    );
+  });
+});
+
+describe("name accept: identified by the name alone", () => {
+  const CHAIN = "0x10F2C";
+
+  it("carries the key on an unchanged retry", () => {
+    const p = nameAcceptKeyParams("alice.mono", CHAIN);
+    expect(keyAfterRetry(p, p)).toBe("original");
+  });
+
+  it("MINTS FRESH when the name changes — this one re-charges the full cost", () => {
+    expect(
+      keyAfterRetry(
+        nameAcceptKeyParams("alice.mono", CHAIN),
+        nameAcceptKeyParams("bob.mono", CHAIN),
+      ),
+    ).toBe("fresh");
+  });
+});
+
+describe("a re-quoted cost cannot break a name carry", () => {
+  // The trap, asserted as a round trip rather than by inspection. `submitNameTx`
+  // re-quotes the cost from the live base fee immediately before signing, so the
+  // second attempt prices differently. Because params never see the cost, the
+  // retry still matches — and `mint` is never called, which is the observable
+  // proof that the original key was reused rather than a coincidentally equal
+  // one being generated.
+  it("reuses without minting across attempts priced differently", () => {
+    const CHAIN = "0x10F2C";
+    const attempt1 = nameRegisterKeyParams("alice.mono", CHAIN);
+    const first = nextSendKey(null, "submit", attempt1, minter("original"));
+
+    // Time passes; the base fee moves; the cost is re-quoted. Params are built
+    // from intent alone, so they are identical.
+    const attempt2 = nameRegisterKeyParams("alice.mono", CHAIN);
+    expect(attempt2).toBe(attempt1);
+
+    const mint = vi.fn(() => "should-never-be-called");
+    const retry = nextSendKey(first.next, "retry", attempt2, mint);
+    expect(retry.use).toBe("original");
+    expect(mint).not.toHaveBeenCalled();
+  });
+});
+
 describe("no builder embeds live-moving data", () => {
   // The trap send-key.ts documents: a quoted fee or gas estimate in params makes
   // every retry look like an edit, and the mechanism never fires. Observable as
@@ -258,5 +395,27 @@ describe("no builder embeds live-moving data", () => {
     expect(autoCompoundKeyParams(true, "0x10F2C")).toBe(autoCompoundKeyParams(true, "0x10F2C"));
     expect(emergencyKeyParams("v", "aa", "0x10F2C")).toBe(emergencyKeyParams("v", "aa", "0x10F2C"));
     expect(claimKeyParams("0x10F2C")).toBe(claimKeyParams("0x10F2C"));
+    expect(nameRegisterKeyParams("a.mono", "0x10F2C")).toBe(
+      nameRegisterKeyParams("a.mono", "0x10F2C"),
+    );
+    expect(nameProposeKeyParams("a.mono", "0xab", "0x10F2C")).toBe(
+      nameProposeKeyParams("a.mono", "0xab", "0x10F2C"),
+    );
+    expect(nameAcceptKeyParams("a.mono", "0x10F2C")).toBe(
+      nameAcceptKeyParams("a.mono", "0x10F2C"),
+    );
+  });
+
+  it("keeps the three name ops distinct from each other", () => {
+    // Same name, same chain, three different transactions. A shared params
+    // string would let a failed register carry its key into an accept.
+    const N = "alice.mono";
+    const C = "0x10F2C";
+    const all = [
+      nameRegisterKeyParams(N, C),
+      nameProposeKeyParams(N, "0xab", C),
+      nameAcceptKeyParams(N, C),
+    ];
+    expect(new Set(all).size).toBe(3);
   });
 });

@@ -68,6 +68,47 @@ export function emergencyKeyParams(
   return `emergency-key|${vaultId}|${publicKeyHex}|${chainIdHex}`;
 }
 
+// ── Name operations ─────────────────────────────────────────────────────────
+//
+// WHAT IS DELIBERATELY ABSENT: the quoted registration cost. `submitNameTx`
+// re-quotes it from the LIVE base fee immediately before signing, so it can
+// differ between two attempts at the same registration. In params it would make
+// every retry look like an edit and the mechanism would never fire — the exact
+// trap the module header warns about, and the one this surface was most likely
+// to hit. The category and label length are absent for a different reason: they
+// are derived deterministically from the name, so they carry nothing the name
+// does not already.
+//
+// WHAT IS PRESENT is what the user would recognise as changing their request.
+// Names are canonicalised to lower case by the chain-side validator, so a
+// case-only difference is the SAME name and must not break a carry.
+
+/** Register. The name is the whole request; a name is unique, so registering the
+ *  same one twice is not a meaningful intention and an unchanged repeat is
+ *  unambiguously a retry. */
+export function nameRegisterKeyParams(canonical: string, chainIdHex: string): string {
+  return `name-register|${canonical.toLowerCase()}|${chainIdHex}`;
+}
+
+/** Propose-transfer. The RESOLVED recipient is intent, not derivation: it is who
+ *  receives the name, and the address is what gets signed. If the same `.mono`
+ *  recipient re-resolves to a different owner between attempts, that is a
+ *  changed request and the carry must break. Compared lower-case — hex address
+ *  casing is display-only and must not read as an edit. */
+export function nameProposeKeyParams(
+  canonical: string,
+  recipientAddr0x: string,
+  chainIdHex: string,
+): string {
+  return `name-propose|${canonical.toLowerCase()}|${recipientAddr0x.toLowerCase()}|${chainIdHex}`;
+}
+
+/** Accept-transfer. Identified by the name alone — the payload carries nothing
+ *  else, and the cost is re-quoted at signing like register's. */
+export function nameAcceptKeyParams(canonical: string, chainIdHex: string): string {
+  return `name-accept|${canonical.toLowerCase()}|${chainIdHex}`;
+}
+
 export type SendKeyAction =
   /** The user is starting a send. Always a new logical send. */
   | "submit"
