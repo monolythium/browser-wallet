@@ -25,7 +25,11 @@ import {
   bgSlhDsaBackupSetRegistrationStatus,
   bgSlhDsaBackupSubmitRegistration,
 } from "../bg";
-import { nextSendKey, type SendKeyState } from "../send-key";
+import {
+  emergencyKeyParams,
+  nextSendKey,
+  type SendKeyState,
+} from "../send-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -167,12 +171,7 @@ export function SlhDsaBackupCard({
     setSubmitting(true);
     setSubmitErr(null);
     try {
-      // The PUBLIC KEY is the editable parameter here. It looks fixed, but a
-      // user can clear the backup and generate a new one, and then the vault id
-      // alone would still match — carrying the key across that would register
-      // the OLD key while the card shows the new one. That is row 3, so the key
-      // itself is in the params and a regenerate breaks the carry.
-      const keyParams = `emergency-key|${vaultId}|${backup.publicKey}|${chainIdHex}`;
+      const keyParams = emergencyKeyParams(vaultId, backup.publicKey, chainIdHex);
       const keyDecision = nextSendKey(
         sendKey,
         opts?.retry === true ? "retry" : "submit",

@@ -21,7 +21,13 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { nextSendKey, type SendKeyState } from "./send-key";
+import {
+  autoCompoundKeyParams,
+  claimKeyParams,
+  emergencyKeyParams,
+  nextSendKey,
+  type SendKeyState,
+} from "./send-key";
 
 /** Deterministic mint so assertions can name exact keys. */
 function minter(...values: string[]): () => string {
@@ -158,5 +164,99 @@ describe("the mint function is called only when a key is actually needed", () =>
     const mint = vi.fn(() => "k1");
     nextSendKey(null, "submit", P1, mint);
     expect(mint).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── The shape-D surfaces converted afterwards ───────────────────────────────
+//
+// `nextSendKey` above is proven to break a carry when params differ. That only
+// protects a surface if the surface's params actually CONTAIN its editable
+// field, which is a property of the builder, not of the rule. These assert the
+// property — that editing the field changes the key — rather than the exact
+// string, so a rewording of the params format cannot make them pass vacuously
+// while the guard silently stops working.
+
+/** Retry the same logical send with `params`, starting from a key minted
+ *  against `mintedAgainst`. Returns the key the retry would carry. */
+function keyAfterRetry(mintedAgainst: string, params: string): string | null {
+  const first = nextSendKey(null, "submit", mintedAgainst, minter("original"));
+  return nextSendKey(first.next, "retry", params, minter("fresh")).use;
+}
+
+describe("auto-compound: the toggle target is part of the identity", () => {
+  const CHAIN = "0x10F2C";
+
+  it("carries the key when the user retries the SAME target", () => {
+    const p = autoCompoundKeyParams(true, CHAIN);
+    expect(keyAfterRetry(p, p)).toBe("original");
+  });
+
+  it("MINTS FRESH when a failed enable is abandoned and a disable confirmed", () => {
+    // Row 3 for this surface. Enabling also claims pending rewards, so replaying
+    // it while the modal says Disable moves funds the user just decided against.
+    const enable = autoCompoundKeyParams(true, CHAIN);
+    const disable = autoCompoundKeyParams(false, CHAIN);
+    expect(enable).not.toBe(disable);
+    expect(keyAfterRetry(enable, disable)).toBe("fresh");
+  });
+
+  it("MINTS FRESH across a chain switch", () => {
+    expect(
+      keyAfterRetry(autoCompoundKeyParams(true, CHAIN), autoCompoundKeyParams(true, "0x1")),
+    ).toBe("fresh");
+  });
+});
+
+describe("emergency-key registration: the public key is part of the identity", () => {
+  const V = "vault-1";
+  const CHAIN = "0x10F2C";
+  const PK_A = "aa".repeat(32);
+  const PK_B = "bb".repeat(32);
+
+  it("carries the key when retrying the same registration", () => {
+    const p = emergencyKeyParams(V, PK_A, CHAIN);
+    expect(keyAfterRetry(p, p)).toBe("original");
+  });
+
+  it("MINTS FRESH when the backup was cleared and regenerated", () => {
+    // Same vault id, different key material. Without the pubkey in params this
+    // would replay the registration of a key the user just replaced.
+    expect(
+      keyAfterRetry(emergencyKeyParams(V, PK_A, CHAIN), emergencyKeyParams(V, PK_B, CHAIN)),
+    ).toBe("fresh");
+  });
+});
+
+describe("claim: no editable field, so the release is what keeps it safe", () => {
+  const CHAIN = "0x10F2C";
+
+  it("is constant for a chain — the guard cannot break a claim carry", () => {
+    expect(claimKeyParams(CHAIN)).toBe(claimKeyParams(CHAIN));
+    expect(keyAfterRetry(claimKeyParams(CHAIN), claimKeyParams(CHAIN))).toBe("original");
+  });
+
+  it("a claim that SUCCEEDED releases, so the next claim is independent", () => {
+    // This is the whole safety argument for constant params: without the
+    // release, one key would cover every future claim on the chain.
+    const p = claimKeyParams(CHAIN);
+    const first = nextSendKey(null, "submit", p, minter("original"));
+    const released = nextSendKey(first.next, "success", p, minter("unused"));
+    expect(released.next).toBeNull();
+    expect(nextSendKey(released.next, "submit", p, minter("second")).use).toBe("second");
+  });
+
+  it("still separates chains", () => {
+    expect(keyAfterRetry(claimKeyParams(CHAIN), claimKeyParams("0x1"))).toBe("fresh");
+  });
+});
+
+describe("no builder embeds live-moving data", () => {
+  // The trap send-key.ts documents: a quoted fee or gas estimate in params makes
+  // every retry look like an edit, and the mechanism never fires. Observable as
+  // determinism — same intent in, same string out, no matter when it is called.
+  it("is deterministic for the same user intent", () => {
+    expect(autoCompoundKeyParams(true, "0x10F2C")).toBe(autoCompoundKeyParams(true, "0x10F2C"));
+    expect(emergencyKeyParams("v", "aa", "0x10F2C")).toBe(emergencyKeyParams("v", "aa", "0x10F2C"));
+    expect(claimKeyParams("0x10F2C")).toBe(claimKeyParams("0x10F2C"));
   });
 });

@@ -27,7 +27,7 @@ import {
   type PendingRewardsView,
 } from "../bg";
 import { buildClaimMeta } from "../claim-meta";
-import { nextSendKey, type SendKeyState } from "../send-key";
+import { claimKeyParams, nextSendKey, type SendKeyState } from "../send-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -204,15 +204,7 @@ export function Delegations({
       // the receipt's Claimed log after confirmation, not captured here (the
       // submit-time pending-rewards value is wrong). Metadata-only; value 0x0.
       const claim = await buildClaimMeta();
-      // A claim has NO user-editable parameters — no recipient, no amount, no
-      // tier — so these params are constant and the params guard can never fire
-      // here. The safety therefore comes from the RELEASE, not the comparison:
-      // `success` clears the key, so the only way to reuse one is a retry of a
-      // claim that failed, and a genuine later claim mints fresh. Deliberately
-      // excludes the fee and the pending-reward amount — both move between
-      // attempts on their own, and either would make every retry look like an
-      // edit, so the mechanism would never fire.
-      const keyParams = `claim|${chainId}`;
+      const keyParams = claimKeyParams(chainId);
       const keyDecision = nextSendKey(
         sendKey,
         opts?.retry === true ? "retry" : "submit",

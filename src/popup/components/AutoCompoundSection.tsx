@@ -19,7 +19,11 @@ import {
   bgWalletFeeSuggestion,
   type PendingRewardsView,
 } from "../bg";
-import { nextSendKey, type SendKeyState } from "../send-key";
+import {
+  autoCompoundKeyParams,
+  nextSendKey,
+  type SendKeyState,
+} from "../send-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -100,14 +104,7 @@ export function AutoCompoundSection({ rewards, isMock, chainId }: AutoCompoundSe
     setAcSubmitting(true);
     setAcError(null);
     try {
-      // `target` IS an editable parameter, even though it is a toggle: the user
-      // can cancel a failed ENABLE and confirm a DISABLE instead. Carrying the
-      // key across that would replay the enable — which also claims pending
-      // rewards — while the modal says Disable. That is row 3, and it is worse
-      // than the double-submit. The chain id is in for the same reason it is on
-      // every other surface; the quoted fee is deliberately NOT, because it
-      // moves between attempts and would make every retry look like an edit.
-      const keyParams = `autocompound|${target}|${chainId}`;
+      const keyParams = autoCompoundKeyParams(target, chainId);
       const keyDecision = nextSendKey(
         sendKey,
         isRetry ? "retry" : "submit",

@@ -28,6 +28,46 @@
 // look like an edit, and the mechanism would never fire. `params` is opaque
 // here; each surface builds its own and this module only compares.
 
+// ── Params builders for the surfaces that carry a key ───────────────────────
+//
+// One place for the `params` rule, so "does this surface include its editable
+// field?" is a question a test can ask. The rule they all obey: the user's
+// INTENT and nothing derived live. No quoted fee, no gas estimate, no pending
+// reward amount — those move between attempts on their own, every retry would
+// look like an edit, and the mechanism would never fire.
+//
+// Send and Stake build theirs inline; these are the shape-D surfaces converted
+// afterwards.
+
+/** Reward claim (Delegations, Stake). NO user-editable field exists — a claim
+ *  has no recipient, amount or tier — so this is constant per chain and the
+ *  comparison can never break a carry. Safety comes from the RELEASE instead:
+ *  `success` clears the key, so the only reusable key belongs to a claim that
+ *  failed, and a genuine later claim mints fresh. */
+export function claimKeyParams(chainIdHex: string): string {
+  return `claim|${chainIdHex}`;
+}
+
+/** Auto-compound toggle. `target` IS editable despite being a boolean: the user
+ *  can abandon a failed ENABLE and confirm a DISABLE instead, and replaying the
+ *  enable — which also claims pending rewards — while the modal says Disable is
+ *  exactly the row-3 failure. */
+export function autoCompoundKeyParams(target: boolean, chainIdHex: string): string {
+  return `autocompound|${target}|${chainIdHex}`;
+}
+
+/** Emergency-backup key registration. `publicKeyHex` is the editable field: the
+ *  key looks fixed, but clearing and regenerating the backup produces a new one
+ *  under the same vault id, and replaying the old registration would anchor a
+ *  key the user just replaced. */
+export function emergencyKeyParams(
+  vaultId: string,
+  publicKeyHex: string,
+  chainIdHex: string,
+): string {
+  return `emergency-key|${vaultId}|${publicKeyHex}|${chainIdHex}`;
+}
+
 export type SendKeyAction =
   /** The user is starting a send. Always a new logical send. */
   | "submit"
