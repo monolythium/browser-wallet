@@ -493,16 +493,11 @@ function WalletActionSheet({
   const targetId = target.id;
   const targetLabel = target.label;
 
-  // Not a wipe: a setter dispatched from an unmount cleanup is discarded by
-  // React, so this line clears nothing. Closing the sheet unmounts this
-  // component, and that unmount is what releases the password. The clears that
-  // do work are in `close()` below and in the removal submit's `finally`,
-  // which covers a throw as well as a refusal.
-  useEffect(() => {
-    return () => {
-      setPassword("");
-    };
-  }, []);
+  // THERE IS DELIBERATELY NO UNMOUNT CLEAR HERE. One existed and did nothing: a
+  // setter dispatched from an unmount cleanup is discarded by React. Closing the
+  // sheet unmounts this component, and that unmount is what releases the
+  // password. The clears that do work are in `close()` below and in the removal
+  // submit's `finally`, which covers a throw as well as a refusal.
 
   // Which multisig wallets would lose a signer. Read once when the sheet opens
   // so the warning is ready before the user reaches the confirm step. Rosters

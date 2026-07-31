@@ -182,22 +182,15 @@ export function PasswordGate<T>({
     return () => clearInterval(t);
   }, [secondsRemaining]);
 
-  // What drops the password is the UNMOUNT ITSELF: React discards this
-  // component's state and with it the last reference. The setter below adds
-  // nothing — a state update dispatched from an unmount cleanup is discarded,
-  // and with no StrictMode in this build the cleanup runs exactly once, at a
-  // real unmount. JS cannot deterministically zero a string either way, so no
-  // line here wipes the bytes.
+  // THERE IS DELIBERATELY NO UNMOUNT CLEAR HERE. One existed and did nothing:
+  // a state update dispatched from an unmount cleanup is discarded, so it never
+  // ran; what drops the password is the unmount itself, which releases this
+  // component's state and with it the last reference. (JS cannot
+  // deterministically zero a string either way.)
   //
-  // The clears that ARE load-bearing are in handleSubmit, and they are what
-  // stops a password outliving a submit: immediately after the verified value
-  // is handed to onVerified, on a failed verdict, and in the catch.
-  useEffect(() => {
-    return () => {
-      setPassword("");
-    };
-  }, []);
-
+  // The clears that ARE load-bearing are in handleSubmit below, and they are
+  // what stops a password outliving a submit: immediately after the verified
+  // value is handed to onVerified, on a failed verdict, and in the catch.
   const handleSubmit = async () => {
     // Guarded HERE, not only via the button's `disabled` — an Enter keypress
     // and a stale re-render both route through this same check.

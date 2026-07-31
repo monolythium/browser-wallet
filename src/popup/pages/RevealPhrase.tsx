@@ -108,19 +108,19 @@ export function RevealPhrase({
     return () => clearInterval(t);
   }, [step, mnemonic, onBack]);
 
-  // Unmount cleanup. The load-bearing half is the clipboard FLUSH: this screen
-  // auto-hides after 30 s — which unmounts it — so the shared auto-clear timer
-  // would otherwise be torn down with the phrase still on the OS clipboard.
-  // The flush wipes it on the way out instead.
+  // Unmount cleanup, and it is LOAD-BEARING — do not remove this effect. The
+  // clipboard FLUSH is why: this screen auto-hides after 30 s, which unmounts
+  // it, so the shared auto-clear timer would otherwise be torn down with the
+  // phrase still on the OS clipboard. The flush wipes it on the way out.
   //
-  // The setMnemonic(null) beside it is NOT what drops the phrase: a state
-  // update dispatched from an unmount cleanup is discarded, the unmount itself
-  // releases the reference, and JS cannot deterministically zero the string in
-  // any case. What actually bounds how long the phrase stays decrypted is the
-  // auto-hide countdown above (`autoHideArmed`), which unmounts this screen.
+  // A `setMnemonic(null)` used to sit beside it and did nothing — a state update
+  // dispatched from an unmount cleanup is discarded, the unmount itself releases
+  // the reference, and JS cannot deterministically zero the string in any case.
+  // It was removed; the flush was not. What bounds how long the phrase stays
+  // decrypted is the auto-hide countdown above (`autoHideArmed`), which unmounts
+  // this screen.
   useEffect(() => {
     return () => {
-      setMnemonic(null);
       void flushClipboardAutoClear();
     };
   }, []);
