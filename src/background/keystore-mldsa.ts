@@ -1327,7 +1327,10 @@ function multisigVaultsReferencingV4(
  * Atomicity: the new container is persisted BEFORE any in-memory state moves.
  * If the write fails, the on-disk container is untouched, the held backend is
  * still the original, and any successor backend opened in advance is disposed
- * rather than abandoned. A half-applied removal is not reachable.
+ * rather than abandoned. A half-applied removal is not reachable. That ordering
+ * is not open-coded here: the session install is registered with
+ * `mutateContainer`'s success hook, which runs only after the write lands, so
+ * the failure path cannot reach it.
  *
  * Scope: this removes the vault RECORD only — its wrapped key, its sealed
  * seed + mnemonic envelope, its cached address, and any per-vault passkey,
@@ -1350,8 +1353,9 @@ export async function removeVaultV4(
   // behind this one and make the UI look hung.
   //
   // Everything that CAN go stale — the vault list, the active id, the target
-  // record — is re-read INSIDE the lock below. Acting on this pre-lock snapshot
-  // would be the original bug with extra steps.
+  // record — is re-read INSIDE the lock below: `mutateContainer` does that read
+  // itself, so the `container` its callback receives is NOT this snapshot.
+  // Acting on this pre-lock snapshot would be the original bug with extra steps.
   const pre = await loadVaultsContainerV4();
   if (!pre) throw new Error("no v4 vaults container");
   // D4 — cheap structural pre-check on the pre-lock snapshot, so a bogus vault
@@ -1373,9 +1377,10 @@ export async function removeVaultV4(
   }
   const mek = await deriveMekV4(password, pre.masterKdf);
   try {
-    return await withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-      const container = await loadVaultsContainerV4();
-      if (!container) throw new Error("no v4 vaults container");
+    return await mutateContainer(async (
+      container,
+      { onWriteFailure, onWriteSuccess },
+    ) => {
       const target = container.vaults.find((v) => v.id === vaultId);
       if (!target) throw new Error("unknown vault id");
       if (container.vaults.length <= 1) {
@@ -1411,9 +1416,8 @@ export async function removeVaultV4(
 
       container.vaults = survivors;
       container.activeVaultId = successorId;
-      try {
-        await saveVaultsContainerV4(container);
-      } catch (e) {
+
+      onWriteFailure((e) => {
         // Nothing on disk changed and no in-memory state has moved yet. Dispose
         // the successor we opened speculatively so its decrypted secret doesn't
         // linger.
@@ -1421,18 +1425,24 @@ export async function removeVaultV4(
         // C9 — the AEAD above already passed, so the password was CORRECT. A
         // write failure here is infrastructure, not a guess: it must not be
         // charged to the brute-force counter or reported as a wrong password.
-        throw markPostVerificationFailure(e);
-      }
-
-      if (nextState) {
-        // S1-01: wipe the removed vault's ML-DSA-65 secret once the successor is
-        // installed, rather than leaving it for GC — same discipline as
-        // selectActiveVaultV4.
-        const prev = unlocked;
-        unlocked = nextState;
-        activeContainerVaultId = successorId;
-        prev?.backend.dispose();
-      }
+        // Returning it RE-CLASSIFIES the failure; it still propagates as one.
+        return markPostVerificationFailure(e);
+      });
+      // REGISTERED, NOT INLINE: this must run AFTER the write, still inside the
+      // lock. Inline it would run BEFORE, so a failed write would leave the
+      // session pointing at a backend the cleanup above then disposes, with the
+      // predecessor already gone.
+      onWriteSuccess(() => {
+        if (nextState) {
+          // S1-01: wipe the removed vault's ML-DSA-65 secret once the successor
+          // is installed, rather than leaving it for GC — same discipline as
+          // selectActiveVaultV4.
+          const prev = unlocked;
+          unlocked = nextState;
+          activeContainerVaultId = successorId;
+          prev?.backend.dispose();
+        }
+      });
 
       return {
         removedId: vaultId,
