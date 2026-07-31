@@ -211,7 +211,7 @@ const SW_IDLE_ERROR_MARKERS = [
   "Could not establish connection",
 ];
 
-function isSwIdleError(message: string): boolean {
+export function isSwIdleError(message: string): boolean {
   return SW_IDLE_ERROR_MARKERS.some((m) => message.includes(m));
 }
 

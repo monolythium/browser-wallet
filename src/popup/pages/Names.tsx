@@ -23,6 +23,11 @@ import {
   bgWalletNamesOwned,
   type OwnedNameRow,
 } from "../bg";
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
 import { validateRegisterableName } from "../../shared/name-registry.js";
 import { formatLythoshiToLythDecimal } from "../../shared/lyth-units.js";
 import { parseHexQuantity } from "../../shared/native-amount.js";
@@ -42,18 +47,37 @@ function costHexToLyth(costLythoshiHex: string): string | null {
   return formatLythoshiToLythDecimal(v);
 }
 
+/** The page's existing `errBox`, given the two-line shape `okBox` already uses
+ *  (bold lead + detail). A `{ ok: false }` reply has no headline and renders
+ *  exactly as it did before; a classified throw adds one. */
+function FailureBox({ failure }: { failure: SubmitFailure }) {
+  return (
+    <div style={errBox}>
+      {failure.headline !== null && (
+        <div style={{ fontWeight: 600, marginBottom: 3 }}>{failure.headline}</div>
+      )}
+      {failure.body}
+    </div>
+  );
+}
+
 type QuoteState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ok"; canonical: string; category: string; costLythoshiHex: string }
   | { status: "error"; message: string };
 
+// `submitting` carries the confirm-step details so the confirm card can STAY on
+// screen (disabled) while the submit is in flight. It previously carried nothing
+// and was read by no render branch, so the card vanished mid-submit and the form
+// reappeared with its Continue button live — a second submit was two clicks away,
+// with no error involved.
 type SubmitState =
   | { status: "idle" }
   | { status: "confirm"; canonical: string; category: string; costLythoshiHex: string }
-  | { status: "submitting" }
+  | { status: "submitting"; canonical: string; category: string; costLythoshiHex: string }
   | { status: "done"; canonical: string; txHash: string }
-  | { status: "error"; message: string };
+  | { status: "error"; failure: SubmitFailure };
 
 export function Names({ chainIdHex, onBack }: NamesProps) {
   const [name, setName] = useState("");
@@ -110,18 +134,26 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
 
   const doRegister = async () => {
     if (submit.status !== "confirm") return;
-    const canonical = submit.canonical;
-    setSubmit({ status: "submitting" });
-    const r = await bgWalletNameRegister(canonical, chainIdHex);
-    if (r.ok) {
-      setSubmit({ status: "done", canonical: r.canonical, txHash: r.txHash });
-      setName("");
-      setQuote({ status: "idle" });
-    } else {
-      setSubmit({
-        status: "error",
-        message: r.reason ?? "Registration failed.",
-      });
+    const { canonical, category, costLythoshiHex } = submit;
+    setSubmit({ status: "submitting", canonical, category, costLythoshiHex });
+    try {
+      const r = await bgWalletNameRegister(canonical, chainIdHex);
+      if (r.ok) {
+        setSubmit({ status: "done", canonical: r.canonical, txHash: r.txHash });
+        setName("");
+        setQuote({ status: "idle" });
+      } else {
+        setSubmit({
+          status: "error",
+          failure: verbatimFailure(r.reason, "Registration failed."),
+        });
+      }
+    } catch (e) {
+      // `wallet-name-register` is on the DA-009 no-resend list, so a dropped
+      // popup↔SW channel rethrows here with no retry. Without this catch the
+      // rejection escaped to the console and the state stayed "submitting" —
+      // which rendered nothing, so the user saw the form reappear unchanged.
+      setSubmit({ status: "error", failure: submitThrowFailure(e) });
     }
   };
 
@@ -168,7 +200,7 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
                 Register another
               </button>
             </div>
-          ) : submit.status === "confirm" ? (
+          ) : submit.status === "confirm" || submit.status === "submitting" ? (
             <div style={confirmBox}>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
                 Confirm registration
@@ -189,13 +221,18 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button
-                  style={{ ...ghostBtn, flex: 1 }}
+                  style={{ ...ghostBtn, flex: 1, opacity: submit.status === "submitting" ? 0.5 : 1 }}
+                  disabled={submit.status === "submitting"}
                   onClick={() => setSubmit({ status: "idle" })}
                 >
                   Cancel
                 </button>
-                <button style={{ ...primaryBtn, flex: 1 }} onClick={() => void doRegister()}>
-                  Register
+                <button
+                  style={{ ...primaryBtn, flex: 1, opacity: submit.status === "submitting" ? 0.6 : 1 }}
+                  disabled={submit.status === "submitting"}
+                  onClick={() => void doRegister()}
+                >
+                  {submit.status === "submitting" ? "Registering…" : "Register"}
                 </button>
               </div>
             </div>
@@ -229,9 +266,7 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
                   </span>
                 </div>
               )}
-              {submit.status === "error" && (
-                <div style={errBox}>{submit.message}</div>
-              )}
+              {submit.status === "error" && <FailureBox failure={submit.failure} />}
               <button
                 style={{ ...primaryBtn, marginTop: 10, opacity: quote.status === "ok" ? 1 : 0.5 }}
                 disabled={quote.status !== "ok"}
@@ -258,7 +293,7 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
     "form" | "resolving" | "confirm" | "submitting" | "done" | "error"
   >("form");
   const [resolvedAddr0x, setResolvedAddr0x] = useState<string | null>(null);
-  const [msg, setMsg] = useState("");
+  const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [txHash, setTxHash] = useState("");
 
   const canonical = name.trim().toLowerCase();
@@ -268,12 +303,12 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
   const reset = () => {
     setPhase("form");
     setResolvedAddr0x(null);
-    setMsg("");
+    setFailure(null);
     setTxHash("");
   };
 
   const proceed = async () => {
-    setMsg("");
+    setFailure(null);
     const parse = validateToAddress(recipient.trim());
     let addr0x = parse.addr0x;
     if (addr0x === null && parse.monoName !== null) {
@@ -282,13 +317,23 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
       if (r.ok && r.addr0x !== null) {
         addr0x = r.addr0x;
       } else {
-        setMsg(r.ok ? "That recipient name isn't registered." : r.reason ?? "Couldn't resolve the recipient.");
+        setFailure(
+          verbatimFailure(
+            r.ok ? "That recipient name isn't registered." : r.reason,
+            "Couldn't resolve the recipient.",
+          ),
+        );
         setPhase("error");
         return;
       }
     }
     if (addr0x === null) {
-      setMsg(parse.error ?? "Enter a valid recipient (a mono1… address or a .mono name).");
+      setFailure(
+        verbatimFailure(
+          parse.error,
+          "Enter a valid recipient (a mono1… address or a .mono name).",
+        ),
+      );
       setPhase("error");
       return;
     }
@@ -299,12 +344,20 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
   const submit = async () => {
     if (resolvedAddr0x === null) return;
     setPhase("submitting");
-    const r = await bgWalletNamePropose(canonical, resolvedAddr0x, chainIdHex);
-    if (r.ok) {
-      setTxHash(r.txHash);
-      setPhase("done");
-    } else {
-      setMsg(r.reason ?? "Couldn't propose the transfer.");
+    setFailure(null);
+    try {
+      const r = await bgWalletNamePropose(canonical, resolvedAddr0x, chainIdHex);
+      if (r.ok) {
+        setTxHash(r.txHash);
+        setPhase("done");
+      } else {
+        setFailure(verbatimFailure(r.reason, "Couldn't propose the transfer."));
+        setPhase("error");
+      }
+    } catch (e) {
+      // See doRegister: `wallet-name-propose` is also on the no-resend list, so
+      // a dropped channel rethrows and previously vanished into the console.
+      setFailure(submitThrowFailure(e));
       setPhase("error");
     }
   };
@@ -328,7 +381,7 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
             Done
           </button>
         </div>
-      ) : phase === "confirm" ? (
+      ) : phase === "confirm" || phase === "submitting" ? (
         <div style={confirmBox}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
             Confirm transfer
@@ -348,9 +401,19 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
             accept.
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button style={{ ...ghostBtn, flex: 1 }} onClick={reset}>Cancel</button>
-            <button style={{ ...primaryBtn, flex: 1 }} onClick={() => void submit()}>
-              Propose
+            <button
+              style={{ ...ghostBtn, flex: 1, opacity: phase === "submitting" ? 0.5 : 1 }}
+              disabled={phase === "submitting"}
+              onClick={reset}
+            >
+              Cancel
+            </button>
+            <button
+              style={{ ...primaryBtn, flex: 1, opacity: phase === "submitting" ? 0.6 : 1 }}
+              disabled={phase === "submitting"}
+              onClick={() => void submit()}
+            >
+              {phase === "submitting" ? "Proposing…" : "Propose"}
             </button>
           </div>
         </div>
@@ -378,7 +441,7 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
             spellCheck={false}
             style={{ ...input, marginTop: 8 }}
           />
-          {phase === "error" && <div style={errBox}>{msg}</div>}
+          {phase === "error" && failure !== null && <FailureBox failure={failure} />}
           <button
             style={{
               ...primaryBtn,
@@ -401,7 +464,7 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
   const [name, setName] = useState("");
   const [quote, setQuote] = useState<QuoteState>({ status: "idle" });
   const [phase, setPhase] = useState<"form" | "confirm" | "submitting" | "done" | "error">("form");
-  const [msg, setMsg] = useState("");
+  const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [txHash, setTxHash] = useState("");
 
   const canonical = name.trim().toLowerCase();
@@ -409,7 +472,7 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
 
   useEffect(() => {
     setPhase("form");
-    setMsg("");
+    setFailure(null);
     if (!nameValid) {
       setQuote({ status: "idle" });
       return;
@@ -432,12 +495,20 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
 
   const submit = async () => {
     setPhase("submitting");
-    const r = await bgWalletNameAccept(canonical, chainIdHex);
-    if (r.ok) {
-      setTxHash(r.txHash);
-      setPhase("done");
-    } else {
-      setMsg(r.reason ?? "Couldn't accept the transfer.");
+    setFailure(null);
+    try {
+      const r = await bgWalletNameAccept(canonical, chainIdHex);
+      if (r.ok) {
+        setTxHash(r.txHash);
+        setPhase("done");
+      } else {
+        setFailure(verbatimFailure(r.reason, "Couldn't accept the transfer."));
+        setPhase("error");
+      }
+    } catch (e) {
+      // See doRegister. This op re-charges the FULL registration cost, so a
+      // silent failure here is a silent spend.
+      setFailure(submitThrowFailure(e));
       setPhase("error");
     }
   };
@@ -457,7 +528,7 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
             Done
           </button>
         </div>
-      ) : phase === "confirm" && quote.status === "ok" ? (
+      ) : (phase === "confirm" || phase === "submitting") && quote.status === "ok" ? (
         <div style={confirmBox}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Confirm acceptance</div>
           <Row label="Name" value={<span style={mono}>{canonical}</span>} />
@@ -468,9 +539,19 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
             Only works within 24 hours of the proposal.
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button style={{ ...ghostBtn, flex: 1 }} onClick={() => setPhase("form")}>Cancel</button>
-            <button style={{ ...primaryBtn, flex: 1 }} onClick={() => void submit()}>
-              Pay &amp; accept
+            <button
+              style={{ ...ghostBtn, flex: 1, opacity: phase === "submitting" ? 0.5 : 1 }}
+              disabled={phase === "submitting"}
+              onClick={() => setPhase("form")}
+            >
+              Cancel
+            </button>
+            <button
+              style={{ ...primaryBtn, flex: 1, opacity: phase === "submitting" ? 0.6 : 1 }}
+              disabled={phase === "submitting"}
+              onClick={() => void submit()}
+            >
+              {phase === "submitting" ? "Accepting…" : "Pay & accept"}
             </button>
           </div>
         </div>
@@ -497,7 +578,7 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
               <span style={{ ...mono, color: "var(--gold)" }}>{costLyth ?? "—"} LYTH</span>.
             </div>
           )}
-          {phase === "error" && <div style={errBox}>{msg}</div>}
+          {phase === "error" && failure !== null && <FailureBox failure={failure} />}
           <button
             style={{ ...primaryBtn, marginTop: 10, opacity: quote.status === "ok" ? 1 : 0.5 }}
             disabled={quote.status !== "ok"}
