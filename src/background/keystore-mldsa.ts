@@ -1663,9 +1663,37 @@ export async function updatePasskeyCredentialSignCountV4(
   credentialId: string,
   newSignCount: number,
 ): Promise<void> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) return;
+  // Cheap no-op check on a PRE-LOCK snapshot, mirroring `removeVaultV4`'s.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. This snapshot is taken outside the
+  // container lock and can be stale, so it may let a call through that the
+  // authoritative checks inside then find nothing to do. That direction is
+  // harmless; the reverse would be, which is why every check below is repeated
+  // inside rather than moved.
+  //
+  // It exists because `mutateContainer` ALWAYS writes, and this function's
+  // COMMON case is the no-op: it runs once per verified passkey assertion, on
+  // the send path. Entering the primitive to change nothing would write the
+  // container back unchanged, and `App.tsx` refreshes keystore state on every
+  // write to that key — a popup round-trip per assertion. Exiting here also
+  // preserves the pre-existing silent return when no container exists, which the
+  // primitive would otherwise turn into a throw.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) return;
+  const preVault = pre.vaults.find((rec) => rec.id === vaultId);
+  if (!preVault?.passkey) return;
+  const preCred = preVault.passkey.credentials.find(
+    (c) => c.credentialId === credentialId,
+  );
+  if (!preCred) return;
+  if (
+    typeof preCred.signCount === "number" &&
+    newSignCount <= preCred.signCount
+  ) {
+    return;
+  }
+
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
     if (!v || !v.passkey) return;
     const next = clonePasskeyState(v.passkey);
@@ -1679,7 +1707,6 @@ export async function updatePasskeyCredentialSignCountV4(
     }
     next.credentials[idx] = { ...cur, signCount: newSignCount };
     v.passkey = next;
-    await saveVaultsContainerV4(container);
   });
 }
 
