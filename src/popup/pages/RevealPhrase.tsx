@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../Icon";
 import { MnemonicGrid } from "../components/MnemonicGrid";
 import { WalletLockLogo } from "../components/WalletLockLogo";
@@ -86,12 +86,32 @@ export function RevealPhrase({
     return () => clearInterval(t);
   }, [secondsRemaining]);
 
+  // `onBack` is constructed inline by the parent, so it is a NEW function on
+  // every App render. Held in a ref, and read through the ref at expiry, so the
+  // countdown effect below can depend only on the two values that actually arm
+  // it. Updated on every render, so the interval always calls the current
+  // `onBack` — no stale closure.
+  //
+  // Why it matters: with `onBack` in the dependency list, every App render tore
+  // the interval down and built a new one. The DISPLAYED count did not restart
+  // (it lives in state), but each rebuild restarted the 1000 ms window — so a
+  // sustained sub-second render cadence meant the tick never fired and the
+  // countdown STALLED, leaving a decrypted phrase in state past its bound.
+  const onBackRef = useRef(onBack);
+  useEffect(() => {
+    onBackRef.current = onBack;
+  });
+
   // Auto-hide countdown — runs whenever `autoHideArmed` holds, i.e. from the
   // moment the reveal step renders with a decrypted phrase. It is reset to
   // AUTO_HIDE_SECONDS once, on the warning step's "Reveal phrase" button, and
   // nothing else resets it: tap-to-reveal and tap-to-hide do not touch it, and
   // neither does copying. Expiry routes back via onBack, which unmounts this
   // screen and drops the mnemonic with it.
+  //
+  // Created ONCE per reveal: the deps are the arming conditions themselves, so
+  // the interval lives from the moment the phrase is on screen until the step
+  // or the phrase changes — not until the next render.
   useEffect(() => {
     if (!autoHideArmed(step, mnemonic)) return;
     const t = setInterval(() => {
@@ -99,14 +119,14 @@ export function RevealPhrase({
         const next = s - 1;
         if (next <= 0) {
           // Defer the parent nav so we don't setState mid-render.
-          setTimeout(() => onBack(), 0);
+          setTimeout(() => onBackRef.current(), 0);
           return 0;
         }
         return next;
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [step, mnemonic, onBack]);
+  }, [step, mnemonic]);
 
   // Unmount cleanup, and it is LOAD-BEARING — do not remove this effect. The
   // clipboard FLUSH is why: this screen auto-hides after 30 s, which unmounts
