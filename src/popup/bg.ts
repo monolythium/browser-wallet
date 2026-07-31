@@ -790,10 +790,17 @@ export async function bgWalletNameQuote(
   return send("wallet-name-quote", { name, chainIdHex });
 }
 
+// The three name ops take an OPTIONAL `idempotencyKey`, identifying one user
+// confirmation so a retry re-broadcasts the bytes already signed instead of
+// deriving a second nonce. Each is spread in only when supplied — never as
+// `key: undefined` — so an unkeyed call puts the exact payload on the wire that
+// it always has. `bg.idempotency.test.ts` pins that shape.
+
 /** Register a Human/Agent `.mono` name — value == the exact U-curve cost. */
 export async function bgWalletNameRegister(
   name: string,
   chainIdHex: string,
+  idempotencyKey?: string,
 ): Promise<
   | {
       ok: true;
@@ -805,7 +812,11 @@ export async function bgWalletNameRegister(
     }
   | { ok: false; reason?: string; code?: number }
 > {
-  return send("wallet-name-register", { name, chainIdHex });
+  return send("wallet-name-register", {
+    name,
+    chainIdHex,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  });
 }
 
 /** Propose transferring an owned name to a recipient (free; opens a 24h window). */
@@ -813,22 +824,33 @@ export async function bgWalletNamePropose(
   name: string,
   recipientAddr0x: string,
   chainIdHex: string,
+  idempotencyKey?: string,
 ): Promise<
   | { ok: true; txHash: string; via?: string; canonical: string }
   | { ok: false; reason?: string; code?: number }
 > {
-  return send("wallet-name-propose", { name, recipientAddr0x, chainIdHex });
+  return send("wallet-name-propose", {
+    name,
+    recipientAddr0x,
+    chainIdHex,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  });
 }
 
 /** Accept a pending transfer — the recipient re-pays the full U-curve cost. */
 export async function bgWalletNameAccept(
   name: string,
   chainIdHex: string,
+  idempotencyKey?: string,
 ): Promise<
   | { ok: true; txHash: string; via?: string; canonical: string; costLythoshiHex: string }
   | { ok: false; reason?: string; code?: number }
 > {
-  return send("wallet-name-accept", { name, chainIdHex });
+  return send("wallet-name-accept", {
+    name,
+    chainIdHex,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  });
 }
 
 export interface OwnedNameRow {

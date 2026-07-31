@@ -10,7 +10,12 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { bgWalletSendTx } from "./bg";
+import {
+  bgWalletNameAccept,
+  bgWalletNamePropose,
+  bgWalletNameRegister,
+  bgWalletSendTx,
+} from "./bg";
 
 let sent: Array<Record<string, unknown>>;
 
@@ -65,5 +70,50 @@ describe("wallet-send-tx carries the idempotency key", () => {
     await bgWalletSendTx({ ...BASE, idempotencyKey: "confirm-2" });
     expect(payloadOf(0).idempotencyKey).toBe("confirm-1");
     expect(payloadOf(1).idempotencyKey).toBe("confirm-2");
+  });
+});
+
+// The name ops gained the same optional key. The property that matters for the
+// extension is NOT that a supplied key arrives — it is that an UNSUPPLIED one
+// leaves the wire untouched. A field present as `undefined` would be a changed
+// payload shape for a service worker that has never seen it, so these assert
+// absence with `in`, not equality with undefined.
+describe("the name operations carry the key, and omit it when there is none", () => {
+  const CHAIN = "0x10F2C";
+
+  it("wallet-name-register: byte-identical payload when unkeyed", async () => {
+    await bgWalletNameRegister("alice.mono", CHAIN);
+    expect(payloadOf()).toEqual({ name: "alice.mono", chainIdHex: CHAIN });
+    expect("idempotencyKey" in payloadOf()).toBe(false);
+  });
+
+  it("wallet-name-propose: byte-identical payload when unkeyed", async () => {
+    await bgWalletNamePropose("alice.mono", "0xdead", CHAIN);
+    expect(payloadOf()).toEqual({
+      name: "alice.mono",
+      recipientAddr0x: "0xdead",
+      chainIdHex: CHAIN,
+    });
+    expect("idempotencyKey" in payloadOf()).toBe(false);
+  });
+
+  it("wallet-name-accept: byte-identical payload when unkeyed", async () => {
+    await bgWalletNameAccept("alice.mono", CHAIN);
+    expect(payloadOf()).toEqual({ name: "alice.mono", chainIdHex: CHAIN });
+    expect("idempotencyKey" in payloadOf()).toBe(false);
+  });
+
+  it("forwards the key on all three when supplied, under the same op names", async () => {
+    await bgWalletNameRegister("alice.mono", CHAIN, "confirm-r");
+    await bgWalletNamePropose("alice.mono", "0xdead", CHAIN, "confirm-p");
+    await bgWalletNameAccept("alice.mono", CHAIN, "confirm-a");
+    expect(sent.map((m) => m.op)).toEqual([
+      "wallet-name-register",
+      "wallet-name-propose",
+      "wallet-name-accept",
+    ]);
+    expect(payloadOf(0).idempotencyKey).toBe("confirm-r");
+    expect(payloadOf(1).idempotencyKey).toBe("confirm-p");
+    expect(payloadOf(2).idempotencyKey).toBe("confirm-a");
   });
 });

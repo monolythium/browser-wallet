@@ -2089,6 +2089,12 @@ async function submitNameTx(opts: {
   from: string;
   chainIdHex: string;
   boundVaultId: string;
+  /** One user CONFIRMATION of this name operation. Present → the submit is
+   *  idempotent under that key and a retry re-broadcasts the bytes already
+   *  signed. `unknown` because it arrives straight off an IPC payload; the
+   *  guard below is the same one the `wallet-send-tx` call site applies, kept
+   *  here so all three name ops share it rather than repeating it. */
+  idempotencyKey?: unknown;
 }): Promise<{ txHash: string; via?: string; costLythoshiHex: string }> {
   const fee = await suggestFee(opts.chainIdHex);
   const costLythoshi =
@@ -2111,6 +2117,13 @@ async function submitNameTx(opts: {
   const { txHash, via } = await submitTrackedTx(txReq, opts.boundVaultId, {
     from: opts.from,
     chainIdHex: opts.chainIdHex,
+    // Same hook, same route as the `wallet-send-tx` call site — not a parallel
+    // path. Absent (or not a non-empty string) spreads nothing, so the options
+    // object is exactly `{ from, chainIdHex }` as before and submitTrackedTx's
+    // `key !== undefined` branch is never entered.
+    ...(typeof opts.idempotencyKey === "string" && opts.idempotencyKey.length > 0
+      ? { idempotencyKey: opts.idempotencyKey }
+      : {}),
   });
   return { txHash, via, costLythoshiHex: "0x" + costLythoshi.toString(16) };
 }
@@ -10380,7 +10393,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // reverts a taken/invalid/unowned name post-inclusion; we pre-check
       // availability (+ agent-parent ownership) to avoid a wasted-fee revert,
       // but never fabricate success.
-      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      const p = message.payload as {
+        name?: unknown;
+        chainIdHex?: unknown;
+        idempotencyKey?: unknown;
+      };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
       }
@@ -10429,6 +10446,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           from: fromAddr,
           chainIdHex: p.chainIdHex,
           boundVaultId,
+          idempotencyKey: p.idempotencyKey,
         });
         await recordOwnedName(fromAddr, v.canonical, v.category);
         return {
@@ -10451,6 +10469,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         name?: unknown;
         recipientAddr0x?: unknown;
         chainIdHex?: unknown;
+        idempotencyKey?: unknown;
       };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
@@ -10492,6 +10511,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           from: fromAddr,
           chainIdHex: p.chainIdHex,
           boundVaultId,
+          idempotencyKey: p.idempotencyKey,
         });
         return { ok: true, txHash: r.txHash, via: r.via, canonical: v.canonical };
       } catch (e) {
@@ -10503,7 +10523,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // U-curve registration cost (value == cost), within the 24h window. There
       // is no on-chain pending-proposal reader, so a stale/absent proposal
       // reverts post-inclusion (fail-safe) — surfaced honestly, never faked.
-      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      const p = message.payload as {
+        name?: unknown;
+        chainIdHex?: unknown;
+        idempotencyKey?: unknown;
+      };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
       }
@@ -10525,6 +10549,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           from: fromAddr,
           chainIdHex: p.chainIdHex,
           boundVaultId,
+          idempotencyKey: p.idempotencyKey,
         });
         await recordOwnedName(fromAddr, v.canonical, v.category);
         return {
