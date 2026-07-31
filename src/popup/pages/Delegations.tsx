@@ -27,6 +27,12 @@ import {
   type PendingRewardsView,
 } from "../bg";
 import { buildClaimMeta } from "../claim-meta";
+import { nextSendKey, type SendKeyState } from "../send-key";
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
 import { useInFlightClaim, useClaimConfirmed } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
@@ -84,9 +90,12 @@ export function Delegations({
   const claimInFlight = useInFlightClaim(account.addr, chainId);
   const [claimResult, setClaimResult] = useState<
     | { ok: true; txHash: string }
-    | { ok: false; reason: string }
+    | { ok: false; failure: SubmitFailure }
     | null
   >(null);
+  // The key identifying the claim confirmation currently in flight. Carried by a
+  // Try again, released on success.
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
   // #2 — auto-dismiss the claim-submitted toast once the claim confirms on-chain
   // (its pending row is receipt-bridged), so the user doesn't dismiss manually.
   const claimConfirmed = useClaimConfirmed(
@@ -180,7 +189,13 @@ export function Delegations({
   // Claim handler — same encoded selector + tx envelope as Stake.tsx
   // but inlined here so the Delegations page doesn't depend on the
   // Stake page's state machine to fire a claim.
-  const handleClaim = async () => {
+  //
+  // `opts.retry` is a PARAMETER, not component state. The Try-again affordance
+  // below re-invokes this handler synchronously, and a `setState` immediately
+  // before a synchronous call is still unapplied when the handler reads it — the
+  // flag would be lost and the retry would mint a fresh key, silently defeating
+  // the mechanism. Same shape-B constraint the Stake claim site records.
+  const handleClaim = async (opts?: { retry?: boolean }) => {
     setClaimSubmitting(true);
     setClaimResult(null);
     try {
@@ -189,6 +204,22 @@ export function Delegations({
       // the receipt's Claimed log after confirmation, not captured here (the
       // submit-time pending-rewards value is wrong). Metadata-only; value 0x0.
       const claim = await buildClaimMeta();
+      // A claim has NO user-editable parameters — no recipient, no amount, no
+      // tier — so these params are constant and the params guard can never fire
+      // here. The safety therefore comes from the RELEASE, not the comparison:
+      // `success` clears the key, so the only way to reuse one is a retry of a
+      // claim that failed, and a genuine later claim mints fresh. Deliberately
+      // excludes the fee and the pending-reward amount — both move between
+      // attempts on their own, and either would make every retry look like an
+      // edit, so the mechanism would never fire.
+      const keyParams = `claim|${chainId}`;
+      const keyDecision = nextSendKey(
+        sendKey,
+        opts?.retry === true ? "retry" : "submit",
+        keyParams,
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -196,14 +227,23 @@ export function Delegations({
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
         opKind: "claim",
+        ...(keyDecision.use !== null ? { idempotencyKey: keyDecision.use } : {}),
         claimedAmount: claim.claimedAmount,
         rateAtClaim: claim.rateAtClaim,
         currency: claim.currency,
       });
-      if (r.ok) setClaimResult({ ok: true, txHash: r.result.txHash });
-      else setClaimResult({ ok: false, reason: r.reason ?? "claim rejected" });
+      if (r.ok) {
+        setClaimResult({ ok: true, txHash: r.result.txHash });
+        setSendKey(null); // released — the next claim is an independent send
+      } else {
+        setClaimResult({ ok: false, failure: verbatimFailure(r.reason, "Claim rejected.") });
+      }
     } catch (e) {
-      setClaimResult({ ok: false, reason: (e as Error).message ?? "claim failed" });
+      // Classified rather than raw: a dropped popup↔SW channel reports an
+      // UNKNOWN outcome, so the Try-again below sits under copy that does not
+      // promise the claim failed. The key is what makes offering that retry
+      // safe — it replays the signed bytes instead of deriving a second nonce.
+      setClaimResult({ ok: false, failure: submitThrowFailure(e) });
     } finally {
       setClaimSubmitting(false);
     }
@@ -311,7 +351,33 @@ export function Delegations({
                 </span>
               </>
             ) : (
-              claimResult.reason
+              <>
+                {claimResult.failure.headline !== null && (
+                  <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                    {claimResult.failure.headline}
+                  </div>
+                )}
+                {claimResult.failure.body}
+                {/* The retry affordance the surface never had. Same control the
+                    Send and Stake error views use ("Try again", ext-act
+                    prim-soft) rather than a new pattern. Re-invokes the handler
+                    SYNCHRONOUSLY with retry as an argument, so the carried key
+                    is read correctly. Disabled while a claim is submitting or
+                    durably in flight, matching the Claim button's own guard. */}
+                <button
+                  onClick={() => void handleClaim({ retry: true })}
+                  disabled={claimSubmitting || claimInFlight}
+                  className="ext-act prim-soft"
+                  style={{
+                    marginTop: 8,
+                    padding: 8,
+                    width: "100%",
+                    opacity: claimSubmitting || claimInFlight ? 0.5 : 1,
+                  }}
+                >
+                  Try again
+                </button>
+              </>
             )}
           </div>
         )}
