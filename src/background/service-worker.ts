@@ -28,6 +28,7 @@
 // `eth_estimateGas` ARE served by the chain as read-only native-executor
 // views (not retired — just not proxied here); the six filters ARE retired.
 
+import { armUnhandledRejectionDetector } from "../shared/dev-rejection-detector.js";
 import { RpcClient } from "@monolythium/core-sdk";
 import {
   addressToTypedBech32,
@@ -12346,6 +12347,14 @@ void bootHydrated
     // Best-effort badge reconciliation. Storage/action failures must not escape
     // module initialization or keep the service worker alive.
   });
+
+// Dev builds only. The worker's console is a separate devtools window most
+// people never open, so an unhandled rejection here is even less visible than
+// one in the popup — and this file is full of deliberate fire-and-forget
+// (`void persistPendingRowBackground(...)` and friends) whose internal swallows
+// this does not touch. A detector, not a handler: it reports and suppresses
+// nothing. See src/shared/dev-rejection-detector.ts.
+armUnhandledRejectionDetector();
 
 // ---- message routing ----
 
