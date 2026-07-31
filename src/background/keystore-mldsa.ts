@@ -1163,34 +1163,48 @@ export async function selectActiveVaultV4(
 ): Promise<{ address: string }> {
   if (!mekCache) throw new Error("container is locked");
   const mek = mekCache;
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
+  // No-op fast path, hoisted BEFORE the lock. Uniquely cheap among these
+  // pre-checks: it reads only module state, so it needs no container round-trip
+  // at all. Re-selecting the already-active wallet is an ordinary thing to do
+  // from the picker, and `mutateContainer` always writes — without this, every
+  // such click would rewrite the container unchanged and make the popup refresh
+  // its keystore state.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. The same check is repeated inside.
+  if (vaultId === activeContainerVaultId && unlocked) {
+    return { address: unlocked.address };
+  }
+  return mutateContainer(async (container, { onWriteFailure, onWriteSuccess }) => {
   const target = container.vaults.find((v) => v.id === vaultId);
   if (!target) throw new Error("unknown vault id");
-  // No-op fast path: already the active vault.
+  // Authoritative no-op check. Reachable only if the active vault changed
+  // between the pre-check and the lock, in which case the write below is
+  // redundant but harmless.
   if (vaultId === activeContainerVaultId && unlocked) {
     return { address: unlocked.address };
   }
   const state = await loadVaultBackend(mek, target);
   container.activeVaultId = vaultId;
-  try {
-    await saveVaultsContainerV4(container);
-  } catch (e) {
-    // DA-002 made this path reachable. The incoming backend never becomes the
-    // session, so dispose its decrypted ML-DSA-65 secret rather than leaving it
-    // for GC — the same discipline removeVaultV4 applies to its speculative
-    // successor. `unlocked` is untouched, so the outgoing vault stays live.
+  // DA-002 made this path reachable. The incoming backend never becomes the
+  // session, so dispose its decrypted ML-DSA-65 secret rather than leaving it
+  // for GC — the same discipline removeVaultV4 applies to its speculative
+  // successor. `unlocked` is untouched, so the outgoing vault stays live.
+  onWriteFailure(() => {
     state.backend.dispose();
-    throw e;
-  }
+  });
   // S1-01: deterministically wipe the OUTGOING vault's ML-DSA-65 secret once
   // the new backend is installed, instead of leaving it for GC. `prev` is the
   // abandoned instance; `state.backend` (now `unlocked`) is never the target.
-  const prev = unlocked;
-  unlocked = state;
-  activeContainerVaultId = vaultId;
-  prev?.backend.dispose();
+  //
+  // Registered so it runs AFTER the write and still inside the lock. Inline here
+  // it would run BEFORE the write, and a failed write would then dispose the
+  // backend `unlocked` had just been pointed at with `prev` already gone.
+  onWriteSuccess(() => {
+    const prev = unlocked;
+    unlocked = state;
+    activeContainerVaultId = vaultId;
+    prev?.backend.dispose();
+  });
   return { address: state.address };
   });
 }
