@@ -248,6 +248,19 @@ const COALESCED_POPUP_OPS = new Set<string>([
   // #B3-2 indexer-off fallback: an idempotent read fired automatically by the
   // empty-state effect; coalesce so multiple mounts don't double-scan txFeed.
   "wallet-activity-txfeed",
+  // Every `useFeature` consumer reads this on mount, and one page mounts many:
+  // the gated surfaces themselves plus a `DevBadge` on each, so About and
+  // OperatorDirectory can reach ~9 apiece on top of App's 3. In MV3 each IPC can
+  // wake the service worker, so that was several wakes for one answer and badges
+  // resolving in sequence rather than together. They all mount in the same
+  // commit, so they are genuinely concurrent and collapse to ONE round-trip.
+  //
+  // Qualifies on both tests this allow-list applies: it is an idempotent READ
+  // (never a write), and it takes NO PAYLOAD — so the coalesce key is a constant
+  // and cannot embed a secret the way a password-taking op's would. Clearing on
+  // settle keeps a later mount a fresh read, and each consumer keeps its own
+  // storage listener, so live flag changes are unaffected.
+  "two-tier-get-state",
 ]);
 
 function send<T>(op: string, payload?: unknown): Promise<T> {
