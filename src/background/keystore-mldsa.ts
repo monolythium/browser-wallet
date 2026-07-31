@@ -806,6 +806,13 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
  * All fifteen writers in this module route through those two, and this function
  * is called from nowhere else in the module.
  *
+ * WHAT KEEPS IT THAT WAY: `src/buildtime/container-write-invariant.ts` inspects
+ * this file's source text and reports every direct call to this function that is
+ * not inside one of the two primitives; the suite asserts it finds none. So a
+ * sixteenth writer that calls this function directly fails the test run rather
+ * than passing review. That is a source check, not a runtime one — see the limits
+ * at the foot of this note.
+ *
  * WHY THAT SHAPE: the container is persisted as ONE blob, so a writer acting on
  * a snapshot taken before it acquired the lock overwrites whatever landed in
  * between. When both writers touch the vault ARRAY — `removeVaultV4` and
@@ -837,35 +844,38 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
  * across a module boundary — recreating exactly the hatch this design avoids —
  * to gain nothing the shared lock does not already give.
  *
- * WHAT IS NOT ENFORCED — read this before adding a sixteenth writer. Routing is
- * a convention here, not a constraint. The primitives make the correct thing the
- * easy thing; they do not make the incorrect thing impossible.
+ * THE LIMITS — read this before adding a sixteenth writer.
  *
- *   1. Nothing stops a NEW writer inside this module from calling this function
- *      directly — without the lock, or holding the lock but persisting a
- *      snapshot read BEFORE it. The second is the dangerous one: it looks
- *      correct in review, because the lock is visibly present.
+ *   1. INDIRECTION DEFEATS THE CHECK. It matches a direct call in source text,
+ *      so aliasing this function to another name, reaching it by dynamic
+ *      dispatch, or importing it from another module through the
+ *      `__internalV4Multi` re-export all pass unreported. The check narrows the
+ *      gap to indirection; it does not close it.
  *
- *   2. This function is NOT private to the module. It is re-exported on
- *      `__internalV4Multi` at the foot of this file, so any module can import it
- *      and write the container unlocked. Today only `keystore-mldsa.test.ts`
- *      does — and that is what blocks removing it. Three tests in the guard
- *      suite call it directly: the two DA-002 cases that pin its rejection and
- *      its success, and the two-vault schema fixture that seeds a container with
- *      it. A guard test is not edited to accommodate a refactor, so the export
- *      stays. The same collision blocks the obvious runtime fix: a check that
- *      made this function refuse unless the lock is held would fail both DA-002
- *      cases, which call it lock-free and expect a storage-quota rejection and a
- *      plain success — not a lock error. The capability is reachable for testing
- *      or sealed against callers, not both.
+ *   2. THE RE-EXPORT STAYS. This function is not private to the module: it is
+ *      re-exported on `__internalV4Multi` at the foot of this file, so another
+ *      module could import it and write the container unlocked. Today only
+ *      `keystore-mldsa.test.ts` does, and that is what blocks removing it —
+ *      three tests in the guard suite call it directly (the two DA-002 cases
+ *      pinning its rejection and its success, and the two-vault schema fixture
+ *      that seeds a container with it), and a guard test is not edited to
+ *      accommodate a refactor. The same collision rules out the runtime version
+ *      of this check: making this function refuse unless the lock is held would
+ *      fail both DA-002 cases, which call it lock-free and expect a storage-quota
+ *      rejection and a plain success, not a lock error. The capability is
+ *      reachable for testing or sealed against callers, not both. The source
+ *      check sits outside that dilemma — it has no opinion about how a test calls
+ *      this function at runtime.
  *
- * AND WHAT SUCH A CHECK STILL COULD NOT DO, if one is ever added: a module-level
- * "the lock is held" marker records that SOMEONE holds it, not that YOU do.
- * `withKeyLock` chains promises, so a write issued from inside a concurrent
- * holder's continuation would find the marker set and pass. It would narrow the
- * gap above, not close it.
+ *   3. AND A RUNTIME CHECK WOULD STILL NOT BE COMPLETE, if the collision above
+ *      were ever resolved: a module-level "the lock is held" marker records that
+ *      SOMEONE holds it, not that YOU do. `withKeyLock` chains promises, so a
+ *      write issued from inside a concurrent holder's continuation would find the
+ *      marker set and pass.
  *
- * This note claims routing and serialisation. It does not claim enforcement.
+ * This note claims routing, serialisation, and a source check that keeps direct
+ * calls out. It does not claim that the container cannot be written by other
+ * means.
  */
 async function saveVaultsContainerV4(
   container: VaultsContainerV4,
