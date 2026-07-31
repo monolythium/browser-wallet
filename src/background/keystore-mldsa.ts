@@ -792,15 +792,27 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
 /**
  * The container-write invariant (H1).
  *
- * THE RULE: every mutation of the vaults container runs inside
- * `withKeyLock(VAULTS_CONTAINER_KEY_V4, …)`, and the container is re-read with
- * `loadVaultsContainerV4()` INSIDE that lock. Acting on a snapshot taken before
- * acquiring reintroduces the original defect with extra steps: the container is
- * persisted as one blob, so a writer holding a stale snapshot overwrites
- * whatever landed in between. When both writers touch the vault ARRAY —
- * `removeVaultV4` and `appendVaultRecord` — what is overwritten is a vault
- * record, destroying its wrapped VEK and sealed seed envelope for an address
- * that stays funded on-chain.
+ * THE MECHANISM: every mutation of the vaults container goes through one of two
+ * primitives in this module, and each owns the lock, the read and the write.
+ *
+ *   - `mutateContainer` takes `withKeyLock(VAULTS_CONTAINER_KEY_V4, …)`, reads
+ *     the container with `loadVaultsContainerV4()` inside that lock, hands the
+ *     callback the object it read, and persists THAT object. No parameter exists
+ *     through which a different one could be supplied, and the return type
+ *     refuses a callback that tries to hand one back.
+ *   - `createContainer` is onboarding only. It asserts inside the lock that no
+ *     container exists, and only then writes the fresh one its callback builds.
+ *
+ * All fifteen writers in this module route through those two, and this function
+ * is called from nowhere else in the module.
+ *
+ * WHY THAT SHAPE: the container is persisted as ONE blob, so a writer acting on
+ * a snapshot taken before it acquired the lock overwrites whatever landed in
+ * between. When both writers touch the vault ARRAY — `removeVaultV4` and
+ * `appendVaultRecord` — what is overwritten is a vault record, destroying its
+ * wrapped VEK and sealed seed envelope for an address that stays funded
+ * on-chain. Owning the read is what removes the opportunity to hold such a
+ * snapshot; a rule that merely said "take the lock" left it available.
  *
  * WHY THE LOCK IS AROUND THE STORAGE ROUND TRIPS, not around the KDF: the
  * exposure is the genuine macrotask yields — the `chrome.storage.local` get and
@@ -816,31 +828,44 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
  * the lock across a ~1 s derivation would queue every other container op behind
  * it. Nothing else read before the lock may be acted upon.
  *
- * ENROLMENT AT THE TIME OF WRITING: all fifteen writers in this module, plus
- * `wipeAllLocalWalletState` in the service worker, which removes the container
- * by `mono.`-prefix scan rather than through this helper and therefore takes the
- * same lock via `vaultContainerLockKey()`.
+ * THE ACKNOWLEDGED EXCEPTION — the wipe. `wipeAllLocalWalletState` in the
+ * service worker removes the container by `mono.`-prefix scan rather than
+ * through either primitive, so it is NOT routed. It is serialised instead: it
+ * takes the same lock via `vaultContainerLockKey()`, so it cannot delete the
+ * container out from under an in-flight writer, nor be overwritten by one. It
+ * stays outside deliberately. Routing it would mean exporting a write capability
+ * across a module boundary — recreating exactly the hatch this design avoids —
+ * to gain nothing the shared lock does not already give.
  *
- * WHAT IS NOT ENFORCED — read this before adding a sixteenth writer. Two gaps,
- * and the second was previously described here as closed when it is not:
+ * WHAT IS NOT ENFORCED — read this before adding a sixteenth writer. Routing is
+ * a convention here, not a constraint. The primitives make the correct thing the
+ * easy thing; they do not make the incorrect thing impossible.
  *
- *   1. Nothing stops a NEW writer inside this module from calling this helper
- *      without taking the lock, or from taking the lock and then persisting a
+ *   1. Nothing stops a NEW writer inside this module from calling this function
+ *      directly — without the lock, or holding the lock but persisting a
  *      snapshot read BEFORE it. The second is the dangerous one: it looks
  *      correct in review, because the lock is visibly present.
  *
  *   2. This function is NOT private to the module. It is re-exported on
  *      `__internalV4Multi` at the foot of this file, so any module can import it
- *      and write the container unlocked. An earlier version of this note claimed
- *      the opposite — "confined to this one non-exported function, so no code
- *      outside the module can write the container". That was false. Today only
- *      `keystore-mldsa.test.ts` imports it, so nothing exploits the gap, but the
- *      door is ajar rather than shut.
+ *      and write the container unlocked. Today only `keystore-mldsa.test.ts`
+ *      does — and that is what blocks removing it. Three tests in the guard
+ *      suite call it directly: the two DA-002 cases that pin its rejection and
+ *      its success, and the two-vault schema fixture that seeds a container with
+ *      it. A guard test is not edited to accommodate a refactor, so the export
+ *      stays. The same collision blocks the obvious runtime fix: a check that
+ *      made this function refuse unless the lock is held would fail both DA-002
+ *      cases, which call it lock-free and expect a storage-quota rejection and a
+ *      plain success — not a lock error. The capability is reachable for testing
+ *      or sealed against callers, not both.
  *
- * Closing either one needs every call site to go through a primitive that owns
- * the lock, the read and the write — deferred, not done. Until then, the rule
- * above is what keeps the container consistent, and this note claims no more
- * than that.
+ * AND WHAT SUCH A CHECK STILL COULD NOT DO, if one is ever added: a module-level
+ * "the lock is held" marker records that SOMEONE holds it, not that YOU do.
+ * `withKeyLock` chains promises, so a write issued from inside a concurrent
+ * holder's continuation would find the marker set and pass. It would narrow the
+ * gap above, not close it.
+ *
+ * This note claims routing and serialisation. It does not claim enforcement.
  */
 async function saveVaultsContainerV4(
   container: VaultsContainerV4,
