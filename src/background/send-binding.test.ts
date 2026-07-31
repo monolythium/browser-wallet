@@ -9,7 +9,7 @@
 // The pure map helpers are tested here without a chrome stub; the storage
 // wrappers are exercised through a minimal stub at the end.
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   SEND_BINDING_TTL_MS,
@@ -21,6 +21,7 @@ import {
   readSendBinding,
   readValidBinding,
   withBinding,
+  withSendBinding,
   withoutBinding,
   writeSendBinding,
   type SendBinding,
@@ -295,5 +296,143 @@ describe("completeSendBinding — drops the bytes, keeps the answer", () => {
     // …and completion still did its job.
     expect(stored.wireHex).toBe("");
     expect(stored.txHashHex).toBe("0xlanded");
+  });
+});
+
+// ── withSendBinding — the shared bind/replay lifecycle ──────────────────────
+//
+// One implementation for both submit paths. The binding property is NEGATIVE
+// and it is the whole point: when a live binding exists, `submit` must NEVER be
+// reached, because reaching it means signing again. Asserting the returned hash
+// would pass even if it had re-signed to the same mock value, so these assert
+// the producing function was not called at all.
+
+describe("withSendBinding — never re-signs when a binding already exists", () => {
+  let local: Record<string, unknown>;
+
+  beforeEach(() => {
+    local = {};
+    (globalThis as { chrome?: unknown }).chrome = {
+      storage: {
+        local: {
+          get: (keys: string[], cb: (r: Record<string, unknown>) => void) => {
+            const out: Record<string, unknown> = {};
+            for (const k of keys) if (k in local) out[k] = local[k];
+            cb(out);
+          },
+          set: (items: Record<string, unknown>, cb: () => void) => {
+            Object.assign(local, items);
+            cb();
+          },
+        },
+      },
+    };
+  });
+
+  const KEY = "confirm-1";
+  const fields = {
+    nonceHex: "0x7",
+    wireHex: "0xdeadbeef",
+    txHashHex: "0xabc",
+    from: "0xsender",
+    chainIdHex: "0x10F2C",
+  };
+
+  /** A `submit` that binds then reports success, and counts its own calls. */
+  function submitter(txHash = "0xfresh") {
+    return vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind(fields);
+      return { txHash, via: "op-1", nonceHex: fields.nonceHex };
+    });
+  }
+
+  it("signs and binds when there is nothing bound yet", async () => {
+    const submit = submitter();
+    const rebroadcast = vi.fn();
+    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(rebroadcast).not.toHaveBeenCalled();
+    expect(r.txHash).toBe("0xfresh");
+    // Completed in the same call: bytes dropped, hash kept.
+    const stored = (local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap)[KEY]!;
+    expect(stored.wireHex).toBe("");
+    expect(stored.txHashHex).toBe("0xfresh");
+    expect(stored.from).toBe("0xsender");
+  });
+
+  it("REPLAYS stored bytes without calling submit — nothing is signed again", async () => {
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+    const submit = submitter("0xshould-never-be-produced");
+    const rebroadcast = vi.fn(async (_w: string, h: string) => ({
+      txHash: h,
+      via: "op-replay",
+    }));
+
+    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");
+    expect(r).toEqual({ txHash: "0xabc", via: "op-replay", nonceHex: "0x7" });
+  });
+
+  it("answers from a COMPLETED stub without broadcasting or signing", async () => {
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+    await completeSendBinding(KEY, "0xlanded", "op-1", T0);
+    const submit = submitter();
+    const rebroadcast = vi.fn();
+
+    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(rebroadcast).not.toHaveBeenCalled();
+    expect(r).toEqual({ txHash: "0xlanded", via: "op-1", nonceHex: "0x7" });
+  });
+
+  it("signs afresh once the binding has expired — an orphan must not resurrect", async () => {
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+    const submit = submitter();
+    const rebroadcast = vi.fn();
+
+    await withSendBinding({
+      key: KEY,
+      now: () => T0 + SEND_BINDING_TTL_MS + 1,
+      rebroadcast,
+      submit,
+    });
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(rebroadcast).not.toHaveBeenCalled();
+  });
+
+  it("drops the binding when the submit throws, so nothing is replayed later", async () => {
+    const boom = new Error("no operator took it");
+    const submit = vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind(fields); // bound before broadcast, as the real hook does
+      throw boom;
+    });
+
+    await expect(
+      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), submit }),
+    ).rejects.toThrow(boom);
+
+    // The bytes are worthless and the nonce unspent — a later attempt must sign
+    // afresh rather than re-broadcast a transaction the chain never saw.
+    expect(await readSendBinding(KEY, T0)).toBeNull();
+  });
+
+  it("replays a record written before the account fields existed", async () => {
+    // The realistic cross-upgrade case: bytes on disk in the old shape.
+    await writeSendBinding(KEY, legacyBindingAt(T0));
+    const submit = submitter();
+    const rebroadcast = vi.fn(async (_w: string, h: string) => ({
+      txHash: h,
+      via: "op-replay",
+    }));
+
+    await withSendBinding({ key: KEY, now: () => T0, rebroadcast, submit });
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");
   });
 });

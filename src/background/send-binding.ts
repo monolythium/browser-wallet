@@ -233,3 +233,87 @@ export async function completeSendBinding(
 export function isCompleted(binding: SendBinding): boolean {
   return binding.wireHex.length === 0;
 }
+
+/** What a caller hands back at the moment its transaction is signed but not yet
+ *  broadcast. Everything a replay needs; `via` and `ts` belong to the store. */
+export interface SendBindingFields {
+  nonceHex: string;
+  wireHex: string;
+  txHashHex: string;
+  from?: string;
+  chainIdHex?: string;
+}
+
+/** What every keyed submit resolves to, whether it signed, replayed, or was
+ *  answered from a completed stub. */
+export interface SendBindingResult {
+  txHash: string;
+  via: string;
+  nonceHex: string;
+}
+
+/**
+ * The bind-and-replay lifecycle for ONE keyed submit — read, replay-or-answer,
+ * write, complete, and drop on failure.
+ *
+ * WHY A CALLBACK RATHER THAN A BUILD-AND-RETURN. The two submit paths differ in
+ * a way that matters here: the single-key path's build and broadcast are FUSED
+ * inside `submitMlDsaTxWithHooks`, which exposes only a between-sign-and-
+ * broadcast hook, while a direct-broadcast path builds and broadcasts as two
+ * separate steps. A helper that took a `build()` and did the broadcasting itself
+ * would fit only the second, and forcing the first into it would mean bypassing
+ * `submitMlDsaTxWithHooks` — which is what feeds the existing ordering and
+ * metadata-only assertions, and which carries the 0x40 front-door guard. So the
+ * caller keeps its own build+broadcast and simply calls `bind` at the right
+ * moment; this owns only the binding.
+ *
+ * `rebroadcast` is injected rather than imported so this module stays free of
+ * transport dependencies and the replay branch is testable with a stub — which
+ * is how "`submit` is never reached when a live binding exists" is asserted
+ * rather than inferred.
+ *
+ * NEVER RE-SIGNS: `submit` is invoked only when no live binding was found.
+ */
+export async function withSendBinding(args: {
+  key: string;
+  now: () => number;
+  rebroadcast: (
+    wireHex: string,
+    txHashHex: string,
+  ) => Promise<{ txHash: string; via: string }>;
+  submit: (
+    bind: (fields: SendBindingFields) => Promise<void>,
+  ) => Promise<SendBindingResult>;
+}): Promise<SendBindingResult> {
+  const { key, now, rebroadcast, submit } = args;
+
+  const bound = await readSendBinding(key, now());
+  if (bound !== null) {
+    if (isCompleted(bound)) {
+      // Already accepted once. Nothing left to broadcast; answer with the hash
+      // the first attempt produced.
+      return { txHash: bound.txHashHex, via: bound.via, nonceHex: bound.nonceHex };
+    }
+    // Signed, outcome unknown. Re-broadcast the IDENTICAL bytes: the chain
+    // answers DuplicateKnown / AlreadyConsumed, both counted as acceptance, and
+    // the original hash comes back.
+    const replay = await rebroadcast(bound.wireHex, bound.txHashHex);
+    await completeSendBinding(key, replay.txHash, replay.via, now());
+    return { ...replay, nonceHex: bound.nonceHex };
+  }
+
+  try {
+    const result = await submit(async (fields) => {
+      await writeSendBinding(key, { ...fields, via: "", ts: now() });
+    });
+    // Drop the wire bytes, keep the hash — see completeSendBinding.
+    await completeSendBinding(key, result.txHash, result.via, now());
+    return result;
+  } catch (e) {
+    // Nothing was accepted, so the bytes are worthless and the nonce is unspent.
+    // Drop the binding so a later attempt signs afresh rather than replaying a
+    // transaction the chain never saw.
+    await deleteSendBinding(key);
+    throw e;
+  }
+}

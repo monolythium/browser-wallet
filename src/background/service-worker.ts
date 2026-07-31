@@ -320,13 +320,7 @@ import {
   testnetReverseNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
-import {
-  completeSendBinding,
-  deleteSendBinding,
-  isCompleted,
-  readSendBinding,
-  writeSendBinding,
-} from "./send-binding.js";
+import { withSendBinding } from "./send-binding.js";
 import { hexToBytes, type NativeEvmTxFields } from "@monolythium/core-sdk/crypto";
 import { isFeatureEnabled } from "../shared/two-tier-features.js";
 import {
@@ -1974,34 +1968,9 @@ export async function submitTrackedTx(
 ): Promise<{ txHash: string; via: string; nonceHex: string }> {
   const key = opts.idempotencyKey;
 
-  // A repeat of the SAME confirmation. Never re-derive, never re-sign: ML-DSA
-  // is hedged, so a re-sign at this nonce would produce different bytes, and in
-  // the pooled window the chain answers ReplaceUnderpriced — which the fan-out
-  // classifies as a reject and throws, reporting a landed send as failed.
-  if (key !== undefined) {
-    const bound = await readSendBinding(key, Date.now());
-    if (bound !== null) {
-      if (isCompleted(bound)) {
-        // Already accepted once. There is nothing left to broadcast; answer
-        // with the hash the first attempt produced.
-        return { txHash: bound.txHashHex, via: bound.via, nonceHex: bound.nonceHex };
-      }
-      // Signed, outcome unknown. Re-broadcast the IDENTICAL bytes: the chain
-      // returns DuplicateKnown / AlreadyConsumed, both counted as acceptance,
-      // and the original hash comes back.
-      const replay = await broadcastPlaintextTransaction(
-        bound.wireHex,
-        bound.txHashHex,
-      );
-      await completeSendBinding(key, replay.txHash, replay.via, Date.now());
-      return { ...replay, nonceHex: bound.nonceHex };
-    }
-  }
-
-  const nonceHex =
-    opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
-
   if (key === undefined) {
+    const nonceHex =
+      opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
     const { txHash, via } = await submitMlDsaTx(
       { ...req, nonce: nonceHex },
       boundVaultId,
@@ -2012,43 +1981,45 @@ export async function submitTrackedTx(
     return { txHash, via, nonceHex };
   }
 
-  try {
-    const { txHash, via } = await submitMlDsaTxWithHooks(
-      { ...req, nonce: nonceHex },
-      boundVaultId,
-      // BEFORE broadcast, by construction: the hook fires between signing and
-      // the fan-out, so from this point on a dead worker leaves recoverable
-      // bytes rather than an unrepeatable transaction.
-      async (built) => {
-        await writeSendBinding(key, {
-          nonceHex,
-          // Scoping for a later account-level lookup. Both are the values this
-          // submit is already bound to — `from` is the sender the caller
-          // supplied and the nonce was derived for, `chainIdHex` the chain it
-          // signed against — so neither can disagree with the transaction.
-          // Required on this path, so neither can be missing here; a binding
-          // written without them (an older record) still replays by key.
-          from: opts.from,
-          chainIdHex: opts.chainIdHex,
-          wireHex: built.signedTxWireHex,
-          txHashHex: built.innerTxHashHex,
-          via: "",
-          ts: Date.now(),
-        });
-      },
-    );
-    await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
-    // Drop the wire bytes, keep the hash — see completeSendBinding.
-    await completeSendBinding(key, txHash, via, Date.now());
-    return { txHash, via, nonceHex };
-  } catch (e) {
-    // Nothing was accepted (broadcastPlaintextTransaction throws only when no
-    // operator took it), so the bytes are worthless and the nonce is unspent.
-    // Drop the binding so a later attempt signs afresh rather than replaying a
-    // transaction the chain never saw.
-    await deleteSendBinding(key);
-    throw e;
-  }
+  // The keyed path. `withSendBinding` owns read / replay / write / complete /
+  // drop; everything below it is what stays specific to THIS path — deriving the
+  // nonce, signing through `submitMlDsaTxWithHooks` (which carries the 0x40
+  // front-door guard), and recording the nonce it spent.
+  //
+  // The nonce is derived INSIDE `submit`, which runs only when no live binding
+  // was found. A replay must never derive one: the nonce was chosen and recorded
+  // by the original attempt, and the bytes being re-broadcast already carry it.
+  return withSendBinding({
+    key,
+    now: () => Date.now(),
+    rebroadcast: broadcastPlaintextTransaction,
+    submit: async (bind) => {
+      const nonceHex =
+        opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
+      const { txHash, via } = await submitMlDsaTxWithHooks(
+        { ...req, nonce: nonceHex },
+        boundVaultId,
+        // BEFORE broadcast, by construction: the hook fires between signing and
+        // the fan-out, so from this point on a dead worker leaves recoverable
+        // bytes rather than an unrepeatable transaction.
+        async (built) => {
+          await bind({
+            nonceHex,
+            // Scoping for a later account-level lookup. Both are values this
+            // submit is already bound to — `from` is the sender the nonce was
+            // derived for, `chainIdHex` the chain it signed against — so neither
+            // can disagree with the transaction.
+            from: opts.from,
+            chainIdHex: opts.chainIdHex,
+            wireHex: built.signedTxWireHex,
+            txHashHex: built.innerTxHashHex,
+          });
+        },
+      );
+      await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
+      return { txHash, via, nonceHex };
+    },
+  });
 }
 
 // ── Name-registry (0x110E) submit helpers ────────────────────────────────────
