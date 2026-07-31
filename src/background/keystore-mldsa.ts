@@ -930,16 +930,92 @@ type ContainerMutationResult<T> = T extends VaultsContainerV4
  * (`App.tsx`'s container-change listener refreshes keystore state). A mutator
  * whose common case is "no change" must therefore pre-check BEFORE calling this,
  * not return early from inside it.
+ *
+ * ── The two hooks ──────────────────────────────────────────────────────────
+ *
+ * Several mutators build a decrypted ML-DSA-65 backend that becomes the session
+ * ONLY if the write lands. Inside the lock they do two things this owns:
+ *
+ *   - on FAILURE, dispose the speculative backend, so no live secret is left
+ *     for a `lockV4` that only disposes `unlocked` to miss;
+ *   - on SUCCESS, install the session — capture `prev`, assign the new state,
+ *     dispose `prev`.
+ *
+ * The callback can observe neither, because this owns the write. Both are
+ * therefore REGISTERED and run here, in the same order and the same place they
+ * ran inline: the failure cleanup in the save's catch, the success work
+ * immediately after the save, both still holding the lock.
+ *
+ * WHY BOTH, NOT JUST THE FAILURE ONE. A failure-only hook forces the install
+ * into the callback, i.e. BEFORE the write. Then a failed write disposes the
+ * backend `unlocked` already points at, with the predecessor already disposed —
+ * a live session holding a dead backend and no way back. The invariant that
+ * breaks is: ON WRITE FAILURE THE LIVE SESSION MUST BE EXACTLY WHAT IT WAS
+ * BEFORE — same backend, same active vault id, predecessor NOT disposed. Running
+ * the install after the save keeps it true by construction.
+ *
+ * Neither hook is an escape hatch:
+ *   - both take `() => void` and nothing else, so neither can supply a container
+ *     nor make the write conditional;
+ *   - registration alone changes nothing — which one runs is decided here, by
+ *     whether the write threw;
+ *   - the error ALWAYS propagates as an error. A failure cleanup may
+ *     RE-CLASSIFY it (`removeVaultV4` must, so an infrastructure write failure
+ *     is not charged to the brute-force counter — C9) by returning a
+ *     replacement, but returning nothing keeps the original and there is no way
+ *     to return "success".
+ *
+ * Failure cleanups do NOT run when the CALLBACK throws — the inline blocks they
+ * replace wrapped only the save, so a pre-write throw disposed nothing.
+ * A throw from a SUCCESS hook propagates to the caller with the write already
+ * landed, exactly as the inline code did.
  */
 async function mutateContainer<T>(
-  fn: (container: VaultsContainerV4) => T | Promise<T>,
+  fn: (
+    container: VaultsContainerV4,
+    hooks: {
+      /** Run inside the lock if the write REJECTS. Return a replacement error to
+       *  re-classify; return nothing to keep the original. Cannot suppress. */
+      onWriteFailure: (cleanup: (err: unknown) => unknown | void) => void;
+      /** Run inside the lock immediately after the write SUCCEEDS. */
+      onWriteSuccess: (commit: () => void) => void;
+    },
+  ) => T | Promise<T>,
 ): Promise<ContainerMutationResult<T>> {
   return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
     const container = await loadVaultsContainerV4();
     if (!container) throw new Error("no v4 vaults container");
-    const result = await fn(container);
-    // The container THIS call read. Not an argument, not a return value.
-    await saveVaultsContainerV4(container);
+    const onFailure: Array<(err: unknown) => unknown | void> = [];
+    const onSuccess: Array<() => void> = [];
+    const result = await fn(container, {
+      onWriteFailure: (cleanup) => {
+        onFailure.push(cleanup);
+      },
+      onWriteSuccess: (commit) => {
+        onSuccess.push(commit);
+      },
+    });
+    try {
+      // The container THIS call read. Not an argument, not a return value.
+      await saveVaultsContainerV4(container);
+    } catch (e) {
+      let toThrow = e;
+      for (const cleanup of onFailure) {
+        try {
+          const replacement = cleanup(toThrow);
+          // Re-classification only: a cleanup that returns nothing leaves the
+          // original error in place, and there is no return value that means
+          // "succeed" — this always ends in a throw.
+          if (replacement !== undefined) toThrow = replacement;
+        } catch {
+          // A failing cleanup must never mask the write error below.
+        }
+      }
+      throw toThrow;
+    }
+    // Still inside the lock: no other container op can interleave between the
+    // write landing and the session being installed.
+    for (const commit of onSuccess) commit();
     return result as ContainerMutationResult<T>;
   });
 }
@@ -2158,9 +2234,7 @@ async function appendVaultRecord(
   // for an address that stays funded on-chain. No KDF runs here (the caller
   // supplies the cached MEK), so the lock is held only for the storage
   // round trips plus a backend construction.
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer(async (container, { onWriteFailure, onWriteSuccess }) => {
   // NOTE: this backend is RETAINED as the held session backend below
   // (`unlocked = { backend, address }` — adding a fresh vault makes it active),
   // so it must NOT be disposed here — lockV4() wipes it (S1-01) on lock.
@@ -2225,24 +2299,28 @@ async function appendVaultRecord(
   // broadcast `accountsChanged` after this returns so dApps + popup
   // refresh.
   container.activeVaultId = record.id;
-  try {
-    await saveVaultsContainerV4(container);
-  } catch (e) {
-    // DA-002 made this path reachable. The new vault was never persisted, so it
-    // never becomes the session — dispose the backend built for it instead of
-    // leaking a decrypted secret that `lockV4` (which only disposes `unlocked`)
-    // would never reach. The previously active vault stays live and undisposed.
+  // DA-002 made this path reachable. The new vault was never persisted, so it
+  // never becomes the session — dispose the backend built for it instead of
+  // leaking a decrypted secret that `lockV4` (which only disposes `unlocked`)
+  // would never reach. The previously active vault stays live and undisposed.
+  onWriteFailure(() => {
     backend.dispose();
-    throw e;
-  }
+  });
   // S1-01: dispose the PREVIOUSLY-active vault's backend (the outgoing session
   // secret) now that the just-added vault becomes active. The new `backend` is
   // deliberately NOT disposed here (see its construction note above — lockV4
   // owns it); only the outgoing `prev` instance is wiped.
-  const prev = unlocked;
-  unlocked = { backend, address };
-  activeContainerVaultId = record.id;
-  prev?.backend.dispose();
+  //
+  // REGISTERED, NOT INLINE, and that is the whole point: this must run AFTER the
+  // write, still inside the lock. Doing it here in the callback would put it
+  // BEFORE the write, so a failed write would dispose the backend `unlocked` had
+  // just been pointed at while `prev` was already gone.
+  onWriteSuccess(() => {
+    const prev = unlocked;
+    unlocked = { backend, address };
+    activeContainerVaultId = record.id;
+    prev?.backend.dispose();
+  });
   return { vaultId: record.id, mnemonic, address };
   });
 }
