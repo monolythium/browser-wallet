@@ -25,6 +25,11 @@ import {
   bgSlhDsaBackupSetRegistrationStatus,
   bgSlhDsaBackupSubmitRegistration,
 } from "../bg";
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
 import { ExternalLink } from "./ExternalLink";
 import { SlhDsaBackupRevealModal } from "./SlhDsaBackupRevealModal";
 import { SlhDsaRotationRehearsal } from "./SlhDsaRotationRehearsal";
@@ -59,7 +64,7 @@ export function SlhDsaBackupCard({
   const [backup, setBackup] = useState<SlhDsaBackup | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [submitErr, setSubmitErr] = useState<string | null>(null);
+  const [submitErr, setSubmitErr] = useState<SubmitFailure | null>(null);
   const [revealOpen, setRevealOpen] = useState<
     "generate" | "re-export" | null
   >(null);
@@ -154,14 +159,44 @@ export function SlhDsaBackupCard({
     if (!backup || backup.publicKey === "") return;
     setSubmitting(true);
     setSubmitErr(null);
-    const r = await bgSlhDsaBackupSubmitRegistration({
-      vaultId,
-      publicKeyHex: backup.publicKey,
-      chainIdHex,
-    });
-    if (!r.ok) setSubmitErr(r.reason);
-    setSubmitting(false);
-    await refresh();
+    try {
+      const r = await bgSlhDsaBackupSubmitRegistration({
+        vaultId,
+        publicKeyHex: backup.publicKey,
+        chainIdHex,
+      });
+      if (!r.ok) {
+        setSubmitErr(verbatimFailure(r.reason, "Couldn't submit the registration."));
+      }
+    } catch (e) {
+      // The submit THREW, so bgSlhDsaBackupSubmitRegistration never reached its
+      // own `registration-failed` write — the only durable record of the attempt,
+      // and the one the Security page reads back after a popup close. Take the
+      // same write here so the case that most needs a record stops being the one
+      // case without one.
+      //
+      // The record is DISTINGUISHABLE from an ok:false one by its text, and that
+      // matters: ok:false means the service worker reached a verdict, while a
+      // throw means the transaction may have been broadcast before the channel
+      // dropped. The stored copy says so rather than asserting a refusal.
+      const failure = submitThrowFailure(e);
+      setSubmitErr(failure);
+      try {
+        await bgSlhDsaBackupSetRegistrationStatus({
+          vaultId,
+          status: "registration-failed",
+          error: failure.body,
+        });
+      } catch {
+        // The channel that just dropped may still be down. The rendered error
+        // above does not depend on this write, so the user is told either way.
+      }
+    } finally {
+      // Previously outside any try: a throw skipped it and left the button
+      // permanently disabled on "Submitting…".
+      setSubmitting(false);
+      await refresh();
+    }
   };
 
   const resetClearFlow = () => {
@@ -389,8 +424,15 @@ export function SlhDsaBackupCard({
 
               {backup.chainRegistrationStatus === "registration-failed" && (
                 <>
+                  {/* Lead deliberately says "didn't complete", not "failed".
+                      This record is also written when the submit THREW, where
+                      the transaction may have been broadcast before the channel
+                      dropped — asserting a refusal there would be false, and it
+                      is the assertion that would talk a user into retrying. */}
                   <div style={errBox}>
-                    Registration failed:{" "}
+                    <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                      Registration didn&apos;t complete
+                    </div>
                     {backup.chainRegistrationError ?? "Unknown error"}
                   </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
@@ -415,7 +457,14 @@ export function SlhDsaBackupCard({
               )}
 
               {submitErr && (
-                <div style={{ ...errBox, marginTop: 8 }}>{submitErr}</div>
+                <div style={{ ...errBox, marginTop: 8 }}>
+                  {submitErr.headline !== null && (
+                    <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                      {submitErr.headline}
+                    </div>
+                  )}
+                  {submitErr.body}
+                </div>
               )}
 
               {/* Destructive — abandon + regenerate. */}
