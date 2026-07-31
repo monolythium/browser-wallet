@@ -24,6 +24,13 @@ import {
   type OwnedNameRow,
 } from "../bg";
 import {
+  nameAcceptKeyParams,
+  nameProposeKeyParams,
+  nameRegisterKeyParams,
+  nextSendKey,
+  type SendKeyState,
+} from "../send-key";
+import {
   submitThrowFailure,
   verbatimFailure,
   type SubmitFailure,
@@ -50,13 +57,31 @@ function costHexToLyth(costLythoshiHex: string): string | null {
 /** The page's existing `errBox`, given the two-line shape `okBox` already uses
  *  (bold lead + detail). A `{ ok: false }` reply has no headline and renders
  *  exactly as it did before; a classified throw adds one. */
-function FailureBox({ failure }: { failure: SubmitFailure }) {
+function FailureBox({
+  failure,
+  onRetry,
+}: {
+  failure: SubmitFailure;
+  /** Adds the retry affordance — the same "Try again" control Send and Stake
+   *  use. Its press is what tells the mechanism this is a retry of the attempt
+   *  described above, rather than a fresh confirmation it cannot distinguish. */
+  onRetry?: () => void;
+}) {
   return (
     <div style={errBox}>
       {failure.headline !== null && (
         <div style={{ fontWeight: 600, marginBottom: 3 }}>{failure.headline}</div>
       )}
       {failure.body}
+      {onRetry !== undefined && (
+        <button
+          onClick={onRetry}
+          className="ext-act prim-soft"
+          style={{ marginTop: 8, padding: 8, width: "100%" }}
+        >
+          Try again
+        </button>
+      )}
     </div>
   );
 }
@@ -83,6 +108,8 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
   const [name, setName] = useState("");
   const [quote, setQuote] = useState<QuoteState>({ status: "idle" });
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
+  const [retryArmed, setRetryArmed] = useState(false);
 
   const trimmed = name.trim().toLowerCase();
   const validation = trimmed.length > 0 ? validateRegisterableName(trimmed) : null;
@@ -105,6 +132,9 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
     // as a dependency, and every submit-state change would then re-trigger the
     // debounced quote.
     setSubmit((prev) => (prev.status === "done" ? prev : { status: "idle" }));
+    // Editing the name is a different request, so any armed retry is stale. The
+    // params guard would mint fresh anyway; disarming keeps the two agreeing.
+    setRetryArmed(false);
     if (!clientValid) {
       setQuote({ status: "idle" });
       return;
@@ -151,9 +181,27 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
     const { canonical, category, costLythoshiHex } = submit;
     setSubmit({ status: "submitting", canonical, category, costLythoshiHex });
     try {
-      const r = await bgWalletNameRegister(canonical, chainIdHex);
+      // `retryArmed` is component state, and that is SAFE here — unlike the
+      // shape-B claim surfaces, Try again and Register are two separate presses
+      // with a render between them, so the flag has applied by the time this
+      // reads it. (The hazard is a `setState` immediately before a SYNCHRONOUS
+      // re-invoke; there is none on this path.) Same shape as Send's retryArmed.
+      const keyDecision = nextSendKey(
+        sendKey,
+        retryArmed ? "retry" : "submit",
+        nameRegisterKeyParams(canonical, chainIdHex),
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
+      const r = await bgWalletNameRegister(
+        canonical,
+        chainIdHex,
+        keyDecision.use ?? undefined,
+      );
       if (r.ok) {
         setSubmit({ status: "done", canonical: r.canonical, txHash: r.txHash });
+        setSendKey(null); // released — a later registration is independent
+        setRetryArmed(false);
         setName("");
         setQuote({ status: "idle" });
       } else {
@@ -280,7 +328,21 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
                   </span>
                 </div>
               )}
-              {submit.status === "error" && <FailureBox failure={submit.failure} />}
+              {submit.status === "error" && (
+                <FailureBox
+                  failure={submit.failure}
+                  onRetry={() => {
+                    // Back to the confirm card rather than straight to a submit:
+                    // this spends real LYTH, so the name and cost are shown
+                    // again before the user commits. The quote is still the one
+                    // that failed — editing the name would have cleared this
+                    // error via the effect above — so goConfirm restores exactly
+                    // the transaction the key was minted against.
+                    setRetryArmed(true);
+                    goConfirm();
+                  }}
+                />
+              )}
               <button
                 style={{ ...primaryBtn, marginTop: 10, opacity: quote.status === "ok" ? 1 : 0.5 }}
                 disabled={quote.status !== "ok"}
@@ -309,6 +371,8 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
   const [resolvedAddr0x, setResolvedAddr0x] = useState<string | null>(null);
   const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [txHash, setTxHash] = useState("");
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
+  const [retryArmed, setRetryArmed] = useState(false);
 
   const canonical = name.trim().toLowerCase();
   const nameValid =
@@ -319,6 +383,9 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
     setResolvedAddr0x(null);
     setFailure(null);
     setTxHash("");
+    // Cancelling or editing is "start over", so a stale arm must not survive to
+    // the next confirmation.
+    setRetryArmed(false);
   };
 
   const proceed = async () => {
@@ -360,10 +427,27 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
     setPhase("submitting");
     setFailure(null);
     try {
-      const r = await bgWalletNamePropose(canonical, resolvedAddr0x, chainIdHex);
+      // Try again and Propose are separate presses with a render between them,
+      // so reading the armed flag from state is safe here (no synchronous
+      // re-invoke on this path).
+      const keyDecision = nextSendKey(
+        sendKey,
+        retryArmed ? "retry" : "submit",
+        nameProposeKeyParams(canonical, resolvedAddr0x, chainIdHex),
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
+      const r = await bgWalletNamePropose(
+        canonical,
+        resolvedAddr0x,
+        chainIdHex,
+        keyDecision.use ?? undefined,
+      );
       if (r.ok) {
         setTxHash(r.txHash);
         setPhase("done");
+        setSendKey(null);
+        setRetryArmed(false);
       } else {
         setFailure(verbatimFailure(r.reason, "Couldn't propose the transfer."));
         setPhase("error");
@@ -455,7 +539,22 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
             spellCheck={false}
             style={{ ...input, marginTop: 8 }}
           />
-          {phase === "error" && failure !== null && <FailureBox failure={failure} />}
+          {phase === "error" && failure !== null && (
+            <FailureBox
+              failure={failure}
+              {...(resolvedAddr0x !== null
+                ? {
+                    // Only offer the retry when a resolved recipient still
+                    // exists — a resolution failure has no transaction to retry,
+                    // and its error is about the recipient, not the submit.
+                    onRetry: () => {
+                      setRetryArmed(true);
+                      setPhase("confirm");
+                    },
+                  }
+                : {})}
+            />
+          )}
           <button
             style={{
               ...primaryBtn,
@@ -480,6 +579,8 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
   const [phase, setPhase] = useState<"form" | "confirm" | "submitting" | "done" | "error">("form");
   const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [txHash, setTxHash] = useState("");
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
+  const [retryArmed, setRetryArmed] = useState(false);
 
   const canonical = name.trim().toLowerCase();
   const nameValid = canonical.length > 0 && validateRegisterableName(canonical).ok;
@@ -487,6 +588,8 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
   useEffect(() => {
     setPhase("form");
     setFailure(null);
+    // A different name is a different request; disarm alongside the reset.
+    setRetryArmed(false);
     if (!nameValid) {
       setQuote({ status: "idle" });
       return;
@@ -511,10 +614,25 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
     setPhase("submitting");
     setFailure(null);
     try {
-      const r = await bgWalletNameAccept(canonical, chainIdHex);
+      // Same as the other two: Try again and Pay & accept are separate presses,
+      // so the armed flag has applied by the time this reads it.
+      const keyDecision = nextSendKey(
+        sendKey,
+        retryArmed ? "retry" : "submit",
+        nameAcceptKeyParams(canonical, chainIdHex),
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
+      const r = await bgWalletNameAccept(
+        canonical,
+        chainIdHex,
+        keyDecision.use ?? undefined,
+      );
       if (r.ok) {
         setTxHash(r.txHash);
         setPhase("done");
+        setSendKey(null);
+        setRetryArmed(false);
       } else {
         setFailure(verbatimFailure(r.reason, "Couldn't accept the transfer."));
         setPhase("error");
@@ -592,7 +710,18 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
               <span style={{ ...mono, color: "var(--gold)" }}>{costLyth ?? "—"} LYTH</span>.
             </div>
           )}
-          {phase === "error" && failure !== null && <FailureBox failure={failure} />}
+          {phase === "error" && failure !== null && (
+            <FailureBox
+              failure={failure}
+              onRetry={() => {
+                // Back to the confirm card, not straight to a submit: accepting
+                // re-charges the FULL registration cost, so the amount is shown
+                // again before the user commits.
+                setRetryArmed(true);
+                setPhase("confirm");
+              }}
+            />
+          )}
           <button
             style={{ ...primaryBtn, marginTop: 10, opacity: quote.status === "ok" ? 1 : 0.5 }}
             disabled={quote.status !== "ok"}
