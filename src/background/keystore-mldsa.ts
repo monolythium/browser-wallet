@@ -1783,13 +1783,27 @@ export async function writeSlhDsaBackupV4(
 export async function clearSlhDsaBackupV4(
   vaultId: string,
 ): Promise<boolean> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) return false;
+  // Cheap "nothing to clear" check on a PRE-LOCK snapshot.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. Stale by construction, so it may let a
+  // call through that the authoritative check inside then finds nothing to do;
+  // that direction is harmless and the check is repeated below rather than moved.
+  //
+  // Needed because this function reports "nothing to clear" by RETURNING `false`,
+  // and `mutateContainer` would turn the absent-container case into a throw and
+  // would write the container back unchanged on the absent-record case. Exiting
+  // here preserves both: `false` stays `false`, and no write happens.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) return false;
+  const preVault = pre.vaults.find((rec) => rec.id === vaultId);
+  if (!preVault?.slhDsaBackup) return false;
+
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
+    // Authoritative. Reachable only if the record vanished between the snapshot
+    // and the lock, in which case the write below is redundant but harmless.
     if (!v || !v.slhDsaBackup) return false;
     delete v.slhDsaBackup;
-    await saveVaultsContainerV4(container);
     return true;
   });
 }
