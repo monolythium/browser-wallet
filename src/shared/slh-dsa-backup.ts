@@ -136,10 +136,20 @@ export type SlhDsaParameterSet = "slh_dsa_sha2_128s";
  *   - `registered`       — chain accepted the registration. Final
  *                          state — the precompile is one-time per
  *                          address (re-attempts revert).
- *   - `registration-failed` — submission errored. Includes the chain
- *                          reason verbatim (e.g. `AlreadyRegistered`,
+ *   - `registration-failed` — the submission did not complete. Includes
+ *                          the reason verbatim (e.g. `AlreadyRegistered`,
  *                          `WrongPubkeyLength`, RPC offline). User
- *                          can retry from the Security page. */
+ *                          can retry from the Security page.
+ *
+ *                          NOT ONLY A REFUSAL. This value is also written
+ *                          when the submit THREW — a dropped popup↔SW
+ *                          channel — where the transaction may already
+ *                          have been broadcast. The record cannot tell the
+ *                          two apart: `chainRegistrationError` is free text
+ *                          and there is no structured outcome field. Any
+ *                          copy derived from this status must therefore hold
+ *                          for BOTH, which is why `backupStatusLabel` does
+ *                          not say "failed" or instruct a retry. */
 export type BackupRegistrationStatus =
   | "not-registered"
   | "pending"
@@ -376,7 +386,14 @@ export function backupStatusLabel(b: SlhDsaBackup | null | undefined): string {
     case "registered":
       return "Chain registered";
     case "registration-failed":
-      return "Registration failed — retry";
+      // Deliberately not "failed", and deliberately not an instruction. This
+      // status covers a refusal AND an unknown outcome (see the union's doc),
+      // and the label has to be true of the worst member. "retry" was the
+      // actively harmful part: on a record written because the channel dropped
+      // mid-submit, retrying is what spends twice. The card's error box already
+      // carries the specific copy and the Retry button; this is only the badge,
+      // and it now leads with the same words the box does.
+      return "Registration didn't complete";
   }
 }
 
