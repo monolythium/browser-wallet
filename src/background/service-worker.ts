@@ -2022,6 +2022,14 @@ export async function submitTrackedTx(
       async (built) => {
         await writeSendBinding(key, {
           nonceHex,
+          // Scoping for a later account-level lookup. Both are the values this
+          // submit is already bound to — `from` is the sender the caller
+          // supplied and the nonce was derived for, `chainIdHex` the chain it
+          // signed against — so neither can disagree with the transaction.
+          // Required on this path, so neither can be missing here; a binding
+          // written without them (an older record) still replays by key.
+          from: opts.from,
+          chainIdHex: opts.chainIdHex,
           wireHex: built.signedTxWireHex,
           txHashHex: built.innerTxHashHex,
           via: "",
