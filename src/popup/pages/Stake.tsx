@@ -31,7 +31,11 @@ import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
 import { DevBadge } from "../components/DevBadge";
-import { nextSendKey, type SendKeyState } from "../send-key";
+import {
+  nextSendKey,
+  unstakeAllKeyParams,
+  type SendKeyState,
+} from "../send-key";
 import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
@@ -351,6 +355,11 @@ export function Stake({
   const [unstakeAllIndex, setUnstakeAllIndex] = useState(0);
   const [unstakeAllBusy, setUnstakeAllBusy] = useState(false);
   const [unstakeAllError, setUnstakeAllError] = useState<string | null>(null);
+  // The key for the item CURRENTLY on screen. Only one item is ever in flight —
+  // the walk-through submits one cluster per confirmation — so a single slot is
+  // enough, and it is deliberately separate from the single-cluster flow's
+  // `sendKey` so the two can never reach across into each other.
+  const [unstakeAllSendKey, setUnstakeAllSendKey] = useState<SendKeyState>(null);
 
   // Persist key form / selection state on every change so a
   // round-trip through ClusterDetail returns the user to the same
@@ -781,6 +790,7 @@ export function Stake({
     setUnstakeAllIndex(0);
     setUnstakeAllError(null);
     setUnstakeAllBusy(false);
+    setUnstakeAllSendKey(null); // a re-entered walk-through is a new send
     setAction("undelegate");
     setSelectedClusterId(queue[0] ?? null);
     setStep("unstake-all");
@@ -808,6 +818,7 @@ export function Stake({
     setUnstakeAllIndex(0);
     setUnstakeAllError(null);
     setUnstakeAllBusy(false);
+    setUnstakeAllSendKey(null);
     setSelectedClusterId(null);
     setStep("pick");
   };
@@ -822,6 +833,19 @@ export function Stake({
       const rowWeightBps = delegations?.rows.find(
         (row) => row.cluster === cluster,
       )?.weightBps;
+      // An error already showing for THIS item means the previous attempt on it
+      // failed, so this press is a retry of that attempt rather than a first
+      // confirmation. Read from state safely: Undelegate is a user press with a
+      // render behind it, not a synchronous re-invoke. `goToNextUnstake` clears
+      // the error, so the first confirmation of the NEXT item always reads
+      // "submit" and mints its own key — the second guard behind the params.
+      const keyDecision = nextSendKey(
+        unstakeAllSendKey,
+        unstakeAllError !== null ? "retry" : "submit",
+        unstakeAllKeyParams(cluster, chainId),
+        () => crypto.randomUUID(),
+      );
+      setUnstakeAllSendKey(keyDecision.next);
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -829,11 +853,15 @@ export function Stake({
         data: encodeUndelegate(cluster),
         executionUnitLimitHex: "0x186A0",
         opKind: "undelegate",
+        ...(keyDecision.use !== null ? { idempotencyKey: keyDecision.use } : {}),
         clusterId: cluster,
         ...(meta?.name ? { clusterName: meta.name } : {}),
         ...(rowWeightBps !== undefined ? { delegationWeightBps: rowWeightBps } : {}),
       });
       if (r.ok) {
+        // Released before advancing: the next cluster is a different transaction
+        // and must never see this one's key.
+        setUnstakeAllSendKey(null);
         goToNextUnstake(unstakeAllIndex);
       } else {
         setUnstakeAllBusy(false);

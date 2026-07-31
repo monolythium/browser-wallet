@@ -29,6 +29,7 @@ import {
   nameProposeKeyParams,
   nameRegisterKeyParams,
   nextSendKey,
+  unstakeAllKeyParams,
   type SendKeyState,
 } from "./send-key";
 
@@ -250,6 +251,70 @@ describe("claim: no editable field, so the release is what keeps it safe", () =>
 
   it("still separates chains", () => {
     expect(keyAfterRetry(claimKeyParams(CHAIN), claimKeyParams("0x1"))).toBe("fresh");
+  });
+});
+
+// ── Unstake-all walk-through ────────────────────────────────────────────────
+//
+// PER ITEM, and the reason is mechanical rather than a preference: a
+// `SendBinding` holds one `wireHex`. A batch-wide key would replay the first
+// cluster's signed bytes for a later cluster — undelegating one cluster while
+// the screen names another.
+
+describe("unstake-all: each cluster is its own logical send", () => {
+  const CHAIN = "0x10F2C";
+
+  it("gives different clusters different params", () => {
+    // The property that stops one item replaying another's bytes.
+    const ids = [1, 2, 3, 40].map((c) => unstakeAllKeyParams(c, CHAIN));
+    expect(new Set(ids).size).toBe(4);
+  });
+
+  it("REUSES the key when the same cluster is retried — mint never called", () => {
+    // Asserting `use === "original"` alone would pass even if the key had been
+    // regenerated to an equal value. The binding property is that no NEW key was
+    // minted, so the service worker recognises the confirmation.
+    const p = unstakeAllKeyParams(7, CHAIN);
+    const first = nextSendKey(null, "submit", p, minter("item-7"));
+    const mint = vi.fn(() => "should-never-be-called");
+    const retry = nextSendKey(first.next, "retry", p, mint);
+    expect(retry.use).toBe("item-7");
+    expect(mint).not.toHaveBeenCalled();
+  });
+
+  it("MINTS FRESH when the cluster changes under a carried state", () => {
+    // The guard behind the guard. Advancing normally clears the error so the
+    // next item reads "submit" anyway; this proves that even if a retry action
+    // reached the next cluster, its bytes could not be replayed.
+    expect(
+      keyAfterRetry(unstakeAllKeyParams(7, CHAIN), unstakeAllKeyParams(9, CHAIN)),
+    ).toBe("fresh");
+  });
+
+  it("MINTS FRESH for every item of a walk-through, so no two share a key", () => {
+    // Walk three clusters as the flow does: submit, release on success, submit.
+    const mint = minter("k1", "k2", "k3");
+    let state: SendKeyState = null;
+    const used: (string | null)[] = [];
+    for (const cluster of [7, 9, 11]) {
+      const d = nextSendKey(state, "submit", unstakeAllKeyParams(cluster, CHAIN), mint);
+      used.push(d.use);
+      state = null; // released on success, exactly as the handler does
+    }
+    expect(used).toEqual(["k1", "k2", "k3"]);
+    expect(new Set(used).size).toBe(3);
+  });
+
+  it("MINTS FRESH across a chain switch", () => {
+    expect(
+      keyAfterRetry(unstakeAllKeyParams(7, CHAIN), unstakeAllKeyParams(7, "0x1")),
+    ).toBe("fresh");
+  });
+
+  it("cannot carry into the single-cluster undelegate flow", () => {
+    // Both encode the same calldata for the same cluster, so distinct prefixes
+    // are what keep one flow's key out of the other's.
+    expect(unstakeAllKeyParams(7, CHAIN)).not.toBe(`undelegate|7||0x0|${CHAIN}`);
   });
 });
 

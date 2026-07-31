@@ -68,6 +68,26 @@ export function emergencyKeyParams(
   return `emergency-key|${vaultId}|${publicKeyHex}|${chainIdHex}`;
 }
 
+/** One step of the "unstake all" walk-through.
+ *
+ *  PER ITEM, NOT PER BATCH, and that is forced rather than chosen: a
+ *  `SendBinding` holds exactly one `wireHex`, so a batch-wide key would replay
+ *  the first cluster's signed bytes when a later cluster is retried —
+ *  undelegating the wrong cluster while the screen names another. One binding
+ *  cannot represent several distinct transactions.
+ *
+ *  The cluster id is the item's identity: it is the only user-chosen input, and
+ *  it is exactly what `encodeUndelegate` puts in the calldata. The weight and
+ *  the cluster name are absent because they are pending-row metadata that never
+ *  reaches the signer.
+ *
+ *  Prefixed distinctly from the single-cluster undelegate flow's params so a key
+ *  can never carry between the two, even though both end up calling
+ *  `encodeUndelegate` for the same cluster. */
+export function unstakeAllKeyParams(clusterId: number, chainIdHex: string): string {
+  return `unstake-all|${clusterId}|${chainIdHex}`;
+}
+
 // ── Name operations ─────────────────────────────────────────────────────────
 //
 // WHAT IS DELIBERATELY ABSENT: the quoted registration cost. `submitNameTx`
