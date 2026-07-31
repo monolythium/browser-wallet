@@ -1020,6 +1020,53 @@ async function mutateContainer<T>(
   });
 }
 
+/**
+ * The FIRST container write — onboarding only.
+ *
+ * `mutateContainer` cannot express this. It reads the container and throws
+ * "no v4 vaults container" when there is none, which is exactly the state this
+ * runs in. So this is the one writer whose container comes from its CALLBACK
+ * rather than from storage — the shape `mutateContainer` deliberately forbids.
+ *
+ * WHAT MAKES THAT SAFE IS THE ABSENCE ASSERTION, AND IT IS MADE INSIDE THE
+ * LOCK. `build` is reached only when storage holds no container, so this cannot
+ * overwrite one, and it cannot be repurposed as a general writer: every call
+ * after the first refuses. The stale-snapshot hazard `mutateContainer` exists to
+ * prevent needs a prior container to clobber, and this runs only when there is
+ * none.
+ *
+ * H1 — the assertion is AUTHORITATIVE here, not an optimisation. Callers check
+ * `hasContainerV4()` too, but that check is separated from this write by
+ * `getAddress` and a ~1 s derivation, so on its own it is a check-then-act: two
+ * concurrent onboarding commits could both pass it and both write, and because
+ * this persists a FRESH single-vault container the second would obliterate the
+ * first.
+ *
+ * `onWritten` runs after the write and still inside the lock. Unlike
+ * `mutateContainer`'s success hook it is AWAITED, because unlock-on-create ends
+ * in `persistMekToSessionV4` and that must complete before the lock is released.
+ *
+ * NO failure hook, deliberately. The create path's cleanup is its own outer
+ * catch, which covers more than the write — the address derive and the KDF too —
+ * and runs after the lock is released. That is safe HERE and only here: on
+ * failure there is no live session to corrupt, because nothing was installed,
+ * and a concurrent caller finds no container and throws. The writers that DO
+ * need the cleanup inside the lock are the ones with a session to preserve.
+ */
+async function createContainer<T>(
+  build: () => VaultsContainerV4,
+  onWritten: (container: VaultsContainerV4) => T | Promise<T>,
+): Promise<T> {
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    if (await hasContainerV4()) {
+      throw new Error("v4 vault already exists; cannot overwrite");
+    }
+    const container = build();
+    await saveVaultsContainerV4(container);
+    return await onWritten(container);
+  });
+}
+
 // ---- v4-multi public API ----
 
 /** Summary projection over a VaultRecordV4 — what the popup needs to
@@ -2576,58 +2623,55 @@ async function commitVaultFromSeed(
     // could go stale while we wait.
     mek = await deriveMekV4(password, masterKdf);
     const mekOwned = mek;
-    return await withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    // H1 — the AUTHORITATIVE overwrite guard. The callers check
-    // `hasContainerV4()` too, but that check is separated from this write by
-    // `getAddress` and a ~1 s derivation, so on its own it is a check-then-act:
-    // two concurrent onboarding commits could both pass it and both write, and
-    // because this function persists a FRESH single-vault container the second
-    // would obliterate the first. Re-checking inside the lock closes that.
-    if (await hasContainerV4()) {
-      throw new Error("v4 vault already exists; cannot overwrite");
-    }
-    // V5 (P1-003): id generated before the seal so it binds into the AAD.
-    const vaultId = crypto.randomUUID();
-    const vek = generateVekV4();
-    let wrappedKey: WrappedVekV4;
-    let envelope: SealedSeedRecordV4;
-    try {
-      wrappedKey = wrapVekV4(mekOwned, vek, vaultId);
-      envelope = sealVaultEnvelopeV4(vek, seed, mnemonic, vaultId);
-    } finally {
-      vek.fill(0);
-    }
-    const record: VaultRecordV4 = {
-      id: vaultId,
-      label: "Wallet 1",
-      createdAt: Date.now(),
-      wrappedKey,
-      envelope,
-      addr: address,
-    };
-    const container: VaultsContainerV4 = {
-      version: SCHEMA_VERSION,
-      algo: ALGO_ID,
-      kdf: KDF_ID,
-      aead: AEAD_ID,
-      masterKdf,
-      vaults: [record],
-      activeVaultId: record.id,
-    };
-    await saveVaultsContainerV4(container);
-
-    // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
-    // `mek` — ownership transfers to mekCache). This reproduces the exact
-    // end state the d67de85 follow-up unlockContainerV4 call established,
-    // inline, so no single-vault write + re-unlock round-trip is needed.
-    if (mekCache) mekCache.fill(0);
-    mekCache = mekOwned;
-    unlocked = { backend, address };
-    activeContainerVaultId = record.id;
-    committed = true; // ownership of mek + backend now held by the session
-    await persistMekToSessionV4(mekOwned);
-    return address;
-    });
+    // The absence guard that used to sit inline here is now the first thing
+    // `createContainer` does, still inside the lock and still authoritative.
+    return await createContainer(
+      () => {
+        // V5 (P1-003): id generated before the seal so it binds into the AAD.
+        const vaultId = crypto.randomUUID();
+        const vek = generateVekV4();
+        let wrappedKey: WrappedVekV4;
+        let envelope: SealedSeedRecordV4;
+        try {
+          wrappedKey = wrapVekV4(mekOwned, vek, vaultId);
+          envelope = sealVaultEnvelopeV4(vek, seed, mnemonic, vaultId);
+        } finally {
+          vek.fill(0);
+        }
+        const record: VaultRecordV4 = {
+          id: vaultId,
+          label: "Wallet 1",
+          createdAt: Date.now(),
+          wrappedKey,
+          envelope,
+          addr: address,
+        };
+        return {
+          version: SCHEMA_VERSION,
+          algo: ALGO_ID,
+          kdf: KDF_ID,
+          aead: AEAD_ID,
+          masterKdf,
+          vaults: [record],
+          activeVaultId: record.id,
+        };
+      },
+      // Runs after the write, still inside the lock — and awaited, which is why
+      // this is a parameter rather than one of `mutateContainer`'s hooks.
+      async (container) => {
+        // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
+        // `mek` — ownership transfers to mekCache). This reproduces the exact
+        // end state the d67de85 follow-up unlockContainerV4 call established,
+        // inline, so no single-vault write + re-unlock round-trip is needed.
+        if (mekCache) mekCache.fill(0);
+        mekCache = mekOwned;
+        unlocked = { backend, address };
+        activeContainerVaultId = container.activeVaultId;
+        committed = true; // ownership of mek + backend now held by the session
+        await persistMekToSessionV4(mekOwned);
+        return address;
+      },
+    );
   } catch (e) {
     if (!committed) {
       if (mek) mek.fill(0);
