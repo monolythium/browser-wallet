@@ -271,7 +271,10 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
 // issuing a second destroy request for work that may already be done, which is
 // not a decision a transport layer should be making on the user's behalf. The
 // user is on a confirm dialog for this op; a surfaced error they retry by hand
-// is the honest outcome.
+// is the honest outcome — and for the destroy that has always held, because
+// `Wallets.tsx` `handleRemove` catches the throw and renders it. See the
+// per-op audit at the bottom of this block: "surfaced" is a property of the
+// CALL SITES, not of this list, and it has to be checked op by op.
 //
 // `wallet-send-tx` is the same defect on the money path, and worse, because a
 // resend is not a duplicate. `submitTrackedTx` picks the nonce with
@@ -316,6 +319,38 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
 // automatic double-submit into a visible failure the user can check before
 // retrying. It does NOT close the path — a manual retry advances the nonce
 // identically.
+//
+// "VISIBLE" IS A CLAIM ABOUT THE CALL SITES, AND IT WAS ONCE FALSE HERE.
+// Removing the auto-retry only converts an invisible resend into a visible
+// failure if the caller CATCHES the throw and RENDERS it. For a period the three
+// `wallet-name-*` ops did neither: their handlers had no try/catch, so the
+// rejection escaped to the console, and their in-flight state was read by no
+// render branch, so the confirm card silently reverted to a populated form. The
+// removal had traded a silent automatic double-submit for a silent nothing on
+// exactly the ops this comment named. Two of those three spend real LYTH.
+//
+// The mechanism that makes the claim true today — check it, do not assume it:
+// every popup call site of every op below wraps the await in try/catch and
+// renders the caught failure through `popup/submit-failure.ts`, which also keeps
+// an MV3 channel drop from being mis-reported as "nothing was sent" (the outcome
+// is genuinely unknown, and that is the one case where a retry can spend twice).
+//
+//   vault-remove             — Wallets.tsx        handleRemove
+//   wallet-send-tx           — Send.tsx           handleConfirm
+//                              Stake.tsx          delegate/undelegate/redelegate,
+//                                                 unstake-all, claim
+//                              Delegations.tsx    handleClaim
+//                              AutoCompoundSection.tsx confirm
+//                              AgentPolicy.tsx    handleRegister / handleRevoke
+//                              SlhDsaBackupCard.tsx handleRegisterOnChain
+//   multisig-execute         — Pending.tsx        handleAction
+//   wallet-name-register     — Names.tsx          doRegister
+//   wallet-name-propose      — Names.tsx          ProposeCard submit
+//   wallet-name-accept       — Names.tsx          AcceptCard submit
+//
+// ADDING AN OP HERE RE-OPENS THE DEFECT unless its call sites already do both.
+// Taking an op off the transport retry without a rendered failure does not make
+// the failure honest — it makes it invisible.
 const NO_RETRY_POPUP_OPS = new Set<string>([
   "vault-remove",
   "wallet-send-tx",
