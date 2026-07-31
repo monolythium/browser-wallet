@@ -2885,6 +2885,10 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
   vaultId: string;
   publicKeyHex: string;
   chainIdHex: string;
+  /** Identifies one user CONFIRMATION of this registration. Forwarded verbatim
+   *  to the send op so a retry re-broadcasts the bytes already signed instead of
+   *  deriving a second nonce. Omitted → the payload is byte-identical to before. */
+  idempotencyKey?: string;
 }): Promise<
   | { ok: true; txHash: string; backup: SlhDsaBackup | null }
   | { ok: false; reason: string }
@@ -2904,6 +2908,9 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
     chainIdHex: args.chainIdHex,
     executionUnitLimitHex: tx.executionUnitLimitHex,
     opKind: "emergency-key",
+    ...(args.idempotencyKey !== undefined
+      ? { idempotencyKey: args.idempotencyKey }
+      : {}),
   });
 
   if (!submit.ok) {

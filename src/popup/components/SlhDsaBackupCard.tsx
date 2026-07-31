@@ -25,6 +25,7 @@ import {
   bgSlhDsaBackupSetRegistrationStatus,
   bgSlhDsaBackupSubmitRegistration,
 } from "../bg";
+import { nextSendKey, type SendKeyState } from "../send-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -65,6 +66,10 @@ export function SlhDsaBackupCard({
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<SubmitFailure | null>(null);
+  // Key for the registration confirmation in flight. Carried by Retry
+  // registration, released once the submit lands. A popup restart loses it and
+  // `nextSendKey` mints fresh — the known row-7 residual, unchanged here.
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
   const [revealOpen, setRevealOpen] = useState<
     "generate" | "re-export" | null
   >(null);
@@ -155,18 +160,36 @@ export function SlhDsaBackupCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaultId, backup?.chainRegistrationStatus, backup?.chainRegistrationTxHash]);
 
-  const handleRegisterOnChain = async () => {
+  // `opts.retry` is a parameter rather than state so the Retry-registration
+  // button can carry it without a setState round-trip.
+  const handleRegisterOnChain = async (opts?: { retry?: boolean }) => {
     if (!backup || backup.publicKey === "") return;
     setSubmitting(true);
     setSubmitErr(null);
     try {
+      // The PUBLIC KEY is the editable parameter here. It looks fixed, but a
+      // user can clear the backup and generate a new one, and then the vault id
+      // alone would still match — carrying the key across that would register
+      // the OLD key while the card shows the new one. That is row 3, so the key
+      // itself is in the params and a regenerate breaks the carry.
+      const keyParams = `emergency-key|${vaultId}|${backup.publicKey}|${chainIdHex}`;
+      const keyDecision = nextSendKey(
+        sendKey,
+        opts?.retry === true ? "retry" : "submit",
+        keyParams,
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
       const r = await bgSlhDsaBackupSubmitRegistration({
         vaultId,
         publicKeyHex: backup.publicKey,
         chainIdHex,
+        ...(keyDecision.use !== null ? { idempotencyKey: keyDecision.use } : {}),
       });
       if (!r.ok) {
         setSubmitErr(verbatimFailure(r.reason, "Couldn't submit the registration."));
+      } else {
+        setSendKey(null); // released — the registration landed
       }
     } catch (e) {
       // The submit THREW, so bgSlhDsaBackupSubmitRegistration never reached its
@@ -452,8 +475,15 @@ export function SlhDsaBackupCard({
                     >
                       Re-export
                     </button>
+                    {/* The affordance already existed; it now says so to the
+                        mechanism. Carrying `retry` makes this a re-broadcast of
+                        the bytes already signed rather than a second nonce —
+                        which matters most on the record written when the channel
+                        dropped, where the transaction may already be on chain.
+                        After a popup restart there is no key to carry and
+                        `nextSendKey` mints fresh, taking the normal path. */}
                     <button
-                      onClick={() => void handleRegisterOnChain()}
+                      onClick={() => void handleRegisterOnChain({ retry: true })}
                       disabled={submitting}
                       style={{
                         ...btnPrimaryFlex,
