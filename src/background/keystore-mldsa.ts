@@ -894,6 +894,56 @@ async function saveVaultsContainerV4(
   });
 }
 
+/**
+ * Rejects a callback that hands the container back.
+ *
+ * `mutateContainer` PERSISTS THE CONTAINER IT READ — never a value the callback
+ * returns. So returning it is already pointless; the reason to make it a type
+ * error is what it would mean if it were ever honoured. A primitive that saved
+ * what it was given would accept a snapshot read BEFORE the lock, which is
+ * exactly the clobber this arrangement exists to prevent. Keeping that API shape
+ * unreachable stops it being reintroduced as a "simplification".
+ *
+ * The error surfaces where the result is USED; the branded name is the
+ * explanation a future reader gets.
+ */
+type ContainerMutationResult<T> = T extends VaultsContainerV4
+  ? {
+      readonly __invalid: "a mutateContainer callback must not return the container; the primitive persists the one it read";
+    }
+  : T;
+
+/**
+ * Read-modify-write the vaults container under its lock.
+ *
+ * OWNS the lock, the read, the not-found refusal, and the write. The callback
+ * receives a container read INSIDE the lock and mutates it in place; whatever it
+ * returns becomes the caller's result and is never persisted.
+ *
+ * A caller may still read the container before the lock — `removeVaultV4` and
+ * `updatePasskeyCredentialSignCountV4` both do, as optimisations — and that stays
+ * safe, because a pre-lock copy has no route to storage: this writes the object
+ * it read, and there is no parameter through which another could be supplied.
+ *
+ * ALWAYS WRITES. A callback that decides there is nothing to do still causes a
+ * write of the unchanged container, and the popup watches this key
+ * (`App.tsx`'s container-change listener refreshes keystore state). A mutator
+ * whose common case is "no change" must therefore pre-check BEFORE calling this,
+ * not return early from inside it.
+ */
+async function mutateContainer<T>(
+  fn: (container: VaultsContainerV4) => T | Promise<T>,
+): Promise<ContainerMutationResult<T>> {
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const result = await fn(container);
+    // The container THIS call read. Not an argument, not a return value.
+    await saveVaultsContainerV4(container);
+    return result as ContainerMutationResult<T>;
+  });
+}
+
 // ---- v4-multi public API ----
 
 /** Summary projection over a VaultRecordV4 — what the popup needs to
@@ -1506,9 +1556,7 @@ export async function writeMultisigMetaV4(
   vaultId: string,
   meta: MultisigVaultMeta,
 ): Promise<void> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
     if (!v) throw new Error("unknown vault id");
     if (v.kind !== "multisig") {
@@ -1517,7 +1565,6 @@ export async function writeMultisigMetaV4(
     validateThreshold(meta.threshold, meta.signers.length);
     assertSignerSetUnique(meta.signers);
     v.multisig = cloneMultisigMeta(meta);
-    await saveVaultsContainerV4(container);
   });
 }
 
@@ -1581,15 +1628,12 @@ export async function addPasskeyCredentialV4(
   vaultId: string,
   cred: PasskeyCredential,
 ): Promise<VaultPasskeyState> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
     if (!v) throw new Error("unknown vault id");
     const current = v.passkey ?? emptyVaultPasskeyState();
     const next = appendCredential(current, cred);
     v.passkey = clonePasskeyState(next);
-    await saveVaultsContainerV4(container);
     return clonePasskeyState(next);
   });
 }
@@ -1601,15 +1645,12 @@ export async function removePasskeyCredentialV4(
   vaultId: string,
   credentialId: string,
 ): Promise<VaultPasskeyState> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
     if (!v) throw new Error("unknown vault id");
     const current = v.passkey ?? emptyVaultPasskeyState();
     const next = removePasskeyCredential(current, credentialId);
     v.passkey = clonePasskeyState(next);
-    await saveVaultsContainerV4(container);
     return clonePasskeyState(next);
   });
 }
@@ -1651,15 +1692,12 @@ export async function setPasskeyPolicyV4(
   vaultId: string,
   policy: PasskeyPolicy,
 ): Promise<VaultPasskeyState> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
     if (!v) throw new Error("unknown vault id");
     const current = v.passkey ?? emptyVaultPasskeyState();
     const next = setPasskeyPolicy(current, policy);
     v.passkey = clonePasskeyState(next);
-    await saveVaultsContainerV4(container);
     return clonePasskeyState(next);
   });
 }
@@ -1699,13 +1737,10 @@ export async function writeSlhDsaBackupV4(
   vaultId: string,
   backup: SlhDsaBackup,
 ): Promise<SlhDsaBackup> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
     if (!v) throw new Error("unknown vault id");
     v.slhDsaBackup = cloneBackupForWrite(backup);
-    await saveVaultsContainerV4(container);
     // Return through the read clone so the caller always gets a
     // fresh object (defensive against future mutation by callers
     // that capture the reference).
