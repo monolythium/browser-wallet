@@ -195,7 +195,17 @@ export function SlhDsaBackupCard({
       // Previously outside any try: a throw skipped it and left the button
       // permanently disabled on "Submitting…".
       setSubmitting(false);
-      await refresh();
+      // `refresh` re-reads over the same channel that may have just dropped, so
+      // it can throw too. Unguarded it would replace a rendered failure with a
+      // console-only one — the exact defect this file is fixing, re-created in
+      // the recovery path. It was already unguarded on the reply paths; the
+      // guard sits here so all three exits are covered once.
+      try {
+        await refresh();
+      } catch {
+        // The card keeps the state it already had, and the error set above is
+        // still on screen. A stale read is not worth losing the message over.
+      }
     }
   };
 
