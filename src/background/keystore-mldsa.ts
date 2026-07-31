@@ -1896,17 +1896,34 @@ export async function recoverSlhDsaMnemonicV4(
 export async function confirmSlhDsaColdStorageV4(
   vaultId: string,
 ): Promise<SlhDsaBackup | null> {
-  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
-    const container = await loadVaultsContainerV4();
-    if (!container) return null;
+  // Cheap "no such record" check on a PRE-LOCK snapshot.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. Stale by construction; both checks are
+  // repeated inside rather than moved.
+  //
+  // It covers only the two `null` exits, which are the ones `mutateContainer`
+  // would turn into a throw. The already-confirmed exit is deliberately NOT
+  // pre-checked: that path RETURNS THE RECORD, and answering it from a pre-lock
+  // snapshot would hand the caller a record that a concurrent
+  // `setSlhDsaRegistrationStatusV4` may already have moved on from. Re-confirming
+  // an already-confirmed backup therefore now costs one redundant write of the
+  // unchanged container — a rare, explicitly user-driven path — which is the
+  // cheaper trade than returning stale key-backup state.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) return null;
+  const preVault = pre.vaults.find((rec) => rec.id === vaultId);
+  if (!preVault?.slhDsaBackup) return null;
+
+  return mutateContainer((container) => {
     const v = container.vaults.find((rec) => rec.id === vaultId);
+    // Authoritative; reachable only if the record vanished between the snapshot
+    // and the lock.
     if (!v || !v.slhDsaBackup) return null;
     if (!v.slhDsaBackup.coldStorageConfirmed) {
       v.slhDsaBackup = cloneBackupForWrite({
         ...v.slhDsaBackup,
         coldStorageConfirmed: true,
       });
-      await saveVaultsContainerV4(container);
     }
     return cloneBackupForRead(v.slhDsaBackup);
   });
