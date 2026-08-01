@@ -45,6 +45,7 @@
   --warn:   #f4c97a;
   --warn-glow: 244, 201, 122;
   --err:    #ff8a9a;
+  --err-glow:    255, 138, 154;
   --info:   #7c7fff;
   --accent: var(--gold);
 
