@@ -22,6 +22,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { Icon } from "../Icon";
 import { DevBadge } from "../components/DevBadge";
 import { Modal } from "../components/Modal";
+import { Section } from "../components/Section";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgOperatorsHealth,
@@ -555,49 +556,10 @@ export function OperatorDirectory({
   );
 }
 
-/** One of the four collapsible buttons. Closed by default; the chevron
- *  swaps right → down when open (same idiom as ClusterPicker). */
-export function Section({
-  title,
-  meta,
-  open,
-  onToggle,
-  children,
-}: {
-  title: ReactNode;
-  meta?: string | undefined;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        style={sectionBtn(open)}
-      >
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {title}
-          {meta !== undefined && (
-            <span
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 10,
-                color: "var(--fg-400)",
-              }}
-            >
-              {meta}
-            </span>
-          )}
-        </span>
-        <Icon name={open ? "chev-d" : "chev"} size={13} />
-      </button>
-      {open && <div style={{ padding: "10px 12px 2px" }}>{children}</div>}
-    </div>
-  );
-}
+// `Section` (and its `sectionBtn` style) moved to components/Section so the
+// Help page can use it without a page-to-page import. Re-exported here so every
+// existing importer of this module keeps resolving.
+export { Section };
 
 const pickerUseBtn: CSSProperties = {
   padding: "5px 10px",
@@ -1236,23 +1198,6 @@ function summariseCapabilities(
         b.available - a.available || a.surface.localeCompare(b.surface),
     );
 }
-
-const sectionBtn = (open: boolean): CSSProperties => ({
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid var(--fg-700)",
-  background: open ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.04)",
-  color: "var(--fg-100)",
-  fontFamily: "var(--f-sans)",
-  fontSize: 13,
-  fontWeight: 500,
-  cursor: "pointer",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 8,
-});
 
 const NAV_BTN: CSSProperties = {
   width: "100%",
