@@ -168,6 +168,20 @@ export const EXTERNAL_LINKS: ReadonlyArray<{
     url: "https://github.com/monolythium/",
     icon: "github",
   },
+  // PROVENANCE: these two URLs were supplied and confirmed by trace-agent and
+  // have NO other source in this repository — unlike every entry above, which
+  // can be cross-checked against the site, the registry or the org. A later
+  // reader changing them has nothing in-tree to verify against.
+  {
+    label: "Telegram",
+    url: "https://t.me/monolythium",
+    icon: "globe",
+  },
+  {
+    label: "Discord",
+    url: "https://discord.com/invite/monolythium",
+    icon: "globe",
+  },
   {
     label: "Privacy",
     url: "https://monolythium.com/legal/privacy",
