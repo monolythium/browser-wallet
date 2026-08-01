@@ -316,16 +316,32 @@ export function seedStallBaseline(
 }
 
 /**
- * Banner label + dot/text color + hover tooltip + tap-through flag per health
+ * Banner label + dot/text color + state explanation + tap affordance per health
  * kind. Pure + exported so the rendered banner and the tested contract can't
  * drift. Untrusted is amber (the STALLED token), distinct from red OFFLINE.
  * `tappable` is true for the not-online states (stalled / untrusted / offline)
  * so the label routes to Operators; the callsite still gates on onOpenOperators.
+ *
+ * WHY `explanation` AND `action` ARE SEPARATE FIELDS. They were one string,
+ * `tooltip`, doing two jobs: explaining the state AND telling the user to tap.
+ * That string is rendered in three places — the hover title, the visible inline
+ * hint, and (via the hint) the pre-unlock banner — but the chip is tappable on
+ * exactly ONE of its nine mount sites. So eight screens, the unlock screen
+ * among them, instructed the user to tap something inert. Splitting the fields
+ * lets the explanation go everywhere while the instruction renders only where
+ * it is true.
  */
 export function chainHealthPresentation(kind: ChainHealth["kind"]): {
   label: string;
   color: string;
-  tooltip: string;
+  /** What the state MEANS. Never an instruction — this renders on all nine
+   *  banner instances, including the pre-unlock screen, where nothing is
+   *  tappable and the user has no action available. */
+  explanation: string;
+  /** What TAPPING does, or null when there is nothing to tap. Rendered ONLY
+   *  where `tappable` holds and the callsite passed `onOpenOperators` — the
+   *  main popup shell alone. */
+  action: string | null;
   tappable: boolean;
 } {
   switch (kind) {
@@ -333,15 +349,16 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
       return {
         label: "LIVE",
         color: "var(--ok)",
-        tooltip: "Connected — an operator is serving your pinned chain.",
+        explanation: "Connected — an operator is serving your pinned chain.",
+        action: null,
         tappable: false,
       };
     case "stalled":
       return {
         label: "STALLED",
         color: "var(--warn)",
-        tooltip:
-          "The chain hasn't advanced for a while. Tap to review your operators.",
+        explanation: "The chain hasn't advanced for a while.",
+        action: "Tap to review your operators.",
         tappable: true,
       };
     case "untrusted":
@@ -350,8 +367,9 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // Red (same hard-trust token as ALL OPERATORS UNTRUSTED / OFFLINE) — the
         // operator is on a different chain than the wallet expects.
         color: "var(--err)",
-        tooltip:
-          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network. Click to see operators.",
+        explanation:
+          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network.",
+        action: "Click to see operators.",
         tappable: true,
       };
     case "regenesis":
@@ -361,8 +379,9 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // operator is on a different chain than the wallet expects, so on-chain
         // actions stay paused. Scrolls as a marquee (the long label).
         color: "var(--err)",
-        tooltip:
-          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. Click to see operators.",
+        explanation:
+          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network.",
+        action: "Click to see operators.",
         tappable: true,
       };
     case "quarantined":
@@ -373,16 +392,17 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // Scrolls as a marquee (the long label). Balance is NOT paused: the
         // value stays knowable once an operator recovers / via Monoscan.
         color: "var(--err)",
-        tooltip:
-          "Every operator self-quarantined (a checkpoint state-root mismatch) and won't serve RPC — they're on your chain but temporarily can't be trusted. The wallet reconnects automatically once one recovers. Click to see operators.",
+        explanation:
+          "Every operator self-quarantined (a checkpoint state-root mismatch) and won't serve RPC — they're on your chain but temporarily can't be trusted. The wallet reconnects automatically once one recovers.",
+        action: "Click to see operators.",
         tappable: true,
       };
     case "offline":
       return {
         label: "OFFLINE",
         color: "var(--err)",
-        tooltip:
-          "Can't reach any operator right now. Tap to review your operators.",
+        explanation: "Can't reach any operator right now.",
+        action: "Tap to review your operators.",
         tappable: true,
       };
     case "reconnecting":
@@ -394,8 +414,9 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // action implied while we re-establish the read).
         label: "RECONNECTING…",
         color: "var(--warn)",
-        tooltip:
+        explanation:
           "Showing the last block seen — reconnecting to an operator to confirm.",
+        action: null,
         tappable: false,
       };
     case "loading":
@@ -403,24 +424,29 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
       return {
         label: "CONNECTING…",
         color: "var(--fg-500)",
-        tooltip: "Connecting to an operator…",
+        explanation: "Connecting to an operator…",
+        action: null,
         tappable: false,
       };
   }
 }
 
 /**
- * A (R1): the VISIBLE inline explanation for a chain-health state — the very same
- * text as the hover `tooltip`, surfaced as a non-loud muted line so a degraded
+ * A (R1): the VISIBLE inline explanation for a chain-health state — the same
+ * text as the hover title, surfaced as a non-loud muted line so a degraded
  * chain explains itself without a hover. Returns null for the healthy LIVE state
  * (no hint needed) and a non-empty string for every NON-live state (stalled /
  * untrusted / regenesis / quarantined / offline / reconnecting / connecting).
  * Pure + exported so the rendered hint and the tested contract can't drift from
  * `chainHealthPresentation`.
+ *
+ * Returns `explanation` ONLY. The tap instruction is `action`, which the banner
+ * renders separately and only where the chip is genuinely tappable — this hint
+ * reaches all nine banner instances, eight of which are not.
  */
 export function chainHealthInlineHint(kind: ChainHealth["kind"]): string | null {
   if (kind === "live") return null;
-  return chainHealthPresentation(kind).tooltip;
+  return chainHealthPresentation(kind).explanation;
 }
 
 /**
@@ -973,7 +999,7 @@ export function ChainStatusBanner({
       <span
         className="ext-banner-marquee"
         {...tapProps}
-        title={pres.tooltip}
+        title={pres.explanation}
         style={{
           color: pres.color,
           fontWeight: 500,
@@ -988,7 +1014,7 @@ export function ChainStatusBanner({
     ) : (
       <span
         {...tapProps}
-        title={pres.tooltip}
+        title={pres.explanation}
         style={{
           color: pres.color,
           fontWeight: 500,
@@ -1011,6 +1037,11 @@ export function ChainStatusBanner({
   // A (R1): the explanation that was previously hover-only (title=) now renders
   // as a visible muted line beneath the indicator row for every non-live state.
   const inlineHint = chainHealthInlineHint(health.kind);
+  // The tap instruction, rendered ONLY where the chip really is tappable —
+  // `tappable` already folds in onOpenOperators, which only the main popup
+  // shell passes. The other eight banner instances (the approval sheets and the
+  // pre-unlock screen) get the explanation and no instruction.
+  const actionHint = tappable ? pres.action : null;
   // B (R1): a "View on Monoscan" link on the tappable degraded states — built
   // from the user's OWN address over the trusted wallet constant (never
   // operator-echoed). No-mock: null when the address is absent/invalid (e.g. the
@@ -1078,9 +1109,10 @@ export function ChainStatusBanner({
         </>
       )}
     </div>
-    {(inlineHint || monoscanLink) && (
+    {(inlineHint || actionHint || monoscanLink) && (
       <div className="ext-chain-health-hint">
         {inlineHint && <span>{inlineHint}</span>}
+        {actionHint && <span>{actionHint}</span>}
         {monoscanLink && (
           <a
             href={monoscanLink}

@@ -1237,12 +1237,17 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       color: "var(--err)",
       tappable: true,
     });
-    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
+    expect(chainHealthPresentation("regenesis").explanation).toMatch(
       /genesis|operators|network/i,
     );
     // The "check your balance on Monoscan" CTA lives on the balance card, not
-    // the banner tooltip — the banner taps through to Operators.
-    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
+    // the banner — the banner taps through to Operators. The tap instruction is
+    // now `action`, not part of the explanation: the explanation renders on all
+    // nine banner instances, eight of which cannot be tapped at all.
+    expect(chainHealthPresentation("regenesis").action).toMatch(
+      /Click to see operators/,
+    );
+    expect(chainHealthPresentation("regenesis").explanation).not.toMatch(
       /Click to see operators/,
     );
   });
@@ -1251,8 +1256,8 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(chainHealthPresentation("regenesis").color).toBe("var(--err)");
     expect(chainHealthPresentation("untrusted").color).toBe("var(--err)");
     // distinct copy: all-operators vs this-operator
-    expect(chainHealthPresentation("regenesis").tooltip).toMatch(/^All operators/);
-    expect(chainHealthPresentation("untrusted").tooltip).toMatch(/^This operator/);
+    expect(chainHealthPresentation("regenesis").explanation).toMatch(/^All operators/);
+    expect(chainHealthPresentation("untrusted").explanation).toMatch(/^This operator/);
   });
 
   it("makes the not-online states tappable, live + loading not", () => {
@@ -1274,7 +1279,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       "loading",
       "reconnecting",
     ] as const) {
-      expect(chainHealthPresentation(k).tooltip.length).toBeGreaterThan(0);
+      expect(chainHealthPresentation(k).explanation.length).toBeGreaterThan(0);
     }
   });
 
@@ -1299,7 +1304,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.color).not.toBe("var(--ok)"); // never the LIVE token
     expect(pres.tappable).toBe(false);
     expect(pres.label).not.toBe("LIVE");
-    expect(pres.tooltip.length).toBeGreaterThan(0);
+    expect(pres.explanation.length).toBeGreaterThan(0);
   });
 
   it("presents quarantined as the red 'OPERATOR QUARANTINED' tappable banner", () => {
@@ -1307,7 +1312,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.label).toBe("OPERATOR QUARANTINED");
     expect(pres.color).toBe("var(--err)");
     expect(pres.tappable).toBe(true);
-    expect(pres.tooltip.length).toBeGreaterThan(0);
+    expect(pres.explanation.length).toBeGreaterThan(0);
   });
 });
 
@@ -1561,15 +1566,50 @@ describe("chainHealthInlineHint (A/R1 — explanation visible inline, not hover-
       "loading",
     ] as const) {
       const hint = chainHealthInlineHint(k);
-      expect(hint).toBe(chainHealthPresentation(k).tooltip);
+      expect(hint).toBe(chainHealthPresentation(k).explanation);
       expect((hint ?? "").length).toBeGreaterThan(0);
     }
   });
 
   it("the inline hint is the rendered explanation, not just an attribute — STALLED case", () => {
     expect(chainHealthInlineHint("stalled")).toBe(
-      "The chain hasn't advanced for a while. Tap to review your operators.",
+      "The chain hasn't advanced for a while.",
     );
+  });
+
+  // The split's whole point: the hint reaches screens where nothing is
+  // tappable, so it must never carry a tap instruction for ANY state.
+  it("never carries a tap instruction — that is `action`, rendered only where tappable", () => {
+    for (const k of [
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+      "reconnecting",
+      "loading",
+    ] as const) {
+      expect(chainHealthInlineHint(k)).not.toMatch(/tap to|click to/i);
+    }
+  });
+
+  // Every state the banner taps through to must say what tapping does; the
+  // states with no tap target must not pretend there is one.
+  it("action is present exactly for the tappable states", () => {
+    for (const k of [
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+    ] as const) {
+      expect(chainHealthPresentation(k).tappable).toBe(true); // precondition
+      expect(chainHealthPresentation(k).action).toBeTruthy();
+    }
+    for (const k of ["live", "reconnecting", "loading"] as const) {
+      expect(chainHealthPresentation(k).tappable).toBe(false); // precondition
+      expect(chainHealthPresentation(k).action).toBeNull();
+    }
   });
 });
 
