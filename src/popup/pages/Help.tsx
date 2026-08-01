@@ -290,9 +290,9 @@ export function Help({ onBack, initialOpen }: HelpProps) {
           {...sectionProps("lost")}
         >
           <div style={bodyText}>
-            The funds are gone. No one, including Monolythium, can recover a lost
-            phrase — the wallet is non-custodial and holds nothing on your
-            behalf. There&apos;s no password reset and no backdoor.
+            No one, including Monolythium, can recover a lost phrase — the
+            wallet is non-custodial and holds nothing on your behalf.
+            There&apos;s no password reset and no backdoor.
           </div>
           <div style={{ ...bodyText, color: "var(--fg-200)" }}>
             The <strong>Forgot password</strong> option doesn&apos;t recover
@@ -363,7 +363,8 @@ export function Help({ onBack, initialOpen }: HelpProps) {
           {...sectionProps("cap")}
         >
           <div style={bodyText}>
-            The network limits how much of your stake can go to any one cluster,
+            The network limits how much of your delegation can go to any one
+            cluster,
             so no single cluster gains too much influence. The delegate screen
             shows the current limit when it can read it from the network. Your
             total delegation across all clusters can&apos;t exceed 100%.
@@ -390,11 +391,6 @@ export function Help({ onBack, initialOpen }: HelpProps) {
                 {link.label}
               </ExternalLink>
             ))}
-          </div>
-          <div style={bodyText}>
-            Monolythium doesn&apos;t run a support desk. For a problem with the
-            wallet itself, open an issue on GitHub — that&apos;s the one channel
-            that reaches the people who build it.
           </div>
           <div style={bodyText}>
             Telegram and Discord are community channels — other users, not a
