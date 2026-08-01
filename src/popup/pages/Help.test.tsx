@@ -19,7 +19,11 @@ import {
   HEALTH_TICK_MS,
   STALL_THRESHOLD_MS,
 } from "../components";
-import { WIPE_CONFIRM_WORD } from "../../shared/constants";
+import {
+  GENESIS_OBSERVED_NULL_TTL_MS,
+  GENESIS_POSITIVE_TTL_MS,
+  WIPE_CONFIRM_WORD,
+} from "../../shared/constants";
 import { EXTERNAL_LINKS } from "../../shared/build-info";
 import { useFeature } from "../hooks/useFeature";
 
@@ -197,6 +201,16 @@ describe("Help — developer-mode mechanics", () => {
     const page = withDevMode(() => openEntry("chip"));
     expect(page).toContain(`${HEALTH_TICK_MS / 1000} seconds`);
     expect(page).toContain(`${STALL_THRESHOLD_MS / 1000} seconds`);
+  });
+
+  // These two were previously described without their number, because the
+  // constants lived in a background module the popup cannot import. Now that
+  // they are shared, the mechanics must render them — and from the constants,
+  // so the page and the probe logic cannot drift apart.
+  it("renders the genesis re-probe TTLs from their constants", () => {
+    const page = withDevMode(() => openEntry("chip"));
+    expect(page).toContain(`${GENESIS_OBSERVED_NULL_TTL_MS / 1000} seconds`);
+    expect(page).toContain(`${GENESIS_POSITIVE_TTL_MS / 1000} seconds`);
   });
 
   it("does not render the operator-name poll beside a health mechanic", () => {

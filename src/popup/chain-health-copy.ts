@@ -29,6 +29,10 @@ import {
   STALL_THRESHOLD_MS,
   type ChainHealthKind,
 } from "./components";
+import {
+  GENESIS_OBSERVED_NULL_TTL_MS,
+  GENESIS_POSITIVE_TTL_MS,
+} from "../shared/constants";
 
 /** Render a millisecond constant as seconds. Every duration below goes through
  *  this — none is typed — so a change to the constant moves this text with it. */
@@ -129,17 +133,13 @@ export function bannerShowsFor(
  *
  * Every duration is rendered from the constant the logic reads — see `secs`.
  *
- * TWO NUMBERS ARE DELIBERATELY ABSENT:
+ * ONE NUMBER IS DELIBERATELY ABSENT: `OPERATOR_TICK_MS` drives the operator-NAME
+ * poll, not health. A plausible-looking wrong number beside a health mechanic is
+ * worse than an absent one, and a test asserts it never appears here.
  *
- *  - The genesis re-probe TTL that governs `quarantined` / `offline` is
- *    `GENESIS_OBSERVED_NULL_TTL_MS` in background/networks.ts. It is NOT
- *    exported, and that module carries chrome APIs, so importing it here would
- *    drag the background into the popup bundle. Since the number cannot be
- *    derived it is not stated — a typed copy of a constant is the exact defect
- *    these blocks exist to demonstrate against.
- *  - `OPERATOR_TICK_MS` (the operator-NAME poll) is excluded everywhere. A
- *    plausible-looking wrong number beside a health mechanic is worse than an
- *    absent one.
+ * (The genesis re-probe TTLs used to be absent too — they lived unexported in
+ * background/networks.ts, which the popup cannot import. They were moved to
+ * shared/constants rather than transcribed, so these blocks now render them.)
  */
 export function chainStateMechanics(kind: ChainHealthKind): string {
   switch (kind) {
@@ -156,8 +156,8 @@ export function chainStateMechanics(kind: ChainHealthKind): string {
     case "regenesis":
       return "Right chain id, different genesis hash. The mismatch is sticky — never re-probed — and is persisted, so it survives a restart. Cleared only by a forced re-probe.";
     case "quarantined":
-      return "Every operator answered with a checkpoint state-root mismatch. Re-probed once the genesis cache entry expires.";
+      return `Every operator answered with a checkpoint state-root mismatch. The "couldn't read" verdict is cached for ${secs(GENESIS_OBSERVED_NULL_TTL_MS)}, then re-probed.`;
     case "offline":
-      return "Unreachable, or the request failed. Re-probed once the genesis cache entry expires.";
+      return `Unreachable, or the request failed. The "couldn't read" verdict is cached for ${secs(GENESIS_OBSERVED_NULL_TTL_MS)}; a verdict that PASSED is re-checked after ${secs(GENESIS_POSITIVE_TTL_MS)}.`;
   }
 }

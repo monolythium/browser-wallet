@@ -205,3 +205,29 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "keystore-reset",
   "keystore-wipe-unauth",
 ]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Genesis-probe cache TTLs
+//
+// Moved here from background/networks.ts so BOTH the probe logic and the Help
+// page's developer-mode mechanics read the same value. The mechanics previously
+// described these two states without their number, because networks.ts cannot
+// be imported popup-side — and a typed "60" would have been a copied constant
+// inside the very blocks that exist to argue against copied constants.
+//
+// This module is a safe home: it carries no chrome API call (every `chrome.`
+// in it is comment prose naming a storage key), no side effects, and one
+// type-only import. The popup already imports it, so it costs no new bundle.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** TTL for a NON-definitive genesis-cache entry (observed === null:
+ *  unreachable / timeout / probe-unsupported). Definitive reads (a real
+ *  observed hash, match or mismatch) are cached forever; only the
+ *  "couldn't read" verdict expires, so a transient outage self-heals. */
+export const GENESIS_OBSERVED_NULL_TTL_MS = 60_000;
+
+/** C6 (R3): re-probe TTL for a DEFINITIVE positive ("passed") verdict. A pass is
+ *  bounded (not forever) so an operator that passed once then silently forked
+ *  while the SW is alive is re-detected within this window. A definitive MISMATCH
+ *  stays sticky (no TTL) — it correctly keeps the wallet paused until resolved. */
+export const GENESIS_POSITIVE_TTL_MS = 60_000;

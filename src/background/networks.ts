@@ -11,6 +11,10 @@ import {
   type OperatorEntry,
 } from "../shared/operators.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
+import {
+  GENESIS_OBSERVED_NULL_TTL_MS,
+  GENESIS_POSITIVE_TTL_MS,
+} from "../shared/constants.js";
 import { hardenedOperators } from "../shared/hardened-dial.js";
 import {
   TESTNET_BLOCK0_HASH,
@@ -506,17 +510,10 @@ export async function verifyOperatorGenesis(
   return result.ok;
 }
 
-/** TTL for a NON-definitive genesis-cache entry (observed === null:
- *  unreachable / timeout / probe-unsupported). Definitive reads (a real
- *  observed hash, match or mismatch) are cached forever; only the
- *  "couldn't read" verdict expires, so a transient outage self-heals. */
-const GENESIS_OBSERVED_NULL_TTL_MS = 60_000;
-
-/** C6 (R3): re-probe TTL for a DEFINITIVE positive ("passed") verdict. A pass is
- *  bounded (not forever) so an operator that passed once then silently forked
- *  while the SW is alive is re-detected within this window. A definitive MISMATCH
- *  stays sticky (no TTL) — it correctly keeps the wallet paused until resolved. */
-const GENESIS_POSITIVE_TTL_MS = 60_000;
+// The two genesis-cache TTLs moved to shared/constants so the popup can read
+// them without importing this module (which the Help page's developer-mode
+// mechanics need in order to RENDER the values rather than restate them).
+// Values and semantics unchanged; see their doc-comments at the new home.
 
 /** Force-refresh a single operator's genesis check. Surfaced via the
  *  About-page probe so the user can re-evaluate after a regenesis. */
