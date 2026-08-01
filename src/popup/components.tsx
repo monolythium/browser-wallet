@@ -245,6 +245,28 @@ export function classifyHeadReading(
 }
 
 /**
+ * Developer-mode readout: how many polled heads came back BELOW the highest
+ * seen this session. Null outside developer mode, and null at zero — a healthy
+ * chain has nothing to report and shouldn't carry an empty diagnostic.
+ *
+ * Worth surfacing because a regression is the ONE signal that distinguishes "the
+ * chain is frozen" from "one server behind this endpoint is behind the others",
+ * and the poll otherwise discards it silently — which is why diagnosing it took
+ * out-of-band sampling of the gateway rather than anything the wallet showed.
+ *
+ * Deliberately does NOT assert which cause it is. From a single RPC URL the
+ * wallet cannot tell a lagging backend from a shallow reorg, so the note names
+ * both. Pure + exported.
+ */
+export function headRegressionNote(
+  count: number,
+  devMode: boolean,
+): string | null {
+  if (!devMode || count <= 0) return null;
+  return `${count} reading${count === 1 ? "" : "s"} below the highest seen — a lagging backend, or a reorg.`;
+}
+
+/**
  * B2: fold the persisted block-advance store (`BLOCK_ADVANCE_KEY`) into the first
  * confirmed head of a fresh mount, so the stall window survives a remount / popup
  * reopen instead of restarting from zero.
@@ -611,6 +633,10 @@ export function ChainStatusBanner({
     () => lastKnownHealth ?? { kind: "loading" },
   );
   const [operator, setOperator] = useState<string | null>(null);
+  // W-1 diagnostic: polled heads that came back below the highest seen this
+  // mount. Developer-mode only; see `headRegressionNote`.
+  const [headRegressions, setHeadRegressions] = useState(0);
+  const bannerDevMode = useFeature("DEVELOPER_MODE");
 
   // Persist every health change to the module-scoped snapshot so the next
   // in-session remount seeds from it (above) rather than re-showing CONNECTING,
@@ -721,6 +747,7 @@ export function ChainStatusBanner({
         // W-1: only a STRICTLY HIGHER head is progress. See classifyHeadReading.
         const reading = classifyHeadReading(r.blockHex, highWater);
         if (reading.kind === "unparsable") return; // no reading: touch nothing
+        if (reading.kind === "decreased") setHeadRegressions((n) => n + 1);
         if (reading.kind === "advanced") {
           highWater = reading.height;
           lastBlockHex = r.blockHex;
@@ -811,6 +838,7 @@ export function ChainStatusBanner({
       // W-1: the WS lane takes the SAME strictly-higher rule as the poll, so no
       // lane can manufacture a LIVE the other would refuse.
       const reading = classifyHeadReading(blockHex, highWater);
+      if (reading.kind === "decreased") setHeadRegressions((n) => n + 1);
       if (reading.kind === "advanced") {
         highWater = reading.height;
         lastBlockHex = blockHex;
@@ -1063,6 +1091,13 @@ export function ChainStatusBanner({
             <Icon name="globe" size={12} /> View on Monoscan
           </a>
         )}
+      </div>
+    )}
+    {headRegressionNote(headRegressions, bannerDevMode) !== null && (
+      <div className="ext-chain-health-hint">
+        <span>
+          <DevBadge /> {headRegressionNote(headRegressions, bannerDevMode)}
+        </span>
       </div>
     )}
     </div>

@@ -17,6 +17,7 @@ import {
   chainHealthPresentation,
   chainHealthStallVerdict,
   classifyHeadReading,
+  headRegressionNote,
   seedStallBaseline,
   HEALTH_TICK_MS,
   STALL_THRESHOLD_MS,
@@ -1452,6 +1453,31 @@ describe("classifyHeadReading (W-1 — only a HIGHER head is progress)", () => {
     for (const bad of ["0x", "0xZZZ", "", null, undefined, 5]) {
       expect(classifyHeadReading(bad, 218234n)).toEqual({ kind: "unparsable" });
     }
+  });
+});
+
+describe("headRegressionNote (W-1 developer diagnostic)", () => {
+  it("is absent outside developer mode, however many regressions were seen", () => {
+    expect(headRegressionNote(0, false)).toBeNull();
+    expect(headRegressionNote(42, false)).toBeNull();
+  });
+
+  it("is absent at zero — a healthy chain shows nothing", () => {
+    expect(headRegressionNote(0, true)).toBeNull();
+  });
+
+  it("reports the count once a regression has been observed", () => {
+    expect(headRegressionNote(1, true)).toContain("1 reading");
+    expect(headRegressionNote(7, true)).toContain("7 readings");
+  });
+
+  // The counter is the one signal that separates "the chain is frozen" from
+  // "one backend is behind", so the note must not assert which — both causes
+  // are consistent with what the wallet can see from a single URL.
+  it("names both possible causes rather than asserting one", () => {
+    const note = headRegressionNote(3, true)!;
+    expect(note).toMatch(/lagging backend/i);
+    expect(note).toMatch(/reorg/i);
   });
 });
 
