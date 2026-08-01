@@ -55,6 +55,7 @@ import { DisplayCurrencySettings } from "./pages/DisplayCurrencySettings";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ChainHealthBanner } from "./components/ChainHealthBanner";
 import {
   DelegationRejectedBanner,
   type DelegationRejection,
@@ -1441,6 +1442,20 @@ export default function App() {
                 onMenu: () => navigateTo("main-menu"),
               }
             : {})}
+        />
+      )}
+
+      {/* Degraded-network notice, directly UNDER the status chip strip so it
+         explains the chip rather than displacing it. Pushes content down
+         (in flow) rather than overlaying: in exactly these states the balance
+         is already suppressed to "—", and the user is scanning for why. */}
+      {showBannerStrip && (
+        <ChainHealthBanner
+          kind={chainHealthKind}
+          onExplain={(kind: ChainHealthKind) => {
+            setHelpTarget(kind);
+            navigateTo("help");
+          }}
         />
       )}
 

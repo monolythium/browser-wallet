@@ -444,6 +444,38 @@ html[data-mode="sidepanel"] .ext > .ext-body {
   opacity: 0.7;
 }
 .ext-indexer-stale .close:hover { opacity: 1; }
+/* Degraded-network banner — two tints over the shared banner layout above.
+   Unlike .ext-indexer-stale and .ext-deleg-rejected, these derive from the
+   *-glow tokens rather than hardcoding an rgb triplet, so they follow the theme
+   (12 of them, one of which is a light theme where a dark-tuned literal is
+   nearly invisible). The existing hardcoded tints are a separate finding with
+   its own brief; matching them here would have propagated the bug. */
+.ext-chain-warn {
+  background: rgba(var(--warn-glow), 0.10);
+  border-color: rgba(var(--warn-glow), 0.28);
+  color: var(--warn);
+}
+.ext-chain-warn .close { color: var(--warn); }
+.ext-chain-danger {
+  background: rgba(var(--err-glow), 0.10);
+  border-color: rgba(var(--err-glow), 0.28);
+  color: var(--err);
+}
+.ext-chain-danger .close { color: var(--err); }
+/* The explain action reads as a link inside the banner sentence, inheriting the
+   banner's own tint so it stays legible in every tone. */
+.ext-chain-explain {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ext-chain-explain:hover { opacity: 0.8; }
+
 /* Over-cap delegation rejection — danger tone over the shared banner layout. */
 .ext-deleg-rejected {
   background: rgba(255, 107, 107, 0.10);
