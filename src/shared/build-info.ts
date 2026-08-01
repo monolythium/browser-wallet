@@ -47,12 +47,18 @@ export const TESTNET_GENESIS_HASH =
 export const TESTNET_BLOCK0_HASH =
   "0x0aaa60eb159d49dd50b371aca278a5f971dcc023448547af3e659c15f2bf07fa";
 
-/** SDK chain-registry's current snapshot of the same hash. Surfaced on
+/** The INSTALLED SDK chain-registry's snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the reviewer
- *  notices registry-vs-pin drift. SDK 0.6.10 vendors the accepted R5 snapshot;
- *  the wallet still compares it with the independent literal above. */
-export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0x8dfc309dfe8e35b4ca036631c7dc25b29e618ac8a9694e0e2bbe23d0f98ab1fe";
+ *  notices registry-vs-pin drift.
+ *
+ *  DERIVED from the SDK's vendored registry rather than restated: a hardcoded
+ *  copy could only ever equal whatever it was transcribed from, so the About
+ *  page's drift comparison would compare the reviewer literal against a second
+ *  wallet-owned literal and could never actually flag an SDK registry change.
+ *  Reading the SDK's own object makes the comparison mean what it says. The
+ *  reviewer-controlled pin above deliberately stays a literal — that is the
+ *  side that must NOT move with a dependency. */
+export const SDK_REGISTRY_GENESIS_HASH: string = TESTNET_69420.genesis_hash;
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
