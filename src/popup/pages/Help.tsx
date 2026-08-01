@@ -18,7 +18,7 @@
 //
 // This page DESCRIBES behaviour. It must never gate, pause or alter anything.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 import { MLDSA65_MNEMONIC_WORDS } from "@monolythium/core-sdk/crypto";
@@ -100,6 +100,16 @@ interface HelpProps {
    *  renders its children only while open, so this is also what lets the copy
    *  guards in Help.test observe real markup rather than a detached constant. */
   initialOpen?: HelpEntryKey;
+  /** Deep link from the degraded-network banner: open Connection status and
+   *  bring THIS state's entry into view.
+   *
+   *  The entry shown is the one the user ASKED about, captured when they tapped
+   *  — not whatever the chain is doing by the time they arrive. Help is
+   *  documentation, so "what does this mean?" means the thing they just saw;
+   *  silently landing on a different entry would answer a question nobody
+   *  asked. Omitted for every ordinary visit, which is what keeps the menu
+   *  entry opening fully collapsed. */
+  focusState?: ChainHealthKind;
 }
 
 /** Muted category label above a group of entries. Mirrors the uppercase mono
@@ -134,23 +144,47 @@ function GroupLabel({ children }: { children: string }) {
 function StateEntry({
   label,
   divider,
+  focusKind,
   children,
 }: {
   label: string;
   divider?: boolean;
+  /** Set on the ONE entry a deep link asked for. Scrolls itself into view and
+   *  takes a brief tint. Focus is deliberately NOT moved: the banner action is
+   *  a button, and moving focus into a non-interactive text block would strand
+   *  keyboard users and double-announce under the banner's `role="status"`. */
+  focusKind?: string;
   children: ReactNode;
 }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (focusKind === undefined) return;
+    ref.current?.scrollIntoView({ block: "nearest" });
+  }, [focusKind]);
   return (
     <div
-      style={
-        divider === true
+      ref={ref}
+      {...(focusKind !== undefined ? { "data-focus-state": focusKind } : {})}
+      style={{
+        ...(divider === true
           ? {
               marginTop: 12,
               paddingTop: 12,
               borderTop: "1px solid var(--fg-700)",
             }
-          : { marginTop: 0 }
-      }
+          : { marginTop: 0 }),
+        // Brief emphasis on a deep-linked entry, from the themed accent token
+        // so it holds in every theme. Bleeds past the text so the tint reads as
+        // a highlight rather than a box.
+        ...(focusKind !== undefined
+          ? {
+              background: "rgba(var(--gold-glow), 0.10)",
+              borderRadius: 8,
+              margin: "12px -8px 0",
+              padding: "12px 8px 8px",
+            }
+          : {}),
+      }}
     >
       <div
         style={{
@@ -199,10 +233,14 @@ const bodyText = {
   marginBottom: 10,
 } as const;
 
-export function Help({ onBack, initialOpen }: HelpProps) {
+export function Help({ onBack, initialOpen, focusState }: HelpProps) {
   // Single-open accordion: opening one entry closes the previous.
   const devMode = useFeature("DEVELOPER_MODE");
-  const [open, setOpen] = useState<string | null>(initialOpen ?? null);
+  // A deep link implies opening Connection status; an explicit initialOpen
+  // still wins. Neither set → everything collapsed, exactly as before.
+  const [open, setOpen] = useState<string | null>(
+    initialOpen ?? (focusState !== undefined ? "chip" : null),
+  );
   const toggle = (key: string) => setOpen((p) => (p === key ? null : key));
   const sectionProps = (key: string) => ({
     open: open === key,
@@ -248,6 +286,7 @@ export function Help({ onBack, initialOpen }: HelpProps) {
               key={kind}
               divider={i > 0}
               label={stateHeading(kind)}
+              {...(focusState === kind ? { focusKind: kind } : {})}
             >
               {CHAIN_STATE_COPY[kind].long}
               {devMode && <Mechanics kind={kind} />}

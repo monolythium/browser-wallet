@@ -150,6 +150,32 @@ describe("Help — load-bearing safety copy", () => {
   });
 });
 
+describe("Help — deep link from the degraded-network banner", () => {
+  const withFocus = (kind: Parameters<typeof chainHealthPresentation>[0]) =>
+    renderToStaticMarkup(<Help onBack={() => undefined} focusState={kind} />);
+
+  it("opens Connection status and marks the requested entry", () => {
+    const page = withFocus("offline");
+    expect(page).toContain('aria-expanded="true"');
+    expect(page).toContain('data-focus-state="offline"');
+    expect(page).toContain(chainHealthPresentation("offline").label);
+  });
+
+  it("marks only the requested entry", () => {
+    const page = withFocus("stalled");
+    expect(page).toContain('data-focus-state="stalled"');
+    expect(page).not.toContain('data-focus-state="offline"');
+  });
+
+  // The regression that matters most: the menu entry passes no target, so Help
+  // must still open completely collapsed for an ordinary visit.
+  it("entering Help without a target still opens everything collapsed", () => {
+    const page = html();
+    expect(page).not.toContain('aria-expanded="true"');
+    expect(page).not.toContain("data-focus-state");
+  });
+});
+
 describe("Help — developer-mode mechanics", () => {
   it("shows no mechanics when developer mode is off", () => {
     const page = openEntry("chip");

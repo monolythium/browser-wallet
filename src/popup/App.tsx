@@ -227,6 +227,22 @@ export function revealTargetSurvives(screen: Screen): boolean {
   return screen === "reveal-phrase";
 }
 
+/** Whether `helpTarget` — "open Help on THIS connection state" — may outlive the
+ *  current screen. It may not, for the same reason `revealTarget` may not: the
+ *  target is scoped to the screen that consumes it, so leaving Help by any route
+ *  drops it.
+ *
+ *  This is the guard against the failure `revealTarget` documents above. Without
+ *  it, a user who tapped the banner, read the answer and left would leave the
+ *  target behind — and a later visit to Help from the Info menu, which means
+ *  "open collapsed" and passes no target, would inherit the stale one and open
+ *  on a state the user never asked about.
+ *
+ *  Exported for the test: App cannot be mounted without a DOM. */
+export function helpTargetSurvives(screen: Screen): boolean {
+  return screen === "help";
+}
+
 interface UiApproval {
   approval: PendingApproval;
 }
@@ -368,6 +384,10 @@ export default function App() {
   const [revealTarget, setRevealTarget] = useState<
     { vaultId: string; label: string } | null
   >(null);
+  // Which connection state Help should open on, set when the degraded-network
+  // banner routes into it. Null means "an ordinary visit" — Help opens with
+  // everything collapsed. Cleared by the effect below on any screen change.
+  const [helpTarget, setHelpTarget] = useState<ChainHealthKind | null>(null);
   const [, setScreenStack] = useState<Screen[]>([]);
   const navigateTo = useCallback((target: Screen) => {
     setScreenStack((prev) => {
@@ -855,6 +875,13 @@ export default function App() {
   useEffect(() => {
     if (revealTargetSurvives(screen)) return;
     setRevealTarget(null);
+  }, [screen]);
+
+  // Same shape, same reason: a deep-link target must not outlive the screen
+  // that consumes it, or a later ordinary visit to Help inherits it.
+  useEffect(() => {
+    if (helpTargetSurvives(screen)) return;
+    setHelpTarget(null);
   }, [screen]);
 
   // SW-pushed lock/unlock signal — chrome.storage.session.walletLocked is
@@ -1851,7 +1878,12 @@ export default function App() {
 
       {screen === "resources" && <Resources onBack={navigateBack} />}
 
-      {screen === "help" && <Help onBack={navigateBack} />}
+      {screen === "help" && (
+        <Help
+          onBack={navigateBack}
+          {...(helpTarget !== null ? { focusState: helpTarget } : {})}
+        />
+      )}
 
       {screen === "why-monolythium" && (
         <WhyMonolythium onBack={navigateBack} />
