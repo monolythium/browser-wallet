@@ -450,6 +450,15 @@ html[data-mode="sidepanel"] .ext > .ext-body {
    (12 of them, one of which is a light theme where a dark-tuned literal is
    nearly invisible). The existing hardcoded tints are a separate finding with
    its own brief; matching them here would have propagated the bug. */
+/* Horizontal inset for the chain banner ONLY.
+   It mounts directly inside .ext, which has no horizontal padding, so without
+   this it runs edge-to-edge while every card below it sits at .ext-body's
+   14px (see .ext-body above) — the wallet selector, address block and balance
+   card all align to that, and the banner read as misaligned against them.
+   This must NOT live on .ext-indexer-stale: that class is shared with the
+   indexer banner, which renders INSIDE .ext-body and would then be inset
+   twice. Vertical spacing is unchanged. */
+.ext-chain-banner { margin-left: 14px; margin-right: 14px; }
 .ext-chain-warn {
   background: rgba(var(--warn-glow), 0.10);
   border-color: rgba(var(--warn-glow), 0.28);

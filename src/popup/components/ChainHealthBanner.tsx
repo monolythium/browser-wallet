@@ -73,7 +73,7 @@ export function ChainHealthBanner({ kind, onExplain }: ChainHealthBannerProps) {
 
   return (
     <div
-      className={`ext-indexer-stale ${
+      className={`ext-indexer-stale ext-chain-banner ${
         DANGER_STATES.has(kind) ? "ext-chain-danger" : "ext-chain-warn"
       }`}
       role="status"
