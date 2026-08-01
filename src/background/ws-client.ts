@@ -112,14 +112,11 @@ export function deriveWsUrl(operator: OperatorEntry): string {
   return httpUrlToWss(operator.rpc);
 }
 
-/** True when `v` is a well-formed block-number hex: "0x" followed by 1..16 hex
- *  digits (a u64 block height is at most 16 hex digits). Rejects null, objects,
- *  empty "0x", non-hex, and oversized strings — so a connected operator cannot
- *  push a malformed/garbage block number into the latest-block banner state
- *  (F-2.4/#21). Callers writing the WS `newHeads` height MUST gate on this. */
-export function isWellFormedBlockNumberHex(v: unknown): v is string {
-  return typeof v === "string" && /^0x[0-9a-fA-F]{1,16}$/.test(v);
-}
+/** Re-exported for this module's existing callers. The definition moved to
+ *  shared/block-height.ts so the POPUP can gate on the same shape without
+ *  importing this module, which carries WebSocket + chrome APIs. Callers
+ *  writing the WS `newHeads` height MUST still gate on it (F-2.4/#21). */
+export { isWellFormedBlockNumberHex } from "../shared/block-height.js";
 
 /** Backoff schedule for reconnect. Doubles up to 60 s ceiling. */
 function backoffMs(attempt: number): number {

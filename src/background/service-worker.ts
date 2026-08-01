@@ -346,6 +346,7 @@ import {
   markWsDown,
   type WsStatus,
 } from "./ws-client.js";
+import { parseBlockHeight } from "../shared/block-height.js";
 import {
   DEFAULT_ACTIVITY_KIND_ENVELOPE,
   normaliseActivityKind,
@@ -11661,7 +11662,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   typeof prev === "object" && prev !== null
                     ? (prev as { hex?: unknown }).hex
                     : undefined;
-                if (prevHex !== number) {
+                // W-1: only a STRICTLY HIGHER head is an advance. This used to
+                // compare hexes for inequality, so a push from a lagging backend
+                // rewrote the advance timestamp and reset the popup's stall
+                // window. An absent/unparsable previous head means no baseline
+                // yet, so the first well-formed push establishes one.
+                const prevHeight = parseBlockHeight(prevHex);
+                const nextHeight = parseBlockHeight(number);
+                if (
+                  nextHeight !== null &&
+                  (prevHeight === null || nextHeight > prevHeight)
+                ) {
                   chrome.storage.session
                     .set({
                       [STORAGE_KEY_WS_BLOCK_ADVANCE]: {

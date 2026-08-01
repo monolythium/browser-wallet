@@ -22,6 +22,7 @@ import type { IconName } from "./Icon";
 import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
+import { parseBlockHeight } from "../shared/block-height";
 import { DevBadge } from "./components/DevBadge";
 import { ExternalLink } from "./components/ExternalLink";
 import { type DelegationsView, type PendingRewardsView } from "../shared/staking";
@@ -206,16 +207,59 @@ export function chainHealthStallVerdict(
   return nowMs - lastAdvancedAtMs >= thresholdMs;
 }
 
+/** What one polled head means relative to the highest height seen so far. */
+export type HeadReading =
+  | { kind: "unparsable" }
+  | { kind: "advanced"; height: bigint }
+  | { kind: "unchanged"; height: bigint }
+  | { kind: "decreased"; height: bigint };
+
+/**
+ * W-1: classify a polled head against the session's high-water mark.
+ *
+ * The liveness test used to be `r.blockHex !== lastBlockHex` — a STRING
+ * inequality with no ordering — so every change scored as progress. The public
+ * gateway load-balances per request between backends at different heights, so
+ * the reported head alternates; each flip reset the stall clock and the chip
+ * read LIVE against a chain that had not produced a block in days.
+ *
+ * Only a STRICTLY HIGHER head is progress. A decrease is reported so the caller
+ * can count it, but it is otherwise IGNORED rather than flagged: the wallet
+ * reads one URL and cannot tell a lagging backend from a resync from a shallow
+ * reorg — and none of those means the chain advanced, which is the only thing
+ * the LIVE chip claims.
+ *
+ * A null mark means no reading yet: the first head is adopted as the baseline
+ * whatever it is, because on first contact the wallet has nothing to compare
+ * against. Pure + exported so the poll and the tested contract can't drift.
+ */
+export function classifyHeadReading(
+  hex: unknown,
+  mark: bigint | null,
+): HeadReading {
+  const height = parseBlockHeight(hex);
+  if (height === null) return { kind: "unparsable" };
+  if (mark === null || height > mark) return { kind: "advanced", height };
+  if (height === mark) return { kind: "unchanged", height };
+  return { kind: "decreased", height };
+}
+
 /**
  * B2: fold the persisted block-advance store (`BLOCK_ADVANCE_KEY`) into the first
  * confirmed head of a fresh mount, so the stall window survives a remount / popup
  * reopen instead of restarting from zero.
- * - Same head as the persisted session (`stored.hex === currentHex`): carry its
- *   `advancedAtMs` forward → verdict STALLED if it's been unchanged past the
- *   threshold (an already-stalled chain flips immediately on reopen).
- * - Head advanced while closed (different hex), or no/malformed store: a FRESH
- *   baseline at `nowMs`, never stalled (no false positive — the chain moved, or we
- *   simply don't know yet; falls back to the current first-tick-LIVE behavior).
+ * - Current head NOT HIGHER than the persisted one (equal, or LOWER): nothing
+ *   advanced while we were closed, so carry `advancedAtMs` forward → verdict
+ *   STALLED if it's been that way past the threshold (an already-stalled chain
+ *   flips immediately on reopen), and keep the HIGHER head as the baseline.
+ * - Head genuinely advanced while closed (strictly higher), or no/malformed
+ *   store: a FRESH baseline at `nowMs`, never stalled (no false positive — the
+ *   chain moved, or we simply don't know yet).
+ *
+ * W-1: this used to compare hexes for EQUALITY, which the load-balanced gateway
+ * defeated about half the time — a reopen landing on the lower backend saw a
+ * "different" head, took a fresh baseline and restarted the 15s window, so an
+ * already-stalled chain went back to LIVE. Ordering is what makes it hold.
  * Pure + exported.
  */
 export function seedStallBaseline(
@@ -227,16 +271,20 @@ export function seedStallBaseline(
   if (typeof stored === "object" && stored !== null) {
     const hex = (stored as { hex?: unknown }).hex;
     const advancedAtMs = (stored as { advancedAtMs?: unknown }).advancedAtMs;
+    const storedHeight = parseBlockHeight(hex);
+    const currentHeight = parseBlockHeight(currentHex);
     if (
-      typeof hex === "string" &&
-      /^0x[0-9a-fA-F]+$/.test(hex) &&
+      storedHeight !== null &&
+      currentHeight !== null &&
       typeof advancedAtMs === "number" &&
       Number.isFinite(advancedAtMs) &&
       advancedAtMs <= nowMs && // guard a future/garbage timestamp
-      hex === currentHex
+      currentHeight <= storedHeight
     ) {
       return {
-        lastBlockHex: currentHex,
+        // Keep the higher head — reporting this tick's lower one would show a
+        // block number the chain has already passed.
+        lastBlockHex: hex as string,
         lastBlockObservedAt: advancedAtMs,
         stalled: chainHealthStallVerdict(nowMs, advancedAtMs, thresholdMs),
       };
@@ -584,6 +632,14 @@ export function ChainStatusBanner({
     let cancelled = false;
     let lastBlockHex: string | null = null;
     let lastBlockObservedAt = Date.now();
+    // W-1: the HIGHEST height seen this mount. The advance test compares against
+    // this, not against the previous reading — the gateway alternates between
+    // backends at different heights, and comparing to the previous reading made
+    // every flip look like progress. Mount-scoped and in-memory ON PURPOSE: a
+    // reopen re-seeds it so it cannot wedge, and no new persisted key is
+    // introduced (`mono.ws.*` is written to storage.session, which the regenesis
+    // migration's local-prefix wipe does not actually clear).
+    let highWater: bigint | null = null;
     // The genesis-gated HTTP poll is the source of truth for whether the chain
     // is serviceable. The WS `newHeads` push is only a faster freshness signal
     // and must NOT independently flip the banner to LIVE when the poll says the
@@ -645,20 +701,28 @@ export function ChainStatusBanner({
           );
           lastBlockHex = base.lastBlockHex;
           lastBlockObservedAt = base.lastBlockObservedAt;
+          // Seed the high-water mark from the head the seed settled on — which
+          // is the HIGHER of {persisted, this tick} — so a first tick that lands
+          // on a lagging backend can't lower the bar for the rest of the mount.
+          highWater = parseBlockHeight(base.lastBlockHex);
           // Keep both persisted keys fresh + hex-synced (advancedAt is the carried
           // time when the head matched, else `now` for the head seen while closed).
           void chrome.storage.session
-            .set({ [WS_BLOCK_KEY]: r.blockHex })
+            .set({ [WS_BLOCK_KEY]: base.lastBlockHex })
             .catch(() => {});
-          persistBlockAdvance(r.blockHex, lastBlockObservedAt);
+          persistBlockAdvance(base.lastBlockHex, lastBlockObservedAt);
           setHealth(
             base.stalled
-              ? { kind: "stalled", blockHex: r.blockHex }
-              : { kind: "live", blockHex: r.blockHex },
+              ? { kind: "stalled", blockHex: base.lastBlockHex }
+              : { kind: "live", blockHex: base.lastBlockHex },
           );
           return;
         }
-        if (lastBlockHex === null || r.blockHex !== lastBlockHex) {
+        // W-1: only a STRICTLY HIGHER head is progress. See classifyHeadReading.
+        const reading = classifyHeadReading(r.blockHex, highWater);
+        if (reading.kind === "unparsable") return; // no reading: touch nothing
+        if (reading.kind === "advanced") {
+          highWater = reading.height;
           lastBlockHex = r.blockHex;
           lastBlockObservedAt = now;
           setHealth({ kind: "live", blockHex: r.blockHex });
@@ -671,14 +735,16 @@ export function ChainStatusBanner({
             .set({ [WS_BLOCK_KEY]: r.blockHex })
             .catch(() => {});
           // B2: the head advanced → record WHEN, so a later reopen can time the
-          // stall from here (written only on this genuine hex change).
+          // stall from here (written only on a genuine advance).
           persistBlockAdvance(r.blockHex, now);
         } else if (
           chainHealthStallVerdict(now, lastBlockObservedAt, STALL_THRESHOLD_MS)
         ) {
-          setHealth({ kind: "stalled", blockHex: r.blockHex });
+          // Report the HIGHEST head seen, not this tick's possibly-lower one —
+          // showing a block the chain has already passed would be its own lie.
+          setHealth({ kind: "stalled", blockHex: lastBlockHex ?? r.blockHex });
         }
-        // else: same block but within fresh window — keep current state
+        // else: no advance but within the fresh window — keep current state
       } catch (e) {
         if (cancelled) return;
         pollResolvedThisMount = true;
@@ -742,7 +808,11 @@ export function ChainStatusBanner({
       if (!change || typeof change.newValue !== "string") return;
       const blockHex = change.newValue;
       const now = Date.now();
-      if (lastBlockHex === null || blockHex !== lastBlockHex) {
+      // W-1: the WS lane takes the SAME strictly-higher rule as the poll, so no
+      // lane can manufacture a LIVE the other would refuse.
+      const reading = classifyHeadReading(blockHex, highWater);
+      if (reading.kind === "advanced") {
+        highWater = reading.height;
         lastBlockHex = blockHex;
         lastBlockObservedAt = now;
         setHealth({ kind: "live", blockHex });

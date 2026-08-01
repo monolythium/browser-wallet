@@ -148,9 +148,9 @@ export function chainStateMechanics(kind: ChainHealthKind): string {
     case "reconnecting":
       return "Seeded from the block persisted in a previous session; replaced by the first confirmed head this session.";
     case "live":
-      return "Set whenever the polled height differs from the previous one — any change counts, including a decrease.";
+      return "Set when the polled height is HIGHER than the highest seen this session. A lower or equal height is ignored — a decrease means a lagging server, not progress.";
     case "stalled":
-      return `Polls every ${secs(HEALTH_TICK_MS)}; verdicts stalled once the height has been unchanged for ${secs(STALL_THRESHOLD_MS)}. Clears on any different height.`;
+      return `Polls every ${secs(HEALTH_TICK_MS)}; verdicts stalled once the height has not risen for ${secs(STALL_THRESHOLD_MS)}. Clears when the height rises above the highest seen.`;
     case "untrusted":
       return "The operator reported a different chain id. Cleared on the next check that matches.";
     case "regenesis":
