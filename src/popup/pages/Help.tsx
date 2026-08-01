@@ -19,6 +19,7 @@
 // This page DESCRIBES behaviour. It must never gate, pause or alter anything.
 
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 import { MLDSA65_MNEMONIC_WORDS } from "@monolythium/core-sdk/crypto";
 
@@ -76,17 +77,22 @@ interface HelpProps {
 }
 
 /** Muted category label above a group of entries. Mirrors the uppercase mono
- *  idiom already used for sub-headings elsewhere in the popup. */
+ *  idiom already used for sub-headings elsewhere in the popup.
+ *
+ *  Deliberately held BELOW the accordion question titles (`sectionBtn`: 13px
+ *  sans / weight 500 / --fg-100), which are the page's primary tap targets: this
+ *  stays 11px mono uppercase at --fg-300, so it reads as a category marker
+ *  rather than competing with the questions beneath it. */
 function GroupLabel({ children }: { children: string }) {
   return (
     <div
       style={{
         fontFamily: "var(--f-mono)",
-        fontSize: 10,
-        color: "var(--fg-400)",
+        fontSize: 11,
+        color: "var(--fg-300)",
         letterSpacing: "0.1em",
         textTransform: "uppercase",
-        margin: "14px 2px 8px",
+        margin: "16px 2px 8px",
       }}
     >
       {children}
@@ -94,16 +100,39 @@ function GroupLabel({ children }: { children: string }) {
   );
 }
 
-/** A named connection state: the chip's own label, then what it means. */
-function StateEntry({ label, children }: { label: string; children: string }) {
+/** A named connection state: the chip's own label, then what it means.
+ *
+ *  `divider` draws the hairline ABOVE this entry, so the caller passes it for
+ *  every entry after the first — that keeps the rules strictly BETWEEN entries,
+ *  with none above the first or below the last. */
+function StateEntry({
+  label,
+  divider,
+  children,
+}: {
+  label: string;
+  divider?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <div style={{ marginBottom: 10 }}>
+    <div
+      style={
+        divider === true
+          ? {
+              marginTop: 12,
+              paddingTop: 12,
+              borderTop: "1px solid var(--fg-700)",
+            }
+          : { marginTop: 0 }
+      }
+    >
       <div
         style={{
           fontFamily: "var(--f-mono)",
-          fontSize: 10.5,
-          color: "var(--fg-200)",
-          marginBottom: 3,
+          fontSize: 12,
+          fontWeight: 600,
+          color: "var(--fg-100)",
+          marginBottom: 4,
         }}
       >
         {label}
@@ -166,20 +195,20 @@ export function Help({ onBack, initialOpen }: HelpProps) {
             few seconds.
           </StateEntry>
 
-          <StateEntry label={`LAST SEEN #… · ${chipLabel("reconnecting")}`}>
+          <StateEntry divider label={`LAST SEEN #… · ${chipLabel("reconnecting")}`}>
             The number is the last block this wallet saw in an earlier session —
             not a live reading. It&apos;s shown so you have a reference point
             while the wallet re-checks; it isn&apos;t confirmation that
             you&apos;re connected.
           </StateEntry>
 
-          <StateEntry label={chipLabel("live")}>
+          <StateEntry divider label={chipLabel("live")}>
             An operator answered and the block height moved since the last check.
             That&apos;s all it means — it isn&apos;t a guarantee that the network
             is fully healthy.
           </StateEntry>
 
-          <StateEntry label={chipLabel("stalled")}>
+          <StateEntry divider label={chipLabel("stalled")}>
             The network is answering, but the block height hasn&apos;t moved for
             a while. Your balance and activity are hidden because the wallet
             can&apos;t confirm they&apos;re current. This clears by itself as
@@ -187,41 +216,42 @@ export function Help({ onBack, initialOpen }: HelpProps) {
             your wallet.
           </StateEntry>
 
-          <StateEntry label={chipLabel("untrusted")}>
+          <StateEntry divider label={chipLabel("untrusted")}>
             The operator answered for a different network than this wallet
             expects. Your balance is hidden rather than shown from stale data. It
             clears automatically when the operator is back on the right network.
           </StateEntry>
 
-          <StateEntry label={chipLabel("regenesis")}>
+          <StateEntry divider label={chipLabel("regenesis")}>
             The operator is on the right network but reports a different starting
             point, which usually means the test network was restarted. This one
             generally needs a wallet update to resolve — there&apos;s no setting
             you can change.
           </StateEntry>
 
-          <StateEntry label={chipLabel("quarantined")}>
+          <StateEntry divider label={chipLabel("quarantined")}>
             The operator has taken itself out of service after an internal
             consistency check failed. It&apos;s on your network but won&apos;t
             answer for now, and recovers on its own.
           </StateEntry>
 
-          <StateEntry label={chipLabel("offline")}>
+          <StateEntry divider label={chipLabel("offline")}>
             The wallet can&apos;t reach any operator. Check your own internet
             connection first.
           </StateEntry>
 
-          <div style={{ ...bodyText, marginTop: 12 }}>
-            <strong style={{ color: "var(--fg-100)" }}>What you can do</strong>
-            <br />
+          {/* The ninth and LAST ruled entry — carries a rule above it like the
+             others, and none below, so the sequence closes cleanly before the
+             section's own boundary. */}
+          <StateEntry divider label="What you can do">
             For any of these, tapping the chip opens the operator list, where{" "}
             <strong>Use this operator</strong> forces a fresh connection attempt.
             {SINGLE_OPERATOR
               ? " Beyond that, waiting is the remedy — this wallet ships with a single operator, so there is nothing to switch to."
               : " Beyond that, waiting is the remedy."}
-          </div>
+          </StateEntry>
 
-          <div style={{ ...bodyText, color: "var(--fg-200)" }}>
+          <div style={{ ...bodyText, color: "var(--fg-200)", marginTop: 12 }}>
             <strong>
               These states hide your balance; they do not stop you from sending.
             </strong>{" "}
