@@ -23,7 +23,7 @@ import type { ReactNode } from "react";
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 import { MLDSA65_MNEMONIC_WORDS } from "@monolythium/core-sdk/crypto";
 
-import { Icon } from "../Icon";
+import { Icon, type IconName } from "../Icon";
 import { Section } from "../components/Section";
 import { ExternalLink } from "../components/ExternalLink";
 import { chainHealthPresentation } from "../components";
@@ -48,6 +48,19 @@ const HELP_LINK_LABELS = [
 const helpLinks = HELP_LINK_LABELS.map((label) =>
   EXTERNAL_LINKS.find((link) => link.label === label),
 ).filter((link): link is (typeof EXTERNAL_LINKS)[number] => link !== undefined);
+
+/** The address as a reader would say it: no scheme, no `www.`, no trailing
+ *  slash. Applied uniformly to every row so no URL is ever hand-written here —
+ *  the stored value in EXTERNAL_LINKS stays the single source of truth, and
+ *  what the link NAVIGATES to is always the untouched `link.url`. Only the
+ *  display text is shortened, and never mid-path: a truncated address on a
+ *  wallet help page is worse than a wrapped one. */
+function displayUrl(url: string): string {
+  return url
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/\/+$/, "");
+}
 
 /** Whether the pinned registry publishes exactly one RPC endpoint. Derived from
  *  the same SDK registry `networks.ts` maps into the operator defaults (and that
@@ -388,7 +401,27 @@ export function Help({ onBack, initialOpen }: HelpProps) {
           >
             {helpLinks.map((link) => (
               <ExternalLink key={link.url} href={link.url}>
-                {link.label}
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                    minWidth: 0,
+                  }}
+                >
+                  <Icon name={link.icon as IconName} size={13} />
+                  <span>{link.label}</span>
+                  <span
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 10.5,
+                      color: "var(--fg-400)",
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {displayUrl(link.url)}
+                  </span>
+                </span>
               </ExternalLink>
             ))}
           </div>

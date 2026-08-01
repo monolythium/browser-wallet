@@ -175,12 +175,12 @@ export const EXTERNAL_LINKS: ReadonlyArray<{
   {
     label: "Telegram",
     url: "https://t.me/monolythium",
-    icon: "globe",
+    icon: "telegram",
   },
   {
     label: "Discord",
     url: "https://discord.com/invite/monolythium",
-    icon: "globe",
+    icon: "discord",
   },
   {
     label: "Privacy",
