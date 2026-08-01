@@ -289,11 +289,8 @@ export function MainMenu({
         </MenuSection>
 
         <MenuSection title="Info">
-          {/* Help sits first: a confused user needs an answer before a version
-             string. No `help` glyph exists in IconName and adding one would
-             touch the icon tests, so this reuses `info`. */}
-          <MenuItem icon="info" label="Help" onClick={onHelp} hasChevron />
           <MenuItem icon="info" label="About" onClick={onAbout} hasChevron />
+          <MenuItem icon="question" label="Help" onClick={onHelp} hasChevron />
           <MenuItem
             icon="external"
             label="Resources"

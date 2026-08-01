@@ -7,7 +7,7 @@ export type IconName =
   | "check" | "clock" | "close" | "back" | "settings" | "lock" | "eye" | "search"
   | "shield" | "warn" | "tpm" | "hw" | "passkey"
   | "contract" | "plus" | "more" | "pen" | "globe"
-  | "menu" | "book" | "info" | "multisig" | "display"
+  | "menu" | "book" | "info" | "question" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
   | "mono-mark" | "github" | "grid"
@@ -444,6 +444,18 @@ export function Icon({ name, size = 16 }: IconProps) {
           <circle cx="12" cy="12" r="10" />
           <line x1="12" y1="16" x2="12" y2="12" />
           <line x1="12" y1="8" x2="12.01" y2="8" />
+        </svg>
+      );
+    case "question":
+      // Question mark in a circle — the Help entry. Deliberately the sibling of
+      // `info` above: same circle, same zero-length-line dot trick for the round
+      // point, so the two read as a pair in the Info menu rather than as one
+      // glyph used twice.
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
       );
     case "multisig":
