@@ -516,7 +516,8 @@ export function OperatorDirectory({
           >
             Each chip on an operator row decodes a signal the wallet collected
             from its probe round-trip. Most are advisory — the wallet's RPC
-            dispatcher already routes around offline / untrusted operators.
+            dispatcher skips offline / untrusted operators when another is
+            available.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {OPERATOR_RISK_LEGEND.filter(

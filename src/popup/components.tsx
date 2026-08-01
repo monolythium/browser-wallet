@@ -349,7 +349,8 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
       return {
         label: "LIVE",
         color: "var(--ok)",
-        explanation: "Connected — an operator is serving your pinned chain.",
+        explanation:
+          "Connected — an operator is serving your pinned chain, and the block height is rising.",
         action: null,
         tappable: false,
       };
@@ -357,8 +358,9 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
       return {
         label: "STALLED",
         color: "var(--warn)",
-        explanation: "The chain hasn't advanced for a while.",
-        action: "Tap to review your operators.",
+        explanation:
+          "The block height hasn't risen for a while, so the wallet can't confirm your balance is current.",
+        action: "See operator status.",
         tappable: true,
       };
     case "untrusted":
@@ -367,9 +369,14 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // Red (same hard-trust token as ALL OPERATORS UNTRUSTED / OFFLINE) — the
         // operator is on a different chain than the wallet expects.
         color: "var(--err)",
+        // The cause is a CHAIN-ID mismatch, not a genesis one: classifyNoOperatorReason
+        // returns "untrusted" only for an operator in `operatorWrongChainId`
+        // (networks.ts — set when net_version disagrees with the pin), and returns
+        // "regenesis" for a genesis-hash mismatch before it can ever reach here.
+        // The old wording described the genesis case, i.e. the OTHER state.
         explanation:
-          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network.",
-        action: "Click to see operators.",
+          "This operator is serving a different network — it answered with a chain id your wallet doesn't expect.",
+        action: "See operator status.",
         tappable: true,
       };
     case "regenesis":
@@ -380,8 +387,8 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // actions stay paused. Scrolls as a marquee (the long label).
         color: "var(--err)",
         explanation:
-          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network.",
-        action: "Click to see operators.",
+          "All operators report a different genesis hash than your wallet expects. This usually means the test network was restarted.",
+        action: "See operator status.",
         tappable: true,
       };
     case "quarantined":
@@ -393,8 +400,8 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // value stays knowable once an operator recovers / via Monoscan.
         color: "var(--err)",
         explanation:
-          "Every operator self-quarantined (a checkpoint state-root mismatch) and won't serve RPC — they're on your chain but temporarily can't be trusted. The wallet reconnects automatically once one recovers.",
-        action: "Click to see operators.",
+          "Every operator self-quarantined after a checkpoint state-root mismatch and won't serve requests. They're on your chain and recover on their own.",
+        action: "See operator status.",
         tappable: true,
       };
     case "offline":
@@ -402,7 +409,7 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         label: "OFFLINE",
         color: "var(--err)",
         explanation: "Can't reach any operator right now.",
-        action: "Tap to review your operators.",
+        action: "See operator status.",
         tappable: true,
       };
     case "reconnecting":
@@ -2508,13 +2515,17 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
                   marginTop: 1,
                 }}
               >
+                {/* No "switch operators" remedy: the registry ships one host and
+                    the RPC-override editor is developer-gated, so the shipped
+                    build cannot perform it. The untrusted line describes a CHAIN
+                    ID mismatch — the genesis-hash case is `regenesis` below. */}
                 {balanceCause === "quarantined"
-                  ? "Every operator self-quarantined (a checkpoint state-root mismatch) and isn't serving requests right now. They're on your chain — the app reconnects automatically once one recovers, or switch to another operator. Your funds are safe."
+                  ? "Every operator self-quarantined (a checkpoint state-root mismatch) and isn't serving requests right now. They're on your chain and recover on their own. Your funds are safe."
                   : balanceCause === "unreachable"
-                    ? "No operator is responding right now, so the wallet can't confirm your live balance. Your funds are safe and nothing changed — the app reconnects automatically once an operator is back, or switch to another operator on your wallet's network."
+                    ? "No operator is responding right now, so the wallet can't confirm your live balance. Your funds are safe and nothing changed — the wallet reconnects automatically once an operator is back."
                     : balanceCause === "untrusted"
-                      ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
-                      : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
+                      ? "This operator is serving a different network — it answered with a chain id your wallet doesn't expect. The wallet reconnects once it matches again."
+                      : "All operators report a different genesis hash than your wallet expects — they may be on a different chain. The wallet reconnects automatically once the operators are back on your wallet's network."}
               </div>
               {pausedMonoscanUrl && (
                 <div style={{ marginTop: 3, letterSpacing: 0 }}>

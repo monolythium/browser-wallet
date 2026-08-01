@@ -1550,7 +1550,8 @@ function OperatorRiskLegendCard({
       >
         Each chip on an operator row decodes a signal the wallet collected
         from its probe round-trip. Most are advisory — the wallet's RPC
-        dispatcher already routes around offline / untrusted operators.
+        dispatcher skips offline / untrusted operators when another is
+        available.
       </div>
       <div
         style={{

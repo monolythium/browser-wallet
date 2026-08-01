@@ -309,7 +309,7 @@ function classifyInnerError(
         "Every operator you're connected to is temporarily quarantined " +
         "(a checkpoint state-root mismatch) and isn't serving requests right " +
         "now. They're on your chain — the wallet reconnects automatically once " +
-        "an operator recovers, or you can switch operators. See Operators.",
+        "an operator recovers. See Operators.",
       severity: "err",
     };
   }
@@ -336,9 +336,8 @@ function classifyInnerError(
       headline: "Operator node unavailable",
       body:
         "The selected operator's node is temporarily out of sync with the " +
-        "network and isn't serving requests right now. The wallet skips it " +
-        "automatically and uses other operators — your funds are unaffected. " +
-        "See Operators.",
+        "network and isn't serving requests right now — your funds are " +
+        "unaffected. See Operators.",
       severity: "warn",
     };
   }

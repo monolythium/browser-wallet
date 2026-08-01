@@ -1245,10 +1245,10 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     // now `action`, not part of the explanation: the explanation renders on all
     // nine banner instances, eight of which cannot be tapped at all.
     expect(chainHealthPresentation("regenesis").action).toMatch(
-      /Click to see operators/,
+      /operator status/i,
     );
     expect(chainHealthPresentation("regenesis").explanation).not.toMatch(
-      /Click to see operators/,
+      /tap to|click to|see operator/i,
     );
   });
 
@@ -1573,8 +1573,41 @@ describe("chainHealthInlineHint (A/R1 — explanation visible inline, not hover-
 
   it("the inline hint is the rendered explanation, not just an attribute — STALLED case", () => {
     expect(chainHealthInlineHint("stalled")).toBe(
-      "The chain hasn't advanced for a while.",
+      "The block height hasn't risen for a while, so the wallet can't confirm your balance is current.",
     );
+  });
+
+  // W-1 / §A: the two "wrong chain" states describe DIFFERENT causes, and the
+  // untrusted copy used to describe the genesis one — i.e. the other state's.
+  // classifyNoOperatorReason returns "untrusted" only for a chain-id mismatch
+  // and "regenesis" for a genesis-hash mismatch, so the copy must not swap them.
+  it("untrusted names the chain id; regenesis names the genesis hash", () => {
+    const untrusted = chainHealthPresentation("untrusted").explanation;
+    expect(untrusted).toMatch(/chain id/i);
+    expect(untrusted).not.toMatch(/genesis/i);
+
+    const regenesis = chainHealthPresentation("regenesis").explanation;
+    expect(regenesis).toMatch(/genesis/i);
+  });
+
+  // The remedy the shipped build cannot perform: one host in the registry, and
+  // the RPC-override editor is developer-gated. Tree-wide enforcement lives in
+  // buildtime/operator-remedy-invariant; this pins the chain-state copy itself.
+  it("offers no operator-switching remedy in any state's copy", () => {
+    for (const k of [
+      "live",
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+      "reconnecting",
+      "loading",
+    ] as const) {
+      const p = chainHealthPresentation(k);
+      expect(p.explanation).not.toMatch(/switch/i);
+      expect(p.action ?? "").not.toMatch(/switch/i);
+    }
   });
 
   // The split's whole point: the hint reaches screens where nothing is
