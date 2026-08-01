@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import {
+  ML_DSA_65_PUBLIC_KEY_LEN,
   hexToBytes,
   mlDsa65AddressFromPublicKey,
 } from "@monolythium/core-sdk/crypto";
@@ -39,7 +40,10 @@ import {
 import { NativeMultisigAddressCard } from "./NativeMultisigAddressCard";
 
 const MAX_LABEL_LEN = 32;
-const ML_DSA_65_PUBKEY_HEX_LEN = 2 + 1952 * 2;
+/** `0x` + two hex chars per pubkey byte. DERIVED from the SDK's exported
+ *  length — same reasoning as the twin constant in MultisigCreateModal: a
+ *  restated wire value is a copy that can drift when the other side moves. */
+const ML_DSA_65_PUBKEY_HEX_LEN = 2 + ML_DSA_65_PUBLIC_KEY_LEN * 2;
 
 export interface MultisigGovernanceProps {
   vaultId: string;
