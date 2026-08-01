@@ -10,13 +10,37 @@
 // order and pointer behaviour.
 
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MLDSA65_MNEMONIC_WORDS } from "@monolythium/core-sdk/crypto";
 
 import { Help, type HelpEntryKey } from "./Help.js";
-import { chainHealthPresentation } from "../components";
+import {
+  chainHealthPresentation,
+  HEALTH_TICK_MS,
+  STALL_THRESHOLD_MS,
+} from "../components";
 import { WIPE_CONFIRM_WORD } from "../../shared/constants";
 import { EXTERNAL_LINKS } from "../../shared/build-info";
+import { useFeature } from "../hooks/useFeature";
+
+// Developer mode is OFF for every test unless a test turns it on. That matches
+// the shipped default and keeps the copy assertions below measuring the page a
+// normal user sees.
+vi.mock("../hooks/useFeature", () => ({ useFeature: vi.fn(() => false) }));
+
+beforeEach(() => {
+  vi.mocked(useFeature).mockImplementation(() => false);
+});
+
+/** Render with developer mode on. */
+const withDevMode = (fn: () => string): string => {
+  vi.mocked(useFeature).mockImplementation((flag: string) => flag === "DEVELOPER_MODE");
+  try {
+    return fn();
+  } finally {
+    vi.mocked(useFeature).mockImplementation(() => false);
+  }
+};
 
 /** The page as it first renders — every entry collapsed. */
 const html = () => renderToStaticMarkup(<Help onBack={() => undefined} />);
@@ -123,6 +147,37 @@ describe("Help — load-bearing safety copy", () => {
     expect(openEntry("more")).toMatch(
       /will ever ask for your recovery phrase[\s\S]{0,20}password/i,
     );
+  });
+});
+
+describe("Help — developer-mode mechanics", () => {
+  it("shows no mechanics when developer mode is off", () => {
+    const page = openEntry("chip");
+    expect(page).not.toContain("Polls every");
+    expect(page).not.toContain("DEV");
+  });
+
+  it("shows the mechanics when developer mode is on", () => {
+    const page = withDevMode(() => openEntry("chip"));
+    expect(page).toContain("Polls every");
+    // The DEV marker, per the wallet-wide convention.
+    expect(page).toContain("DEV");
+  });
+
+  // The whole point of these blocks is that the numbers are DERIVED. Asserting
+  // against the constants means a change to either constant moves the page and
+  // this test together — a literal here would let them drift apart silently.
+  it("renders the poll cadence and stall threshold from their constants", () => {
+    const page = withDevMode(() => openEntry("chip"));
+    expect(page).toContain(`${HEALTH_TICK_MS / 1000} seconds`);
+    expect(page).toContain(`${STALL_THRESHOLD_MS / 1000} seconds`);
+  });
+
+  it("does not render the operator-name poll beside a health mechanic", () => {
+    // OPERATOR_TICK_MS (10s) drives the operator-NAME poll, not health. A
+    // plausible-looking wrong number next to a health mechanic is worse than
+    // an absent one, so 10 seconds must not appear here.
+    expect(withDevMode(() => openEntry("chip"))).not.toContain("10 seconds");
   });
 });
 

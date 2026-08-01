@@ -24,7 +24,15 @@
 // constant the logic actually reads -- never typed -- which is the whole point
 // of showing it.
 
-import type { ChainHealthKind } from "./components";
+import {
+  HEALTH_TICK_MS,
+  STALL_THRESHOLD_MS,
+  type ChainHealthKind,
+} from "./components";
+
+/** Render a millisecond constant as seconds. Every duration below goes through
+ *  this — none is typed — so a change to the constant moves this text with it. */
+const secs = (ms: number): string => `${Math.round(ms / 1000)} seconds`;
 
 export interface ChainStateCopy {
   /** Banner one-liner. Null for the states the banner deliberately suppresses
@@ -113,4 +121,43 @@ export function bannerShowsFor(
   kind: ChainHealthKind | null | undefined,
 ): boolean {
   return kind != null && CHAIN_STATE_COPY[kind].short !== null;
+}
+
+/**
+ * Developer-mode mechanics for a state: how the wallet decides it, and what
+ * clears it. Written for someone debugging, not for a user.
+ *
+ * Every duration is rendered from the constant the logic reads — see `secs`.
+ *
+ * TWO NUMBERS ARE DELIBERATELY ABSENT:
+ *
+ *  - The genesis re-probe TTL that governs `quarantined` / `offline` is
+ *    `GENESIS_OBSERVED_NULL_TTL_MS` in background/networks.ts. It is NOT
+ *    exported, and that module carries chrome APIs, so importing it here would
+ *    drag the background into the popup bundle. Since the number cannot be
+ *    derived it is not stated — a typed copy of a constant is the exact defect
+ *    these blocks exist to demonstrate against.
+ *  - `OPERATOR_TICK_MS` (the operator-NAME poll) is excluded everywhere. A
+ *    plausible-looking wrong number beside a health mechanic is worse than an
+ *    absent one.
+ */
+export function chainStateMechanics(kind: ChainHealthKind): string {
+  switch (kind) {
+    case "loading":
+      return `Replaced by the first poll result. Polls every ${secs(HEALTH_TICK_MS)}.`;
+    case "reconnecting":
+      return "Seeded from the block persisted in a previous session; replaced by the first confirmed head this session.";
+    case "live":
+      return "Set whenever the polled height differs from the previous one — any change counts, including a decrease.";
+    case "stalled":
+      return `Polls every ${secs(HEALTH_TICK_MS)}; verdicts stalled once the height has been unchanged for ${secs(STALL_THRESHOLD_MS)}. Clears on any different height.`;
+    case "untrusted":
+      return "The operator reported a different chain id. Cleared on the next check that matches.";
+    case "regenesis":
+      return "Right chain id, different genesis hash. The mismatch is sticky — never re-probed — and is persisted, so it survives a restart. Cleared only by a forced re-probe.";
+    case "quarantined":
+      return "Every operator answered with a checkpoint state-root mismatch. Re-probed once the genesis cache entry expires.";
+    case "offline":
+      return "Unreachable, or the request failed. Re-probed once the genesis cache entry expires.";
+  }
 }

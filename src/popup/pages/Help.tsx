@@ -30,7 +30,10 @@ import { chainHealthPresentation, type ChainHealthKind } from "../components";
 import {
   CHAIN_STATE_COPY,
   CHAIN_STATE_ORDER,
+  chainStateMechanics,
 } from "../chain-health-copy";
+import { DevBadge } from "../components/DevBadge";
+import { useFeature } from "../hooks/useFeature";
 import { WIPE_CONFIRM_WORD } from "../../shared/constants";
 import { EXTERNAL_LINKS } from "../../shared/build-info";
 
@@ -167,6 +170,28 @@ function StateEntry({
   );
 }
 
+/** Developer-mode mechanics for one state. Rendered ONLY inside the caller's
+ *  `devMode &&` gate, and carrying `<DevBadge />` inside that same conditional
+ *  per the badge's placement contract. */
+function Mechanics({ kind }: { kind: ChainHealthKind }) {
+  return (
+    <div
+      style={{
+        marginTop: 6,
+        paddingTop: 6,
+        borderTop: "1px solid var(--fg-700)",
+        fontFamily: "var(--f-mono)",
+        fontSize: 10,
+        color: "var(--fg-400)",
+        lineHeight: 1.5,
+      }}
+    >
+      <DevBadge />{" "}
+      {chainStateMechanics(kind)}
+    </div>
+  );
+}
+
 const bodyText = {
   fontSize: 11.5,
   color: "var(--fg-300)",
@@ -176,6 +201,7 @@ const bodyText = {
 
 export function Help({ onBack, initialOpen }: HelpProps) {
   // Single-open accordion: opening one entry closes the previous.
+  const devMode = useFeature("DEVELOPER_MODE");
   const [open, setOpen] = useState<string | null>(initialOpen ?? null);
   const toggle = (key: string) => setOpen((p) => (p === key ? null : key));
   const sectionProps = (key: string) => ({
@@ -224,6 +250,7 @@ export function Help({ onBack, initialOpen }: HelpProps) {
               label={stateHeading(kind)}
             >
               {CHAIN_STATE_COPY[kind].long}
+              {devMode && <Mechanics kind={kind} />}
             </StateEntry>
           ))}
 
