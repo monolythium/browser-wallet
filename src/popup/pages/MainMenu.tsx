@@ -65,6 +65,7 @@ interface MainMenuProps {
   onEmergencyRecovery?: () => void;
   /** External resources / links page (docs, explorer, repo). */
   onResources: () => void;
+  onHelp: () => void;
   /** "About Monolythium" page — the §28.5 differentiation pitch. */
   onWhyMonolythium: () => void;
   onLockWallet: () => void;
@@ -98,6 +99,7 @@ export function MainMenu({
   onOpenRiscv,
   onEmergencyRecovery,
   onResources,
+  onHelp,
   onWhyMonolythium,
   onLockWallet,
   onResetWallet,
@@ -287,6 +289,10 @@ export function MainMenu({
         </MenuSection>
 
         <MenuSection title="Info">
+          {/* Help sits first: a confused user needs an answer before a version
+             string. No `help` glyph exists in IconName and adding one would
+             touch the icon tests, so this reuses `info`. */}
+          <MenuItem icon="info" label="Help" onClick={onHelp} hasChevron />
           <MenuItem icon="info" label="About" onClick={onAbout} hasChevron />
           <MenuItem
             icon="external"

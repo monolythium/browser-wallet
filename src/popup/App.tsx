@@ -70,6 +70,7 @@ import { Operators } from "./pages/Operators";
 import { OperatorDirectory } from "./pages/OperatorDirectory";
 import { EmergencyRecovery } from "./pages/EmergencyRecovery";
 import { Resources } from "./pages/Resources";
+import { Help } from "./pages/Help";
 import { WhyMonolythium } from "./pages/WhyMonolythium";
 import { NotificationSettings } from "./pages/NotificationSettings";
 import { About } from "./pages/About";
@@ -159,6 +160,7 @@ type Screen =
   | "operator-directory"
   | "emergency-recovery"
   | "resources"
+  | "help"
   | "why-monolythium"
   | "notification-settings"
   | "about"
@@ -1849,6 +1851,8 @@ export default function App() {
 
       {screen === "resources" && <Resources onBack={navigateBack} />}
 
+      {screen === "help" && <Help onBack={navigateBack} />}
+
       {screen === "why-monolythium" && (
         <WhyMonolythium onBack={navigateBack} />
       )}
@@ -1995,6 +1999,7 @@ export default function App() {
           onDisplayPreferences={() => navigateTo("display-preferences")}
           onAbout={() => navigateTo("about")}
           onResources={() => navigateTo("resources")}
+          onHelp={() => navigateTo("help")}
           onWhyMonolythium={() => navigateTo("why-monolythium")}
           {...(activeVaultSummary
             ? {
