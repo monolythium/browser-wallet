@@ -5,9 +5,9 @@ import react from "@vitejs/plugin-react";
 import { crx } from "@crxjs/vite-plugin";
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 import manifest from "./manifest.json" with { type: "json" };
-import { applyHardenedCsp } from "./src/buildtime/csp";
-import { applyDynamicWarUrl } from "./src/buildtime/manifest-war";
-import { assertPopupOnlyInvariant } from "./src/buildtime/popup-only-invariant";
+import { applyHardenedCsp } from "./src/buildtime/csp.ts";
+import { applyDynamicWarUrl } from "./src/buildtime/manifest-war.ts";
+import { assertPopupOnlyInvariant } from "./src/buildtime/popup-only-invariant.ts";
 
 // Read the ACTUALLY-INSTALLED @monolythium/core-sdk version at build time and
 // inject it into the bundle (the About page reads it via __SDK_INSTALLED_VERSION__).
