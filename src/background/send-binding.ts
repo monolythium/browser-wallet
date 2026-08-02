@@ -355,8 +355,18 @@ export async function withSendBinding(args: {
     // to `submit` under this key — see SendBindingMismatchError.
     if (bound.digest === undefined || bound.digest !== expectedDigest) {
       await deleteSendBinding(key);
+      // The message is what the user reads — handlers surface
+      // `(e as Error).message` and the Send error screen renders it, the same
+      // way the operator-save refusal states its reason in a sentence.
+      //
+      // IT DOES NOT CLAIM THE EARLIER ATTEMPT DID NOT SEND. Nothing here knows
+      // that: the binding is kept precisely when a failure was `transient`, i.e.
+      // when the bytes MAY already be on the network. Telling the user "the
+      // earlier one was not sent" would be a guess presented as a fact, on the
+      // one screen where a wrong guess costs money — so it points at Activity
+      // instead, which is a check they can actually perform.
       throw new SendBindingMismatchError(
-        "this confirmation was signed for a different transaction",
+        "This transaction changed since the last attempt. Start a new send — check Activity first in case the earlier one went through.",
       );
     }
     if (isCompleted(bound)) {
