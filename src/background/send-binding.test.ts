@@ -584,6 +584,31 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     expect(await readSendBinding(KEY, T0)).toBeNull();
   });
 
+  // A completed stub still answers from its hash — but only for the transaction
+  // it was completed FOR. The digest is checked BEFORE `isCompleted`, so an
+  // edited retry cannot be handed the landed hash of a different transaction and
+  // be told its send succeeded.
+  it("REFUSES a completed stub when the transaction changed", async () => {
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+    await completeSendBinding(KEY, "0xlanded", "op-1", T0);
+    const submit = submitter();
+    const rebroadcast = vi.fn();
+
+    await expect(
+      withSendBinding({
+        key: KEY,
+        expectedDigest: DIGEST_B,
+        now: () => T0,
+        rebroadcast,
+        bytesMayBeLive,
+        submit,
+      }),
+    ).rejects.toBeInstanceOf(SendBindingMismatchError);
+
+    expect(rebroadcast).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   // ── §0 / row 3 — the WYSIWYS regression ──────────────────────────────────
   //
   // The hand test: a send to A failed, the user pressed "Try again", changed the
