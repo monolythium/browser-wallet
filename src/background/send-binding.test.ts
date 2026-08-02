@@ -330,9 +330,18 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
   });
 
   const KEY = "confirm-1";
+
+  /** Signed bytes for the transaction the user FIRST confirmed (recipient A).
+   *  Same value the fixture below has always carried, named so the row-3
+   *  regression can assert on the bytes rather than on a call count. */
+  const WIRE_PAYING_A = "0xdeadbeef";
+  /** Signed bytes for the EDITED transaction (recipient B) — deliberately
+   *  distinct, so "which transaction went out" is decidable from the wire. */
+  const WIRE_PAYING_B = "0xfeedface";
+
   const fields = {
     nonceHex: "0x7",
-    wireHex: "0xdeadbeef",
+    wireHex: WIRE_PAYING_A,
     txHashHex: "0xabc",
     from: "0xsender",
     chainIdHex: "0x10F2C",
@@ -541,5 +550,47 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
 
     expect(submit).not.toHaveBeenCalled();
     expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");
+  });
+
+  // ── §0 / row 3 — the WYSIWYS regression ──────────────────────────────────
+  //
+  // The hand test: a send to A failed, the user pressed "Try again", changed the
+  // recipient to B, and confirmed. The wallet re-broadcast the bytes paying A
+  // while the screen showed B. The recipient was read out of the stored
+  // `wireHex` itself, so this asserts on the BYTES rather than on a call count —
+  // a count would pass if the wrong bytes went out under a different shape.
+  //
+  // The assertion is deliberately written to hold in BOTH worlds, so it needs no
+  // rewrite once the guard lands: whatever the call does with a changed
+  // transaction, A's bytes must never reach the wire. Today it resolves and
+  // hands them over; that is the failure this pins.
+  it("REFUSES to replay when the transaction changed under the same key", async () => {
+    // Bound to a transaction paying A.
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+
+    // The caller now intends a transaction paying B — different signed bytes.
+    const submitPayingB = vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind({ ...fields, wireHex: WIRE_PAYING_B, txHashHex: "0xhash-b" });
+      return { txHash: "0xhash-b", via: "op-1", nonceHex: fields.nonceHex };
+    });
+    const rebroadcast = vi.fn(async (_w: string, h: string) => ({
+      txHash: h,
+      via: "op-replay",
+    }));
+
+    // Tolerated either way: today it resolves, after the guard it rejects. The
+    // assertion below is the invariant, not the control flow.
+    await withSendBinding({
+      key: KEY,
+      now: () => T0,
+      rebroadcast,
+      bytesMayBeLive,
+      submit: submitPayingB,
+    }).catch(() => undefined);
+
+    // A's bytes must never be re-broadcast for a request that is not A's.
+    for (const call of rebroadcast.mock.calls) {
+      expect(call[0]).not.toBe(WIRE_PAYING_A);
+    }
   });
 });
