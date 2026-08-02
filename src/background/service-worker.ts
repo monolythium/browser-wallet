@@ -7483,6 +7483,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           SESSION_KEY_GENESIS_CACHE,
           SESSION_KEY_PASSKEY_USAGE,
           PENDING_NONCE_KEY,
+          // Same class: the last head seen and when it last advanced. Nothing
+          // else clears these — not lock, and not the re-genesis migration,
+          // which lists `mono.ws.` among LOCAL prefixes while both keys are
+          // written to SESSION. They are also the only state that can pin the
+          // chip to STALLED against a live chain, so the wipe being the one
+          // in-wallet action that clears them matters beyond handoff hygiene.
+          STORAGE_KEY_WS_LAST_BLOCK_HEX,
+          STORAGE_KEY_WS_BLOCK_ADVANCE,
         ]);
         await triggerAutoLock();
       } finally {
@@ -7548,6 +7556,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           SESSION_KEY_GENESIS_CACHE,
           SESSION_KEY_PASSKEY_USAGE,
           PENDING_NONCE_KEY,
+          // Same class: the last head seen and when it last advanced. Nothing
+          // else clears these — not lock, and not the re-genesis migration,
+          // which lists `mono.ws.` among LOCAL prefixes while both keys are
+          // written to SESSION. They are also the only state that can pin the
+          // chip to STALLED against a live chain, so the wipe being the one
+          // in-wallet action that clears them matters beyond handoff hygiene.
+          STORAGE_KEY_WS_LAST_BLOCK_HEX,
+          STORAGE_KEY_WS_BLOCK_ADVANCE,
         ]);
         await triggerAutoLock();
       } finally {

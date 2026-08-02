@@ -1122,6 +1122,42 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
   });
 
+  it("clears the chain-liveness baseline on both wipe paths", async () => {
+    // Same device-handoff class as the P2-007 set above: a prior owner's
+    // last-seen head and the time it last advanced are not secret, but they
+    // are predecessor state and nothing else clears them — no lock, no
+    // re-genesis migration (that lists `mono.ws.` under LOCAL prefixes while
+    // both keys are written to SESSION), and no TTL. Until this, they outlived
+    // a full wipe and only a browser restart cleared them.
+    //
+    // The wipe is also the ONLY in-wallet action that can clear a stall
+    // baseline stuck above every live reading, which pins the banner to
+    // STALLED. That wedge is not fixed here — see
+    // `_dev-notes/browser-wallet/2026-08-02_stall-baseline-wedge.md` — but it
+    // must not be the case that nothing a user can reach clears it.
+    const LIVENESS = ["mono.ws.lastBlockHex", "mono.ws.lastBlockAdvancedAt"];
+
+    storageSession["mono.ws.lastBlockHex"] = "0x3547a";
+    storageSession["mono.ws.lastBlockAdvancedAt"] = {
+      hex: "0x3547a",
+      advancedAtMs: 1,
+    };
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
+    for (const k of LIVENESS) expect(storageSession[k]).toBeUndefined();
+
+    storageSession["mono.ws.lastBlockHex"] = "0x3547a";
+    storageSession["mono.ws.lastBlockAdvancedAt"] = {
+      hex: "0x3547a",
+      advancedAtMs: 1,
+    };
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+    for (const k of LIVENESS) expect(storageSession[k]).toBeUndefined();
+  });
+
   // H2 — the wipe removes mono.chains.user / mono.chain.active from DISK, but
   // the SW mirrors both in memory (`userChains`, `session.chainId`) and nothing
   // in the reset handler touched them. Until the next worker restart the new
