@@ -842,13 +842,13 @@ export function ChainStatusBanner({
     // subscribe to `newHeads`; when chain pushes a new head, the SW
     // writes the block hex to chrome.storage.session under the key
     // below. We watch that key here and update the banner without
-    // waiting for the next 8 s poll. The 8 s poll stays running as
+    // waiting for the next HEALTH_TICK_MS poll. That poll stays running as
     // a safety net so a WS drop doesn't strand the user on stale
     // data — if WS is healthy, the poll's tick just reaffirms what
     // the WS already wrote.
     void bgWsSubscribeNewHeads().catch(() => {
       // ws-subscribe-new-heads is best-effort; failure means the
-      // 8 s poll covers us alone (the existing behaviour).
+      // HEALTH_TICK_MS poll covers us alone (the existing behaviour).
     });
     const wsListener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
       changes,

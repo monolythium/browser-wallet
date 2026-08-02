@@ -1258,7 +1258,7 @@ export async function bgWsStatus(): Promise<
  *  After the first call, the SW writes the latest block hex to
  *  chrome.storage.session under `mono.ws.lastBlockHex` every time a
  *  head arrives. ChainStatusBanner watches that key for live updates
- *  without its 8 s polling fallback firing as often.
+ *  without its HEALTH_TICK_MS polling fallback firing as often.
  *
  *  Returns the WS-client status at the time of the call. The popup can
  *  use this as a hint whether to expect live updates or to keep its

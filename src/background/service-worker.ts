@@ -3316,7 +3316,8 @@ const OPERATOR_CACHE_TTL_MS = 10_000;
 // Shared between `wallet-operator-status` (popup chain-status banner) and
 // `wallet-chain-block-number` (popup chain-health poll). Both want the same
 // "first alive testnet operator" answer; caching name+rpc together avoids
-// re-running the operator probe loop at the 8-second health-poll cadence.
+// re-running the operator probe loop on every health-poll tick (the popup's
+// HEALTH_TICK_MS cadence).
 let cachedOperator: {
   name: string | null;
   rpc: string | null;
@@ -9457,7 +9458,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Real chain-liveness probe for the popup's status-bar health
       // indicator. Calls `eth_blockNumber` on the active testnet
       // operator and returns the hex result; the popup tracks block-
-      // advance freshness client-side at an 8-second cadence to drive
+      // advance freshness client-side at its HEALTH_TICK_MS cadence to drive
       // the LIVE / STALLED / OFFLINE state machine.
       //
       // Reuses `cachedOperator` (shared with `wallet-operator-status`) to avoid
@@ -9466,7 +9467,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // stale) — so the block read below is tried against it FIRST, skipping
       // the probe RTT. A stale candidate that fails falls through to a fresh
       // probe in the SAME tick (so a dead persisted operator self-heals now,
-      // not at the next 8 s poll); a genuinely-fresh operator that fails means
+      // not at the next poll tick); a genuinely-fresh operator that fails means
       // the fleet is unhealthy and surfaces as-is.
       //
       // Close the cold-wake boot race: the popup message dispatch does NOT
@@ -10344,6 +10345,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // responders, or any error returns no address (the popup tells the user
       // to paste it); we NEVER fall back to the operator-echoed label cache for
       // a signed send.
+      //
+      // CURRENT CONDITION: forward resolution ALWAYS returns `insufficient`
+      // and therefore never yields an address. NAME_RESOLVE_QUORUM_MIN is 2
+      // and the SDK chain registry publishes ONE endpoint, so at most one
+      // operator can answer. This is a FLEET-TOPOLOGY consequence, not a
+      // wallet defect, and it is the fail-closed branch working: one operator
+      // must never be the sole authority for a signed recipient. It lights up
+      // on its own once the registry publishes a second genesis-trusted
+      // operator. Do NOT "fix" it by lowering the threshold — that would hand
+      // a signed recipient to a single operator, which is the exact attack
+      // P5-002 closed.
       const p = message.payload as { name?: unknown; chainIdHex?: unknown };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
@@ -10684,6 +10696,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // disagreement / insufficient responders / any error returns null (the UI
       // shows the bech32m address — never a single-operator-asserted name). A
       // confirmed-miss (quorum agrees "no name") is cached as null.
+      //
+      // CURRENT CONDITION: like forward-resolve above, this always returns
+      // `insufficient` today — NAME_RESOLVE_QUORUM_MIN is 2 against a registry
+      // publishing ONE endpoint — so no `.mono` name is ever displayed and
+      // every address renders as bech32m. A fleet-topology consequence, not a
+      // wallet defect; do NOT lower the threshold to make names appear.
       const p = message.payload as { address?: unknown; chainIdHex?: unknown };
       if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing address or chainIdHex" };
@@ -11645,7 +11663,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       //
       // Graceful degradation: if WS unavailable, the IPC returns
       // `{ ok: true, status: "unavailable" }` and the popup keeps its
-      // existing 8 s blockNumber poll active.
+      // existing HEALTH_TICK_MS blockNumber poll active.
       const client = getWsClient();
       // First call: install the storage-write listener exactly once
       // per SW boot via the `wsNewHeadsListenerInstalled` flag.

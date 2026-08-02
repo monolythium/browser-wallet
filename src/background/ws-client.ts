@@ -262,9 +262,13 @@ export class WsClient {
     };
   }
 
-  /** Tear down the connection and clear all subscriptions. Used by tests
-   *  and by the SW's `chrome.runtime.onSuspend` hook so a fresh SW boot
-   *  starts clean. */
+  /** Tear down the connection and clear all subscriptions.
+   *
+   *  Called by tests only. An earlier draft of this module intended a
+   *  `chrome.runtime.onSuspend` hook to call it so a fresh SW boot started
+   *  clean; that hook was never wired, and no production code calls this.
+   *  Harmless as it stands — SW teardown discards the socket and every field
+   *  reset here anyway — so this is a note, not a known defect. */
   shutdown(): void {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
@@ -308,7 +312,7 @@ export class WsClient {
     // F-2.4/#21: genesis-gate the WS operator the SAME way the HTTP
     // read/poll paths do — never trust a WS push from an operator the HTTP
     // paths would reject. The decision is read from the shared genesis cache
-    // that `verifyOperatorGenesis` populates (the genesis-gated 8 s HTTP poll
+    // that `verifyOperatorGenesis` populates (the genesis-gated HTTP health poll
     // warms it); the fail-open "probe not supported" posture is inherited
     // as-is (PING-S3-01 — do NOT flip here). Pick the FIRST genesis-trusted
     // operator (mirrors the HTTP skip-untrusted iteration); multi-operator WS
