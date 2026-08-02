@@ -1008,14 +1008,23 @@ describe("send idempotency — a repeat of one confirmation never signs twice", 
 
   it("a repeat before completion re-broadcasts the SAME bytes", async () => {
     await sendWith(KEY);
+    // The digest the first send actually bound. READ rather than hard-coded, so
+    // this fixture cannot drift from whatever `submitTrackedTx` computes — and
+    // so this test keeps exercising the REPLAY path rather than silently
+    // becoming an old-record refusal.
+    const boundDigest = (
+      storageLocal["mono.send.binding.v1"] as Record<string, { digest?: string }>
+    )[KEY]!.digest;
     // Put the binding back into the pre-completion state a dead worker would
-    // have left: bytes present, never completed.
+    // have left: bytes present, never completed. A worker that got this far had
+    // already written the digest, so it is part of that state.
     (storageLocal["mono.send.binding.v1"] as Record<string, unknown>)[KEY] = {
       nonceHex: "0x0",
       wireHex: SIGNED_WIRE_HEX,
       txHashHex: SUBMITTED_TX_HASH,
       via: "",
       ts: Date.now(),
+      digest: boundDigest,
     };
     const signsBefore = submitMlDsaCalls.length;
 
