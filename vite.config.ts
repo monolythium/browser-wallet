@@ -119,7 +119,11 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5173,
     strictPort: true,
-    hmr: {
+    // `server.hmr.*` is deprecated in Vite 8 in favour of `server.ws.*`
+    // (`HmrOptions` carries an explicit @deprecated on each field). Same
+    // meaning, same port — this only moves off the deprecated spelling so the
+    // warning stops printing on every vite/vitest invocation.
+    ws: {
       port: 5173,
     },
   },
