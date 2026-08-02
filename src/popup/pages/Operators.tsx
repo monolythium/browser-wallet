@@ -12,6 +12,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import { DevBadge } from "../components/DevBadge";
+import { LoopbackToggle } from "../components/LoopbackToggle";
 import { Modal } from "../components/Modal";
 import { useFeature } from "../hooks/useFeature";
 import {
@@ -354,6 +355,10 @@ export function Operators({
       </div>
 
       <div className="ext-body">
+        {/* Its own flag, not a consequence of developer mode: two deliberate
+            acts is what makes "paste this URL" a multi-step ask rather than a
+            single tap. Placed first so it is read before the address field. */}
+        <LoopbackToggle style={{ marginBottom: 10 }} />
         {!loaded ? (
           <div style={{ padding: 18, color: "var(--fg-300)", fontSize: 12 }}>
             Loading…

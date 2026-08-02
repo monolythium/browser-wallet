@@ -20,6 +20,14 @@ export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
  *  reorder cannot retarget an already-armed confirm. */
 export const WIPE_CONFIRM_WORD = "DELETE";
 
+/** Typed confirmation for turning the loopback opt-in ON.
+ *
+ *  Deliberately NOT {@link WIPE_CONFIRM_WORD}. Nothing is destroyed here — the
+ *  user is authorising the wallet to dial a node on their own machine — and
+ *  reusing "DELETE" would erode it on the three paths where it does signal
+ *  destruction. "CONNECT" names what is actually being authorised. */
+export const LOOPBACK_CONFIRM_WORD = "CONNECT";
+
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
 /** Periodic poll that runs `pollPendingAndNotify` while any tx is

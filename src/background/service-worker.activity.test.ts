@@ -612,6 +612,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
   };
 });
 
+import { STORAGE_KEY_LOOPBACK_ALLOWED } from "../shared/loopback.js";
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import { deriveNativeMultisigAddress } from "../shared/native-multisig.js";
 import {
@@ -1085,6 +1086,29 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     expect(r.ok).toBe(true);
     for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
     expect(storageLocal["nonmono.keep"]).toBe("survives");
+  });
+
+  // The loopback opt-in decides whether the wallet will dial a node on this
+  // machine. A flag that survived a wipe would silently re-arm a custom dial for
+  // the next owner of the profile. It is stored in the LOCAL area under `mono.`
+  // precisely so the default-deny scan covers it with no key list to maintain —
+  // this pins that it actually does, on both paths.
+  it("both wipe paths clear the loopback opt-in", async () => {
+    for (const op of ["keystore-wipe-unauth", "keystore-reset"] as const) {
+      storageLocal[STORAGE_KEY_LOOPBACK_ALLOWED] = true;
+      const payload =
+        op === "keystore-wipe-unauth"
+          ? { confirmToken: "DELETE" }
+          : { password: "pw" };
+      const r = (await dispatchPopup({ kind: "popup", op, payload })) as {
+        ok: boolean;
+      };
+      expect(r.ok, `${op} did not succeed`).toBe(true);
+      expect(
+        storageLocal[STORAGE_KEY_LOOPBACK_ALLOWED],
+        `${op} left the loopback opt-in set`,
+      ).toBeUndefined();
+    }
   });
 
   it("keystore-reset (password-confirmed) wipes the IDENTICAL set", async () => {

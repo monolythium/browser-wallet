@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { WIPE_CONFIRM_WORD } from "../../shared/constants";
+import { LOOPBACK_CONFIRM_WORD, WIPE_CONFIRM_WORD } from "../../shared/constants";
 import {
   RECOVERY_PHRASE_WARNING,
   confirmWordMatches,
@@ -58,6 +58,39 @@ describe("confirmWordMatches — the rule the three existing surfaces use", () =
     // same constant, so the popup and the SW cannot drift apart.
     expect(confirmWordMatches(WIPE_CONFIRM_WORD)).toBe(true);
     expect(WIPE_CONFIRM_WORD).toBe("DELETE");
+  });
+});
+
+// The loopback opt-in needs a typed confirmation too, but DELETE would be the
+// wrong word: nothing is being destroyed, and reusing it erodes the word on the
+// three paths where it does signal destruction. So the comparator takes the
+// expected word, defaulting to the wipe word so no existing caller moves.
+describe("confirmWordMatches — a second word, without moving the first", () => {
+  it("defaults to the wipe word when no expectation is given", () => {
+    expect(confirmWordMatches("DELETE")).toBe(true);
+    expect(confirmWordMatches("CONNECT")).toBe(false);
+  });
+
+  it("matches an explicit word with the same trim + case rule", () => {
+    expect(confirmWordMatches("CONNECT", LOOPBACK_CONFIRM_WORD)).toBe(true);
+    expect(confirmWordMatches("connect", LOOPBACK_CONFIRM_WORD)).toBe(true);
+    expect(confirmWordMatches("  Connect  ", LOOPBACK_CONFIRM_WORD)).toBe(true);
+  });
+
+  it("does not accept the wipe word where CONNECT is expected", () => {
+    expect(confirmWordMatches("DELETE", LOOPBACK_CONFIRM_WORD)).toBe(false);
+  });
+
+  it("rejects partials and empties against the explicit word", () => {
+    expect(confirmWordMatches("CONNEC", LOOPBACK_CONFIRM_WORD)).toBe(false);
+    expect(confirmWordMatches("CONNECTS", LOOPBACK_CONFIRM_WORD)).toBe(false);
+    expect(confirmWordMatches("", LOOPBACK_CONFIRM_WORD)).toBe(false);
+    expect(confirmWordMatches("   ", LOOPBACK_CONFIRM_WORD)).toBe(false);
+  });
+
+  it("the loopback word is not a destructive one", () => {
+    expect(LOOPBACK_CONFIRM_WORD).toBe("CONNECT");
+    expect(LOOPBACK_CONFIRM_WORD).not.toBe(WIPE_CONFIRM_WORD);
   });
 });
 

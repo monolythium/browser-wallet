@@ -37,9 +37,17 @@ export { WIPE_CONFIRM_WORD };
  * So: trimmed, then upper-cased — case-INSENSITIVE and whitespace-tolerant.
  * `delete`, `Delete` and `  DELETE  ` all pass. Exported pure so the rule is
  * testable without a DOM and cannot drift from the three existing surfaces.
+ *
+ * `expected` defaults to the wipe word so every existing caller — and this
+ * component's own two — keeps its exact behaviour. The loopback opt-in passes
+ * LOOPBACK_CONFIRM_WORD instead: nothing is destroyed there, and reusing
+ * "DELETE" would erode it on the paths where it does signal destruction.
  */
-export function confirmWordMatches(input: string): boolean {
-  return input.trim().toUpperCase() === WIPE_CONFIRM_WORD;
+export function confirmWordMatches(
+  input: string,
+  expected: string = WIPE_CONFIRM_WORD,
+): boolean {
+  return input.trim().toUpperCase() === expected;
 }
 
 /**
