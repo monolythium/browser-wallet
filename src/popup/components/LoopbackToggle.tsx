@@ -170,10 +170,16 @@ export function LoopbackToggle({ style }: { style?: CSSProperties }) {
               A node cannot change where your funds go. The recipient and the
               amount are chosen here and signed here.
             </li>
+            {/* "every time it connects" would over-claim: a PASSING genesis
+                verdict is cached for GENESIS_POSITIVE_TTL_MS (networks.ts:521),
+                so the wallet trusts a check up to a minute old rather than
+                re-probing on each connection. A definitive MISMATCH is sticky
+                forever (:520), so the refusal half is fully true and the verdict
+                is unchanged — only the frequency claim is corrected. */}
             <li>
               A node cannot move you to a different network. The wallet checks
-              the network&apos;s identity every time it connects, and refuses if
-              it doesn&apos;t match.
+              the network&apos;s identity when it connects, and refuses if it
+              doesn&apos;t match.
             </li>
           </ul>
 
