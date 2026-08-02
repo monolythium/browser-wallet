@@ -134,7 +134,7 @@ export function LoopbackToggle({ style }: { style?: CSSProperties }) {
             at a server on the internet.
           </p>
 
-          <div style={headingStyle}>What you&apos;re trusting</div>
+          <div style={dividedHeadingStyle}>What you&apos;re trusting</div>
           <p style={paraStyle}>
             Everything the wallet shows you about the network comes from whatever
             you point it at: your balance, your history, and whether a
@@ -146,7 +146,7 @@ export function LoopbackToggle({ style }: { style?: CSSProperties }) {
             believes what it is told.
           </p>
 
-          <div style={headingStyle}>What can go wrong</div>
+          <div style={dividedHeadingStyle}>What can go wrong</div>
           <ul style={listStyle}>
             <li>Your balance and history can be wrong, or quietly out of date.</li>
             <li>A transaction can be accepted by the node and never reach the network.</li>
@@ -160,7 +160,7 @@ export function LoopbackToggle({ style }: { style?: CSSProperties }) {
             </li>
           </ul>
 
-          <div style={headingStyle}>What still can&apos;t happen</div>
+          <div style={dividedHeadingStyle}>What still can&apos;t happen</div>
           <ul style={listStyle}>
             <li>
               Your recovery phrase and your keys never leave this device. A node
@@ -183,7 +183,7 @@ export function LoopbackToggle({ style }: { style?: CSSProperties }) {
             </li>
           </ul>
 
-          <div style={headingStyle}>If you&apos;re not sure</div>
+          <div style={dividedHeadingStyle}>If you&apos;re not sure</div>
           <p style={paraStyle}>
             Leave this off. Nothing in the wallet is limited without it — this
             only matters if you are running a node yourself.
@@ -328,6 +328,18 @@ const headingStyle: CSSProperties = {
   color: "var(--fg-100)",
   marginTop: 12,
   marginBottom: 4,
+};
+
+// The same hairline the Help page draws between its connection-state entries
+// (pages/Help.tsx StateEntry: marginTop 12 / paddingTop 12 / borderTop 1px
+// var(--fg-700)). Drawn ABOVE a section, and applied to every section AFTER the
+// first — that is what keeps the rules strictly BETWEEN sections, with none
+// above the first and none below the last, which is the part that looks broken
+// when it is got wrong.
+const dividedHeadingStyle: CSSProperties = {
+  ...headingStyle,
+  paddingTop: 12,
+  borderTop: "1px solid var(--fg-700)",
 };
 
 const paraStyle: CSSProperties = { margin: "0 0 6px" };
