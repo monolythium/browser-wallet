@@ -9,7 +9,12 @@
 //
 // These are pure helpers so the prod/dev branch is unit-tested and the SW +
 // networks wiring stays a one-liner. The build flag lives in build-mode.ts.
-import { isLoopbackRpc, isLoopbackWs } from "./loopback.js";
+import {
+  isLoopbackRpc,
+  isLoopbackWs,
+  REFUSAL_NOT_LOCAL,
+  REFUSAL_TOGGLE_OFF,
+} from "./loopback.js";
 import { mergeOperatorOverride, type OperatorEntry } from "./operators.js";
 
 /** Origin of a URL string, or null if it doesn't parse. */
@@ -100,6 +105,31 @@ export function overrideDialable(
     if (entry.wsRpc !== undefined && !isLoopbackWs(entry.wsRpc)) return false;
     return true;
   });
+}
+
+/**
+ * Why a hardened build refuses an override, or null when it does not.
+ *
+ * TWO conditions, and they need different advice. The choice is made by the
+ * HOST, not by the toggle: if the override would be dialable with the opt-in on,
+ * the opt-in is genuinely the blocker and naming it helps. If it would still be
+ * refused, the toggle is irrelevant and telling the user to enable it would send
+ * them to a switch that changes nothing — which is what a single shared string
+ * did before.
+ *
+ * That also gives `127.0.0.2` the right answer: genuinely loopback, still
+ * refused (the allowlist carries only `127.0.0.1`), and what that user needs is
+ * the list of accepted forms — not to be told their address "isn't local".
+ */
+export function overrideRefusalReason(
+  defaults: ReadonlyArray<OperatorEntry>,
+  override: OperatorEntry[],
+  loopbackAllowed: boolean,
+): string | null {
+  if (overrideDialable(defaults, override, loopbackAllowed)) return null;
+  return overrideDialable(defaults, override, true)
+    ? REFUSAL_TOGGLE_OFF
+    : REFUSAL_NOT_LOCAL;
 }
 
 /**

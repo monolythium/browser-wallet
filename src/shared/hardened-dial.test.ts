@@ -4,8 +4,15 @@ import {
   hardenedOperators,
   hardenedChains,
   overrideDialable,
+  overrideRefusalReason,
   overrideWithinFleet,
 } from "./hardened-dial.js";
+import {
+  APPROVED_LOOPBACK_HOSTS,
+  APPROVED_LOOPBACK_SCHEMES,
+  REFUSAL_NOT_LOCAL,
+  REFUSAL_TOGGLE_OFF,
+} from "./loopback.js";
 import { LOOPBACK_SOURCES } from "../buildtime/csp.js";
 import { validateOperatorList } from "./operators.js";
 import type { OperatorEntry } from "./operators.js";
@@ -257,6 +264,71 @@ describe("all gates agree — validator → dialable → dial-set → allowlist"
     const dialled = hardenedOperators(DEFAULTS, validated!, true, true);
     for (const op of dialled) {
       expect(op.rpc).not.toBe("http://198.51.100.7:8545");
+    }
+  });
+});
+
+// Two conditions were sharing one refusal string, and it was wrong for the
+// second: telling a user to turn on a toggle that would not help them, because
+// their host stays refused either way.
+describe("overrideRefusalReason — which refusal, and why", () => {
+  const remote = (rpc: string): OperatorEntry[] => [
+    { name: "n", region: "", rpc },
+  ];
+
+  it("returns null when the override is dialable", () => {
+    expect(overrideRefusalReason(DEFAULTS, LOCAL, true)).toBeNull();
+    const reordered: OperatorEntry[] = [DEFAULTS[1]!, DEFAULTS[0]!];
+    expect(overrideRefusalReason(DEFAULTS, reordered, false)).toBeNull();
+  });
+
+  it("an ALLOWED form with the toggle off blames the toggle", () => {
+    const reason = overrideRefusalReason(DEFAULTS, LOCAL, false);
+    expect(reason).toBe(REFUSAL_TOGGLE_OFF);
+    expect(reason).toMatch(/Allow a local node/);
+  });
+
+  // The host decides, not the toggle: each of these stays refused with the
+  // opt-in ON, so pointing at the toggle would be advice that does not help.
+  it.each([
+    ["a typo'd address", "http://121.0.0.1:03"],
+    ["another 127/8 address the allowlist omits", "http://127.0.0.2:8545"],
+    ["the unspecified address", "http://0.0.0.0:8545"],
+    ["a link-local address", "http://169.254.1.1:8545"],
+    ["a remote hostname", "http://rpc.example.com:8545"],
+    ["https on loopback", "https://127.0.0.1:8545"],
+    ["a host merely containing localhost", "http://localhost.evil.com:8545"],
+  ])("%s gets the not-local message, toggle ON", (_label, rpc) => {
+    expect(overrideRefusalReason(DEFAULTS, remote(rpc), true)).toBe(
+      REFUSAL_NOT_LOCAL,
+    );
+  });
+
+  it("…and the SAME message with the toggle off — the toggle is not the reason", () => {
+    for (const rpc of ["http://121.0.0.1:03", "http://127.0.0.2:8545"]) {
+      expect(overrideRefusalReason(DEFAULTS, remote(rpc), false)).toBe(
+        REFUSAL_NOT_LOCAL,
+      );
+    }
+  });
+
+  // 127.0.0.2 IS loopback. The message must list the allowed forms, which is
+  // what that user needs — and must NOT tell them it "isn't local".
+  it("never tells a genuinely-loopback host that it is not local", () => {
+    const reason = overrideRefusalReason(
+      DEFAULTS,
+      remote("http://127.0.0.2:8545"),
+      true,
+    )!;
+    for (const host of APPROVED_LOOPBACK_HOSTS) expect(reason).toContain(host);
+  });
+
+  it("derives the forms and schemes from the predicate's own source", () => {
+    for (const host of APPROVED_LOOPBACK_HOSTS) {
+      expect(REFUSAL_NOT_LOCAL).toContain(host);
+    }
+    for (const scheme of APPROVED_LOOPBACK_SCHEMES) {
+      expect(REFUSAL_NOT_LOCAL).toContain(`${scheme}//`);
     }
   });
 });

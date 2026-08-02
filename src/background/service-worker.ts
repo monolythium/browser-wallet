@@ -239,7 +239,10 @@ import {
   rehydrateGenesisCache,
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
-import { hardenedChains, overrideDialable } from "../shared/hardened-dial.js";
+import {
+  hardenedChains,
+  overrideRefusalReason,
+} from "../shared/hardened-dial.js";
 import { STORAGE_KEY_LOOPBACK_ALLOWED } from "../shared/loopback.js";
 import { migrateRegenesisSensitiveState } from "./regenesis-migration.js";
 import {
@@ -7199,15 +7202,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // up-front with a clear reason instead of persisting an override that
       // hardened-dial would silently narrow back to the defaults (the "Save
       // reverts to defaults" report). Dev builds skip this and honor any host.
-      if (
-        isHardenedBuild() &&
-        !overrideDialable(getDefaultOperators(), validated, isLoopbackAllowed())
-      ) {
-        return {
-          ok: false,
-          reason:
-            'This wallet only dials its built-in operators. To use a node on this computer, turn on "Allow a local node" above.',
-        };
+      //
+      // TWO refusals, chosen by the HOST rather than the toggle: a host that
+      // stays refused with the opt-in on must not be told to turn the opt-in on.
+      const refusal = isHardenedBuild()
+        ? overrideRefusalReason(
+            getDefaultOperators(),
+            validated,
+            isLoopbackAllowed(),
+          )
+        : null;
+      if (refusal !== null) {
+        return { ok: false, reason: refusal };
       }
       await setOperatorOverride(validated);
       cachedOperator = null;

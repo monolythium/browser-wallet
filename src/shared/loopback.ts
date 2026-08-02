@@ -33,13 +33,45 @@
  */
 export const STORAGE_KEY_LOOPBACK_ALLOWED = "mono.loopback-rpc.enabled";
 
-/** The exact hosts the allowlist carries. `URL.hostname` returns IPv6 literals
- *  WITH their brackets, which is the form used here and in the CSP source. */
-const APPROVED_HOSTS: ReadonlySet<string> = new Set([
-  "localhost",
+/** The exact hosts the allowlist carries, in the order the refusal message
+ *  lists them. `URL.hostname` returns IPv6 literals WITH their brackets, which
+ *  is the form used here and in the CSP source. Membership is what decides
+ *  acceptance, so the order is presentation only — but keeping ONE list means a
+ *  change to the accepted set moves the message with it. */
+export const APPROVED_LOOPBACK_HOSTS = [
   "127.0.0.1",
   "[::1]",
-]);
+  "localhost",
+] as const;
+
+/** The schemes the two predicates below accept. */
+export const APPROVED_LOOPBACK_SCHEMES = ["http:", "ws:"] as const;
+
+const APPROVED_HOSTS: ReadonlySet<string> = new Set(APPROVED_LOOPBACK_HOSTS);
+
+/** Refusal when the host IS an allowed form but the opt-in is off. The toggle
+ *  really is the blocker here, so naming it is the right advice. */
+export const REFUSAL_TOGGLE_OFF =
+  'This wallet only dials its built-in operators. To use a node on this computer, turn on "Allow a local node" above.';
+
+/**
+ * Refusal when the HOST itself is not an allowed form — shown whether the
+ * opt-in is on or off, because turning it on would not help.
+ *
+ * Note what this deliberately does NOT say: it never tells the user their host
+ * "isn't local". `127.0.0.2` is genuinely loopback and is still refused, because
+ * the allowlist carries only `127.0.0.1` — CSP source expressions cannot express
+ * a CIDR block. Listing the accepted forms is what that user actually needs.
+ *
+ * Built from the lists above rather than typed, so a change to the accepted set
+ * cannot leave this message describing the old one. (The `:8545` in the example
+ * is illustrative — a conventional RPC port, not a value the predicate reads.)
+ */
+export const REFUSAL_NOT_LOCAL =
+  `Only a node on this computer can be added — not a server on the internet. ` +
+  `Use ${APPROVED_LOOPBACK_HOSTS.slice(0, -1).join(", ")} or ${APPROVED_LOOPBACK_HOSTS.at(-1)} ` +
+  `with ${APPROVED_LOOPBACK_SCHEMES.map((s) => `${s}//`).join(" or ")} — ` +
+  `for example ${APPROVED_LOOPBACK_SCHEMES[0]}//${APPROVED_LOOPBACK_HOSTS[0]}:8545.`;
 
 /**
  * True when `url` is one of the approved loopback hosts over the given scheme.
