@@ -9,6 +9,7 @@
 //
 // These are pure helpers so the prod/dev branch is unit-tested and the SW +
 // networks wiring stays a one-liner. The build flag lives in build-mode.ts.
+import { isLoopbackRpc, isLoopbackWs } from "./loopback.js";
 import { mergeOperatorOverride, type OperatorEntry } from "./operators.js";
 
 /** Origin of a URL string, or null if it doesn't parse. */
@@ -71,6 +72,37 @@ export function overrideWithinFleet(
 }
 
 /**
+ * Whether a stored override may be DIALLED by a hardened build.
+ *
+ * Every entry must be either within the built-in fleet (a reorder / pin /
+ * subset — already allowlisted) or, when the user has turned the loopback
+ * opt-in on, an approved loopback address on this machine.
+ *
+ * `loopbackAllowed` reflects the user's opt-in, and it is NOT a security
+ * boundary: the loopback `connect-src` entries ship to every user regardless.
+ * What it decides is whether the WALLET will dial such a host — which is what
+ * makes pointing the wallet somewhere new a deliberate act rather than one
+ * pasted URL. Remote hosts are refused whatever it says: the P6-001 re-open
+ * was for loopback and remote hosts were declined.
+ *
+ * An explicit `wsRpc` is checked too, or a loopback `rpc` would be a hole
+ * through which a remote subscription endpoint could be smuggled.
+ */
+export function overrideDialable(
+  defaults: ReadonlyArray<OperatorEntry>,
+  override: OperatorEntry[],
+  loopbackAllowed: boolean,
+): boolean {
+  return override.every((entry) => {
+    if (overrideWithinFleet(defaults, [entry])) return true;
+    if (!loopbackAllowed) return false;
+    if (!isLoopbackRpc(entry.rpc)) return false;
+    if (entry.wsRpc !== undefined && !isLoopbackWs(entry.wsRpc)) return false;
+    return true;
+  });
+}
+
+/**
  * The operators the SW will dial.
  *
  * Hardened → the stored override IS honored WHEN it stays within the built-in
@@ -90,12 +122,16 @@ export function hardenedOperators(
   defaults: ReadonlyArray<OperatorEntry>,
   override: OperatorEntry[] | null,
   hardened: boolean,
+  /** The user's loopback opt-in. Defaults to FALSE so any caller that has not
+   *  been taught about it fails closed — a stored loopback override is not
+   *  dialled unless the opt-in is explicitly threaded through. */
+  loopbackAllowed = false,
 ): OperatorEntry[] {
   if (!hardened) return mergeOperatorOverride(defaults, override);
   if (override === null || override.length === 0) {
     return defaults.map((d) => ({ ...d }));
   }
-  return overrideWithinFleet(defaults, override)
+  return overrideDialable(defaults, override, loopbackAllowed)
     ? override.map((o) => ({ ...o }))
     : defaults.map((d) => ({ ...d }));
 }

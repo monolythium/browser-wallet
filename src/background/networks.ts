@@ -16,6 +16,7 @@ import {
   GENESIS_POSITIVE_TTL_MS,
 } from "../shared/constants.js";
 import { hardenedOperators } from "../shared/hardened-dial.js";
+import { STORAGE_KEY_LOOPBACK_ALLOWED } from "../shared/loopback.js";
 import {
   TESTNET_BLOCK0_HASH,
   TESTNET_GENESIS_HASH,
@@ -101,6 +102,21 @@ let activeOperators: OperatorEntry[] = TESTNET_OPERATOR_RPCS_DEFAULTS.map(
   (d) => ({ ...d }),
 );
 
+/** The user's loopback opt-in, mirrored in memory from
+ *  `STORAGE_KEY_LOOPBACK_ALLOWED`. Refreshed by `loadOperatorOverride()` — which
+ *  runs at boot and on every storage echo — so it cannot go stale relative to
+ *  the override it gates. Defaults to FALSE: before the first read the wallet
+ *  dials only the built-in fleet. */
+let loopbackAllowed = false;
+
+/** Whether the user has opted in to dialling a node on this machine. Read by the
+ *  operators IPC so its refusal and the dial-set agree on one value. NOT a
+ *  security boundary — the loopback `connect-src` entries ship to every user
+ *  regardless; this only decides whether the wallet will dial such a host. */
+export function isLoopbackAllowed(): boolean {
+  return loopbackAllowed;
+}
+
 /** Snapshot of the current effective operator list (defaults or override).
  *  RPC dispatch (`testnetJsonRpc`, `probeFirstAliveOperator`) calls
  *  this on every iteration so a hot-swapped override takes effect on
@@ -113,18 +129,28 @@ export function getActiveOperators(): ReadonlyArray<OperatorEntry> {
  *  Call at SW boot and from the chrome.storage.onChanged listener. */
 export async function loadOperatorOverride(): Promise<void> {
   return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEY_OPERATOR_OVERRIDE], (res) => {
-      const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
-      const validated = validateOperatorList(raw);
-      // Hardened builds ignore the stored override (it would brick RPC under
-      // the strict connect-src) and always dial the allowlisted defaults.
-      activeOperators = hardenedOperators(
-        TESTNET_OPERATOR_RPCS_DEFAULTS,
-        validated,
-        isHardenedBuild(),
-      );
-      resolve();
-    });
+    chrome.storage.local.get(
+      [STORAGE_KEY_OPERATOR_OVERRIDE, STORAGE_KEY_LOOPBACK_ALLOWED],
+      (res) => {
+        const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
+        const validated = validateOperatorList(raw);
+        // Read the opt-in in the SAME get as the override. Reading it later, or
+        // from a cached copy, would open a window where the override is applied
+        // against a stale flag — and this function runs at every boot and on
+        // every storage echo, so that window would be the common path.
+        loopbackAllowed = res?.[STORAGE_KEY_LOOPBACK_ALLOWED] === true;
+        // Hardened builds ignore an override they cannot dial (it would brick
+        // RPC under the strict connect-src) and fall back to the allowlisted
+        // defaults. A loopback override is dialable only with the opt-in on.
+        activeOperators = hardenedOperators(
+          TESTNET_OPERATOR_RPCS_DEFAULTS,
+          validated,
+          isHardenedBuild(),
+          loopbackAllowed,
+        );
+        resolve();
+      },
+    );
   });
 }
 
@@ -136,13 +162,19 @@ export async function loadOperatorOverride(): Promise<void> {
 export async function setOperatorOverride(
   override: OperatorEntry[] | null,
 ): Promise<void> {
-  // Hardened builds never apply an override in memory (it would brick RPC under
-  // the strict connect-src). The override is still persisted so a later dev
-  // build honors it; in a hardened build the in-memory set stays the defaults.
+  // Hardened builds never apply an override they cannot dial (it would brick RPC
+  // under the strict connect-src). The override is still persisted so a later dev
+  // build — or the same build once the loopback opt-in is on — honors it; in a
+  // hardened build the in-memory set otherwise stays the defaults.
+  //
+  // Uses the in-memory mirror rather than re-reading storage: this runs
+  // synchronously before the write below, and the storage echo re-enters
+  // loadOperatorOverride, which refreshes both together.
   activeOperators = hardenedOperators(
     TESTNET_OPERATOR_RPCS_DEFAULTS,
     override,
     isHardenedBuild(),
+    loopbackAllowed,
   );
   return new Promise((resolve) => {
     if (override === null) {

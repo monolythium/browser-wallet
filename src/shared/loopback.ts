@@ -20,6 +20,19 @@
 // This is not a security boundary. The allowlist ships to every user regardless
 // of the opt-in; this decides only whether the WALLET will dial a host.
 
+/**
+ * Where the opt-in is persisted.
+ *
+ * `chrome.storage.LOCAL`, under the `mono.` prefix, DELIBERATELY: the wallet
+ * wipe is a default-deny prefix scan over that area (`wipeAllLocalWalletState`
+ * — "any new `mono.*` family is wiped automatically, no key list to maintain"),
+ * so a reset clears this by construction. The session area is cleared by an
+ * ENUMERATED list, in two places, and that list was found incomplete as
+ * recently as `004b654`; a flag that outlived a wipe would silently re-arm a
+ * custom dial for the next owner of the profile.
+ */
+export const STORAGE_KEY_LOOPBACK_ALLOWED = "mono.loopback-rpc.enabled";
+
 /** The exact hosts the allowlist carries. `URL.hostname` returns IPv6 literals
  *  WITH their brackets, which is the form used here and in the CSP source. */
 const APPROVED_HOSTS: ReadonlySet<string> = new Set([

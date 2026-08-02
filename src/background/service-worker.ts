@@ -226,6 +226,7 @@ import {
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
+  isLoopbackAllowed,
   setOperatorOverride,
   readOperatorOverride,
   getDefaultOperators,
@@ -238,7 +239,8 @@ import {
   rehydrateGenesisCache,
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
-import { hardenedChains, overrideWithinFleet } from "../shared/hardened-dial.js";
+import { hardenedChains, overrideDialable } from "../shared/hardened-dial.js";
+import { STORAGE_KEY_LOOPBACK_ALLOWED } from "../shared/loopback.js";
 import { migrateRegenesisSensitiveState } from "./regenesis-migration.js";
 import {
   clampToSaneBound,
@@ -1120,7 +1122,16 @@ function prefillUnknownWsEndpointsDown(): void {
 // up the new list immediately rather than waiting for the 10s TTL.
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
-  if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
+  // The loopback opt-in gates whether a stored override is dialable, so a change
+  // to EITHER must re-run the dial-set. Without this, turning the opt-in off
+  // would leave a loopback operator dialled until the next SW boot — the same
+  // shape of gap as an override applied against a stale flag.
+  if (
+    !(STORAGE_KEY_OPERATOR_OVERRIDE in changes) &&
+    !(STORAGE_KEY_LOOPBACK_ALLOWED in changes)
+  ) {
+    return;
+  }
   void loadOperatorOverride().then(prefillUnknownWsEndpointsDown);
   cachedOperator = null;
   // Drop the persisted liveness hint too — a since-removed operator must not be
@@ -7188,11 +7199,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // up-front with a clear reason instead of persisting an override that
       // hardened-dial would silently narrow back to the defaults (the "Save
       // reverts to defaults" report). Dev builds skip this and honor any host.
-      if (isHardenedBuild() && !overrideWithinFleet(getDefaultOperators(), validated)) {
+      if (
+        isHardenedBuild() &&
+        !overrideDialable(getDefaultOperators(), validated, isLoopbackAllowed())
+      ) {
         return {
           ok: false,
           reason:
-            "This build only dials the built-in operators. Reorder or pin the listed operators — adding a custom RPC host needs a developer build.",
+            'This wallet only dials its built-in operators. To use a node on this computer, turn on "Allow a local node" above.',
         };
       }
       await setOperatorOverride(validated);
