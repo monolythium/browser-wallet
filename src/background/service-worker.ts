@@ -92,6 +92,7 @@ import {
   signWalletAuthDigestV4,
   // Multi-vault surface.
   hasContainerV4,
+  storedContainerAddressesV4,
   storedContainerNeedsRestoreV4,
   unlockContainerV4,
   selectActiveVaultV4,
@@ -6755,6 +6756,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           custody: "sw" as const,
           algo: "mldsa" as const,
           legacyRestoreRequired: true as const,
+          // The addresses this container recorded. `address` above stays null —
+          // the locked-screen chip must never hint the active address before an
+          // unlock. This is the deliberate exception: THIS container can never
+          // be unlocked, so there is no "before unlock" to protect, and a
+          // restore may land on a different address (pre-BIP-39-change vaults),
+          // which the user can only notice if they can see what was recorded.
+          // Read-only, never decrypts.
+          legacyAddresses: await storedContainerAddressesV4(),
         };
       }
       // v4 (ML-DSA-65) is the only vault format. A populated multi-vault

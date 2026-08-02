@@ -63,6 +63,10 @@ export interface KeystoreStatus {
    *  cannot be opened — the locked screen shows "restore from your recovery
    *  phrase" instead of a password prompt. Absent/false in the normal case. */
   legacyRestoreRequired?: boolean;
+  /** Addresses recorded in that unopenable container, so the restore screen can
+   *  show what the user is about to leave behind. Only sent alongside
+   *  `legacyRestoreRequired`; `address` stays null in that state. */
+  legacyAddresses?: string[];
 }
 
 export interface SendTxView {

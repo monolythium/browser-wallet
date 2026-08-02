@@ -1612,6 +1612,7 @@ export default function App() {
         <UnlockScreen
           address={keystore?.address ?? null}
           legacyRestoreRequired={keystore?.legacyRestoreRequired ?? false}
+          legacyAddresses={keystore?.legacyAddresses ?? []}
           onUnlocked={() => {
             // Route to Home synchronously on a successful unlock instead of
             // depending SOLELY on the cross-context walletLocked=false storage

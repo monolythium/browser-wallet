@@ -789,6 +789,39 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
   return typeof ver === "number" && ver < SCHEMA_VERSION;
 }
 
+/** Read-only: the addresses recorded in a stored container, in on-disk order.
+ *
+ *  Pairs with {@link storedContainerNeedsRestoreV4}. That container cannot be
+ *  opened, so `loadVaultsContainerV4` returns null for it and `listVaultsV4`
+ *  reports nothing — yet the unlock screen still needs the addresses, because
+ *  restoring from a recovery phrase does NOT always reproduce them: a vault
+ *  written before the BIP-39 derivation change derives a DIFFERENT address, and
+ *  the version field cannot tell the two populations apart. Showing what was
+ *  recorded is what lets an affected user notice.
+ *
+ *  NEVER DECRYPTS. `addr` is stored in cleartext beside the sealed blob
+ *  (see `VaultRecordV4.addr` — "cached for locked-state display"), so this
+ *  needs no key, no password and no unlock. Anything malformed is skipped
+ *  rather than thrown on: a partially-corrupt container must still render the
+ *  restore screen. */
+export async function storedContainerAddressesV4(): Promise<string[]> {
+  const raw = await new Promise<unknown>((resolve) => {
+    chrome.storage.local.get([VAULTS_CONTAINER_KEY_V4], (res) => {
+      resolve(res?.[VAULTS_CONTAINER_KEY_V4] ?? null);
+    });
+  });
+  if (!raw || typeof raw !== "object") return [];
+  const vaults = (raw as { vaults?: unknown }).vaults;
+  if (!Array.isArray(vaults)) return [];
+  const out: string[] = [];
+  for (const v of vaults) {
+    if (!v || typeof v !== "object") continue;
+    const addr = (v as { addr?: unknown }).addr;
+    if (typeof addr === "string" && addr.length > 0) out.push(addr);
+  }
+  return out;
+}
+
 /**
  * The container-write invariant (H1).
  *

@@ -40,6 +40,9 @@ interface UnlockScreenProps {
    *  cannot be opened — show a "restore from your recovery phrase" message +
    *  the restore entry point instead of the password field. */
   legacyRestoreRequired?: boolean;
+  /** Addresses recorded in the unopenable container, shown so the user can note
+   *  them before restoring. Only meaningful with `legacyRestoreRequired`. */
+  legacyAddresses?: string[];
 }
 
 function shortAddress(addr: string | null): string {
@@ -55,6 +58,7 @@ export function UnlockScreen({
   onForgotImport,
   onForgotReset,
   legacyRestoreRequired = false,
+  legacyAddresses,
 }: UnlockScreenProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -219,8 +223,40 @@ export function UnlockScreen({
           >
             This wallet predates an encryption upgrade and can no longer be
             unlocked with your password. Restore it from your 24-word recovery
-            phrase to continue — your address is unchanged.
+            phrase to continue.
           </div>
+          {legacyAddresses && legacyAddresses.length > 0 && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <div>
+                {legacyAddresses.length === 1
+                  ? "This wallet's recorded address:"
+                  : "Recorded addresses:"}
+              </div>
+              {legacyAddresses.map((a) => (
+                <div
+                  key={a}
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 11,
+                    color: "var(--fg-200)",
+                    wordBreak: "break-all",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  {bech32mDisplay(a)}
+                </div>
+              ))}
+            </div>
+          )}
           {showForgotLink && (
             <button
               type="button"
