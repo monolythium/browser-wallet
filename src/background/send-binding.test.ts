@@ -609,6 +609,50 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     expect(submit).not.toHaveBeenCalled();
   });
 
+  // The MESSAGE, not just the type. The two tests above pin that the refusal
+  // happens; neither pins what the user is told, so the copy could drift or be
+  // "improved" into something the code cannot know, and every test would stay
+  // green.
+  //
+  // This matters more than a normal copy pin because the string is UNREACHABLE
+  // in the popup today: `nextSendKey` carries a key only on an exact `params`
+  // match, and every surface holds its key in component-local state, so the
+  // navigation needed to change `from` or `chainIdHex` unmounts the surface and
+  // mints a fresh key. The refusal is a backstop against a caller-side
+  // regression — which is exactly why it needs a test rather than a hand check:
+  // no hand test can reach it while the guard is correct.
+  it("tells the user what changed and where to look, without claiming the earlier attempt was not sent", async () => {
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+
+    let caught: unknown;
+    try {
+      await withSendBinding({
+        key: KEY,
+        expectedDigest: DIGEST_B,
+        now: () => T0,
+        rebroadcast: vi.fn(),
+        bytesMayBeLive,
+        submit: submitter(),
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeInstanceOf(SendBindingMismatchError);
+    const err = caught as Error;
+    expect(err.message).toBe(
+      "This transaction changed since the last attempt. Start a new send — check Activity first in case the earlier one went through.",
+    );
+
+    // THE INVARIANT BEHIND THE STRING. The binding is kept precisely when the
+    // failure was transient, i.e. when the bytes may be live — so the copy can
+    // never assert the earlier attempt did NOT happen. The plan's original
+    // wording ("the earlier one was not sent") was rejected for exactly this,
+    // and this guards the regression rather than the transcription.
+    expect(err.message).not.toMatch(/not sent|never sent|didn't send|did not send/i);
+    expect(err.message).toMatch(/Activity/);
+  });
+
   // ── The replay branch's failure handling — PINNED DELIBERATELY ───────────
   //
   // A failed replay leaves the record untouched: no completion write, no
