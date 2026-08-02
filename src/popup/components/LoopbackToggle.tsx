@@ -297,10 +297,27 @@ const knobStyle: CSSProperties = {
   transition: "transform 160ms var(--e-out, ease)",
 };
 
+// The warning is longer than the popup is tall (380x620 fixed — ext.css:52-53),
+// and a Modal card has no height cap of its own, so without this the content ran
+// past the viewport and `Continue` could not be reached at all.
+//
+// Same shape as every other scrollable region inside a Modal in this codebase —
+// a maxHeight + overflowY:"auto" on the content, with the action row left OUTSIDE
+// it as a sibling (ContactsPickerModal.tsx:126-133, VaultPicker.tsx:576-577,
+// RewardCard.tsx:331-332). Actions therefore stay PINNED: the whole point of this
+// screen is that the user reads and then acts, so a Continue that scrolls out of
+// view is the same defect being fixed.
+//
+// 400 leaves room for the card's own chrome inside 620: overlay padding (2x16),
+// card padding (14+12), the title row, the gaps and the ~40px action row. It is
+// a no-op on the short confirmation modal, which shares this style and never
+// reaches the cap.
 const bodyStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   color: "var(--fg-200)",
+  maxHeight: 400,
+  overflowY: "auto",
 };
 
 // Section headings render at the weight of other section headings on the page,
