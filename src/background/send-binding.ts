@@ -80,6 +80,34 @@ export interface SendBinding {
   /** The chain the send was made on — the second half of the account lookup.
    *  Same absence semantics as `from`. */
   chainIdHex?: string;
+  /** Digest of the TRANSACTION these bytes were signed for — see
+   *  `src/shared/send-intent-digest.ts` for what it covers and why the fee is
+   *  deliberately excluded. Compared before any replay, so a second call under a
+   *  surviving key cannot re-broadcast bytes paying someone else.
+   *
+   *  OPTIONAL IN THE TYPE, MANDATORY IN EFFECT. Records written before this
+   *  field existed have none, and the reader treats absence as UNPROVABLE and
+   *  refuses — the opposite of the other optional fields above, which stay
+   *  unchecked so old records keep replaying. The difference is deliberate:
+   *  `from`/`chainIdHex` only scope a lookup, while this one is what decides
+   *  whether bytes go on the wire. */
+  digest?: string;
+}
+
+/**
+ * A call arrived under a live binding for a DIFFERENT transaction.
+ *
+ * IT NEVER FALLS THROUGH TO SIGNING UNDER THE SAME KEY. If the stored bytes were
+ * in fact live — admitted somewhere and unreported — re-using the key with new
+ * content is precisely the double-send this whole module exists to prevent. A
+ * mismatch means stop, or start a new binding under a new key. Never "reuse the
+ * key with new bytes."
+ */
+export class SendBindingMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SendBindingMismatchError";
+  }
 }
 
 export type SendBindingMap = Record<string, SendBinding>;
@@ -242,6 +270,9 @@ export interface SendBindingFields {
   txHashHex: string;
   from?: string;
   chainIdHex?: string;
+  /** The intent digest these bytes were signed for. Supplied by the caller at
+   *  bind time, when the transaction is still in scope. */
+  digest?: string;
 }
 
 /** What every keyed submit resolves to, whether it signed, replayed, or was
@@ -276,6 +307,16 @@ export interface SendBindingResult {
  */
 export async function withSendBinding(args: {
   key: string;
+  /** Digest of the transaction the caller is about to submit, from
+   *  `sendIntentDigest`. Compared against the stored one before anything is
+   *  re-broadcast.
+   *
+   *  REQUIRED, on the same reasoning as `bytesMayBeLive` below: neither default
+   *  is safe. Defaulting to "matches" reinstates the row-3 replay; defaulting to
+   *  "differs" would refuse every legitimate retry and kill idempotency. A
+   *  caller must state what it is submitting. Making it required also means the
+   *  compiler, not a reviewer, catches a call site that forgets. */
+  expectedDigest: string;
   now: () => number;
   rebroadcast: (
     wireHex: string,
@@ -294,10 +335,30 @@ export async function withSendBinding(args: {
     bind: (fields: SendBindingFields) => Promise<void>,
   ) => Promise<SendBindingResult>;
 }): Promise<SendBindingResult> {
-  const { key, now, rebroadcast, bytesMayBeLive, submit } = args;
+  const { key, expectedDigest, now, rebroadcast, bytesMayBeLive, submit } = args;
 
   const bound = await readSendBinding(key, now());
   if (bound !== null) {
+    // §0 / row 3 — CHECKED FIRST, before `isCompleted` and before anything can
+    // reach `rebroadcast`. The hand test replayed bytes paying A while the
+    // screen showed B; nothing below this point may run for a transaction the
+    // stored bytes do not represent.
+    //
+    // An ABSENT digest is a record written before this field existed. It is
+    // refused rather than trusted: the store cannot prove those bytes match, and
+    // "cannot prove" must not read as "matches". The window is bounded by the
+    // TTL, so this self-clears within SEND_BINDING_TTL_MS of an upgrade.
+    //
+    // The binding is DROPPED on the way out. Leaving it would mean the next
+    // attempt hits the same refusal for the rest of the TTL; dropping it lets a
+    // fresh confirmation bind normally. What is NOT done here is falling through
+    // to `submit` under this key — see SendBindingMismatchError.
+    if (bound.digest === undefined || bound.digest !== expectedDigest) {
+      await deleteSendBinding(key);
+      throw new SendBindingMismatchError(
+        "this confirmation was signed for a different transaction",
+      );
+    }
     if (isCompleted(bound)) {
       // Already accepted once. Nothing left to broadcast; answer with the hash
       // the first attempt produced.

@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SEND_BINDING_TTL_MS,
   STORAGE_KEY_SEND_BINDINGS,
+  SendBindingMismatchError,
   completeSendBinding,
   deleteSendBinding,
   isCompleted,
@@ -339,12 +340,19 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
    *  distinct, so "which transaction went out" is decidable from the wire. */
   const WIRE_PAYING_B = "0xfeedface";
 
+  /** Intent digests for the two transactions. Opaque strings here on purpose —
+   *  `withSendBinding` only ever compares them, so the suite stays free of the
+   *  digest's construction and of anything it might one day import. */
+  const DIGEST_A = "v1|0xsender|0xrecipient-a|0x1||0x10f2c";
+  const DIGEST_B = "v1|0xsender|0xrecipient-b|0x1||0x10f2c";
+
   const fields = {
     nonceHex: "0x7",
     wireHex: WIRE_PAYING_A,
     txHashHex: "0xabc",
     from: "0xsender",
     chainIdHex: "0x10F2C",
+    digest: DIGEST_A,
   };
 
   /** A `submit` that binds then reports success, and counts its own calls. */
@@ -374,7 +382,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
   it("signs and binds when there is nothing bound yet", async () => {
     const submit = submitter();
     const rebroadcast = vi.fn();
-    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
+    const r = await withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast, bytesMayBeLive, submit });
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(rebroadcast).not.toHaveBeenCalled();
@@ -394,7 +402,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
       via: "op-replay",
     }));
 
-    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
+    const r = await withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast, bytesMayBeLive, submit });
 
     expect(submit).not.toHaveBeenCalled();
     expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");
@@ -407,7 +415,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     const submit = submitter();
     const rebroadcast = vi.fn();
 
-    const r = await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
+    const r = await withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast, bytesMayBeLive, submit });
 
     expect(submit).not.toHaveBeenCalled();
     expect(rebroadcast).not.toHaveBeenCalled();
@@ -421,6 +429,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
 
     await withSendBinding({
       key: KEY,
+      expectedDigest: DIGEST_A,
       now: () => T0 + SEND_BINDING_TTL_MS + 1,
       rebroadcast,
       bytesMayBeLive,
@@ -439,7 +448,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     });
 
     await expect(
-      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
+      withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
     ).rejects.toThrow(boom);
 
     // The bytes are worthless and the nonce unspent — a later attempt must sign
@@ -465,7 +474,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     });
 
     await expect(
-      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
+      withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
     ).rejects.toThrow(boom);
 
     const kept = await readSendBinding(KEY, T0);
@@ -482,7 +491,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
       throw boom;
     });
     await expect(
-      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit: failing }),
+      withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit: failing }),
     ).rejects.toThrow(boom);
 
     const retry = submitter("0xsecond-signature-that-must-not-happen");
@@ -492,6 +501,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     }));
     const r = await withSendBinding({
       key: KEY,
+      expectedDigest: DIGEST_A,
       now: () => T0,
       rebroadcast,
       bytesMayBeLive,
@@ -515,7 +525,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     });
 
     await expect(
-      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
+      withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
     ).rejects.toThrow(declined);
 
     expect(await readSendBinding(KEY, T0)).toBeNull();
@@ -531,13 +541,29 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     });
 
     await expect(
-      withSendBinding({ key: KEY, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
+      withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit }),
     ).rejects.toThrow(mixed);
 
     expect(await readSendBinding(KEY, T0)).not.toBeNull();
   });
 
-  it("replays a record written before the account fields existed", async () => {
+  // DELIBERATELY INVERTED by §0. This test previously asserted that a record
+  // written before the account fields existed still REPLAYS — the reasoning
+  // being that invalidating an old record makes the caller sign afresh, which is
+  // the double-send this store exists to prevent.
+  //
+  // The digest changes that calculus for this one field. An old record carries
+  // no digest, so the store cannot prove its bytes pay whoever the caller is
+  // asking to pay. "Cannot prove" must not read as "matches" on the path that
+  // decides whether signed bytes go on the wire — that is exactly how the §0
+  // hand test replayed a transaction paying A while the screen showed B.
+  //
+  // The cost is real and bounded: for up to SEND_BINDING_TTL_MS after an
+  // upgrade, a retry of an in-flight send is refused rather than replayed, and
+  // the user starts a new send. The other optional fields (`from`,
+  // `chainIdHex`) keep their old, unchecked semantics — they only scope a
+  // lookup and never gate a broadcast.
+  it("REFUSES a record written before the digest existed — cannot prove, so does not replay", async () => {
     // The realistic cross-upgrade case: bytes on disk in the old shape.
     await writeSendBinding(KEY, legacyBindingAt(T0));
     const submit = submitter();
@@ -546,10 +572,16 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
       via: "op-replay",
     }));
 
-    await withSendBinding({ key: KEY, now: () => T0, rebroadcast, bytesMayBeLive, submit });
+    await expect(
+      withSendBinding({ key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast, bytesMayBeLive, submit }),
+    ).rejects.toBeInstanceOf(SendBindingMismatchError);
 
+    // Neither re-broadcast nor re-signed under the old key.
+    expect(rebroadcast).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
-    expect(rebroadcast).toHaveBeenCalledWith("0xdeadbeef", "0xabc");
+    // And dropped, so the next confirmation can bind normally instead of
+    // hitting this same refusal for the rest of the TTL.
+    expect(await readSendBinding(KEY, T0)).toBeNull();
   });
 
   // ── §0 / row 3 — the WYSIWYS regression ──────────────────────────────────
@@ -582,6 +614,8 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     // assertion below is the invariant, not the control flow.
     await withSendBinding({
       key: KEY,
+      // The whole point: same key, DIFFERENT transaction.
+      expectedDigest: DIGEST_B,
       now: () => T0,
       rebroadcast,
       bytesMayBeLive,

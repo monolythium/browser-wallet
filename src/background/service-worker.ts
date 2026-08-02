@@ -322,6 +322,7 @@ import {
   type EthSendTxFields,
 } from "./tx-mldsa.js";
 import { withSendBinding } from "./send-binding.js";
+import { sendIntentDigest } from "../shared/send-intent-digest.js";
 import { hexToBytes, type NativeEvmTxFields } from "@monolythium/core-sdk/crypto";
 import { isFeatureEnabled } from "../shared/two-tier-features.js";
 import {
@@ -1991,8 +1992,23 @@ export async function submitTrackedTx(
   // The nonce is derived INSIDE `submit`, which runs only when no live binding
   // was found. A replay must never derive one: the nonce was chosen and recorded
   // by the original attempt, and the bytes being re-broadcast already carry it.
+  // What this confirmation is FOR. Computed here because this is where the
+  // transaction is still in scope — the binding layer only ever compares two of
+  // these strings, so it keeps its zero imports and its suite keeps needing no
+  // signer, no SDK and no network. `nonce` is absent by construction (it is
+  // derived below, inside `submit`), and the fee fields are excluded on purpose
+  // — see src/shared/send-intent-digest.ts.
+  const intentDigest = sendIntentDigest({
+    from: opts.from,
+    to: req.to,
+    value: req.value,
+    data: req.data,
+    chainIdHex: opts.chainIdHex,
+  });
+
   return withSendBinding({
     key,
+    expectedDigest: intentDigest,
     now: () => Date.now(),
     rebroadcast: broadcastPlaintextTransaction,
     // The fan-out marks a failure whose bytes may already have reached an
@@ -2017,6 +2033,9 @@ export async function submitTrackedTx(
             // can disagree with the transaction.
             from: opts.from,
             chainIdHex: opts.chainIdHex,
+            // What these bytes were signed FOR. Stored so a later call under
+            // this key can be checked against it instead of trusted.
+            digest: intentDigest,
             wireHex: built.signedTxWireHex,
             txHashHex: built.innerTxHashHex,
           });
