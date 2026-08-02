@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 
 import {
+  LOCAL_NODE_LABEL,
   PINNED_GATEWAY_LABEL,
   operatorDisplayName,
 } from "./operator-display.js";
@@ -20,6 +21,45 @@ const OFFICIAL = getRpcEndpoints("testnet-69420").find(
   (e) => e.tier === "official",
 );
 const OFFICIAL_URL = OFFICIAL?.url ?? "";
+
+describe("operatorDisplayName — a local node", () => {
+  it("labels a placeholder-named loopback entry as a local node", () => {
+    expect(operatorDisplayName("operator-1", "http://localhost:8545")).toBe(
+      LOCAL_NODE_LABEL,
+    );
+    expect(operatorDisplayName("operator-2", "http://127.0.0.1:8545")).toBe(
+      LOCAL_NODE_LABEL,
+    );
+    expect(operatorDisplayName("operator-3", "http://[::1]:8545")).toBe(
+      LOCAL_NODE_LABEL,
+    );
+  });
+
+  // The same both-conditions rule that protects a user-added operator from the
+  // pinned label protects it here: a name the user chose always wins.
+  it("keeps a user-chosen name on a loopback entry", () => {
+    expect(operatorDisplayName("my node", "http://localhost:8545")).toBe(
+      "my node",
+    );
+  });
+
+  // The load-bearing separation: a loopback entry must never be mistaken for
+  // the pinned gateway, in either direction.
+  it("never gives a loopback entry the pinned-gateway label", () => {
+    expect(operatorDisplayName("operator-1", "http://localhost:8545")).not.toBe(
+      PINNED_GATEWAY_LABEL,
+    );
+  });
+
+  it("does not treat a remote host as local", () => {
+    expect(operatorDisplayName("operator-1", "http://203.0.113.5:8545")).not.toBe(
+      LOCAL_NODE_LABEL,
+    );
+    expect(
+      operatorDisplayName("operator-1", "http://localhost.evil.com:8545"),
+    ).not.toBe(LOCAL_NODE_LABEL);
+  });
+});
 
 describe("operatorDisplayName", () => {
   it("has an official pinned endpoint to exercise", () => {

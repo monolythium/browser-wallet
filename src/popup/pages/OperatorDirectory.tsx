@@ -39,6 +39,7 @@ import {
   type OperatorRiskInput,
   type OperatorRiskKind,
 } from "../../shared/operator-risk";
+import { isLoopbackRpc } from "../../shared/loopback";
 import { displayableRegion } from "../../shared/operators";
 import { operatorDisplayName } from "../../shared/operator-display";
 
@@ -705,6 +706,27 @@ function OperatorAccordionRow({
               }}
             />
             <span style={{ fontSize: 12, fontWeight: 600 }}>{displayName}</span>
+            {/* "You are talking to your own machine" is worth seeing at a
+                glance, and it is the standing counter to the social attack: a
+                user who was talked into this sees the marker on every open, not
+                only once during setup. */}
+            {isLoopbackRpc(op.rpc) && (
+              <span
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  color: "var(--gold)",
+                  border: "1px solid var(--gold)",
+                  borderRadius: 4,
+                  padding: "1px 4px",
+                  flexShrink: 0,
+                }}
+              >
+                LOCAL
+              </span>
+            )}
             {region !== null && (
               <span style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
                 {region}

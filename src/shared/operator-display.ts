@@ -19,11 +19,21 @@
 
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 
+import { isLoopbackRpc } from "./loopback.js";
+
 /**
  * Label shown for the pinned official gateway when the wallet has no real
  * name for it.
  */
 export const PINNED_GATEWAY_LABEL = "Monolythium RPC";
+
+/**
+ * Label shown for a node on this machine when the wallet has no real name for
+ * it. Distinct from {@link PINNED_GATEWAY_LABEL} on purpose: "you are talking to
+ * your own machine" is worth seeing at a glance, and the two must never be
+ * confusable in either direction.
+ */
+export const LOCAL_NODE_LABEL = "Local node";
 
 /**
  * Wallet-minted placeholder names. `networks.ts` numbers registry endpoints
@@ -67,6 +77,10 @@ export function operatorDisplayName(name: string, rpc: string): string {
   const trimmed = name.trim();
   // A real name — registry-supplied or user-chosen — always wins.
   if (trimmed.length > 0 && !PLACEHOLDER_NAME.test(trimmed)) return name;
+  // A node on this machine, named only by the wallet's own numbering. Checked
+  // before the gateway label so the two can never be confused, and by the same
+  // both-conditions rule, so a user who named their node keeps that name.
+  if (isLoopbackRpc(rpc)) return LOCAL_NODE_LABEL;
   const host = hostOf(rpc);
   if (host === null || !OFFICIAL_GATEWAY_HOSTS.has(host)) return name;
   return PINNED_GATEWAY_LABEL;
