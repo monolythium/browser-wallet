@@ -89,14 +89,22 @@ export default defineConfig(({ mode }) => ({
     // cache reuse and make the size budget legible.
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom"],
-          "vendor-sdk": ["@monolythium/core-sdk"],
-          // @noble/* deliberately NOT split — rollup tree-shakes them
-          // into the SW (which is the only consumer of keystore-mldsa.ts
-          // and the actual user of post-quantum/ciphers/hashes) and a
-          // dedicated chunk lands empty. Keeping noble co-located with
-          // the SW chunk avoids the rollup "empty chunk" warning.
+        // FUNCTION FORM, NOT THE OBJECT FORM. Rolldown — the bundler Vite 8
+        // uses in place of Rollup — accepts only a function here; the object
+        // form fails the build outright with "manualChunks is not a function".
+        // The function form works under Rollup too, so it lands ahead of the
+        // bundler swap: that keeps any change in chunk layout attributable to
+        // this predicate rather than to the engine.
+        //
+        // @noble/* deliberately NOT split — it tree-shakes into the SW (the
+        // only consumer of keystore-mldsa.ts and the actual user of
+        // post-quantum/ciphers/hashes) and a dedicated chunk lands empty,
+        // tripping the "empty chunk" warning.
+        manualChunks(id: string) {
+          if (/node_modules[/\\](react|react-dom)[/\\]/.test(id))
+            return "vendor-react";
+          if (id.includes("@monolythium/core-sdk")) return "vendor-sdk";
+          return undefined;
         },
       },
     },
