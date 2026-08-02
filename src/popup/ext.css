@@ -165,6 +165,26 @@ html[data-mode="sidepanel"] .ext > .ext-body {
 .ext-body { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding: 10px 14px 14px; }
 .ext-body::-webkit-scrollbar { width:6px; } .ext-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius:3px; }
 
+/* --- Focus ring ---
+   The wallet's text inputs are styled inline and every one of them sets
+   `outline: none` (PasswordInput INPUT_STYLE, UnlockScreen, ForgotPassword,
+   ResetWallet, VaultAddModal, ConfirmWordDialog, …). That suppresses the user
+   agent's ring without putting anything in its place, so a keyboard user has no
+   indication of where focus is. There is no shared focus style to adopt — this
+   is the first one.
+
+   `:focus-visible`, not `:focus`: the browser shows it for keyboard focus and
+   withholds it on a mouse click, which is what makes it an accessibility
+   affordance rather than the visual noise that got the UA ring reported in the
+   first place. Both tokens are per-theme (themes.css defines --gold-glow for
+   each), so the ring holds on near-white `light` as well as the dark themes
+   rather than being tuned for one background. */
+.ext-focus-ring:focus-visible {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px rgba(var(--gold-glow), 0.45);
+}
+
 /* --- Glass card primitive --- */
 .ext-card { background: var(--glass-fill); backdrop-filter: blur(var(--glass-blur)) saturate(160%); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%); border:1px solid var(--glass-stroke); border-radius: var(--r-md); padding:14px; margin-bottom:12px; position:relative; box-shadow: inset 0 1px 0 var(--glass-inner), 0 20px 40px -20px rgba(0,0,0,0.5); }
 .ext-card::before { content:""; position:absolute; inset:0; border-radius:inherit; background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 30%); pointer-events:none; }

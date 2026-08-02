@@ -215,6 +215,7 @@ export function LoopbackToggle({ style }: { style?: CSSProperties }) {
           </p>
           <p style={paraStyle}>This stays on until you turn it off.</p>
           <input
+            className="ext-focus-ring"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             aria-label={`Type ${LOOPBACK_CONFIRM_WORD} to confirm`}
@@ -352,16 +353,29 @@ const listStyle: CSSProperties = {
   gap: 4,
 };
 
+// Matches PasswordInput's INPUT_STYLE — the wallet's shared text-field
+// treatment — apart from the padding this field needs. It could not simply
+// REUSE that component: PasswordInput renders its own label and reveal button
+// and is typed for a password, none of which fits a confirm-word field. Nor
+// could it reuse ConfirmWordDialog, which renders a whole Modal with its own
+// copy, while this flow needs warning → Continue → confirm with frozen text.
+//
+// The one place it deliberately DIVERGES is focus. Every existing input sets
+// `outline: none`, which suppresses the ring without replacing it; this field
+// carries `.ext-focus-ring` instead, so keyboard focus is visible. That makes it
+// the only field in the wallet with a real focus indicator — see the note on the
+// class in ext.css.
 const inputStyle: CSSProperties = {
   width: "100%",
   marginTop: 8,
-  padding: "8px 10px",
-  borderRadius: 8,
+  padding: "10px 12px",
+  borderRadius: 10,
   border: "1px solid var(--fg-700)",
-  background: "rgba(255,255,255,0.04)",
+  background: "rgba(0,0,0,0.3)",
   color: "var(--fg-100)",
   fontFamily: "var(--f-mono)",
-  fontSize: 12,
+  fontSize: 13,
+  boxSizing: "border-box",
 };
 
 const actionsStyle: CSSProperties = {
