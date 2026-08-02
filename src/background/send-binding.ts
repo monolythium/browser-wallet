@@ -377,6 +377,42 @@ export async function withSendBinding(args: {
     // Signed, outcome unknown. Re-broadcast the IDENTICAL bytes: the chain
     // answers DuplicateKnown / AlreadyConsumed, both counted as acceptance, and
     // the original hash comes back.
+    //
+    // ── DELIBERATELY OUTSIDE THE `try` BELOW ─────────────────────────────
+    //
+    // If `rebroadcast` throws, the error propagates and the record is left
+    // EXACTLY as it was — no completion write, no deletion decision. That is
+    // the intended behaviour, not an oversight, and it is asymmetric with the
+    // submit branch on purpose.
+    //
+    // WHY THE SUBMIT BRANCH'S RULE MUST NOT BE COPIED HERE. That branch asks
+    // `bytesMayBeLive(e)` and deletes when it answers false. But that predicate
+    // describes THIS broadcast attempt, not the binding's history: only the
+    // "some operator was transient" case is marked. Every other failure —
+    // no genesis-trusted operator reachable, quarantined, genesis mismatch —
+    // is UNMARKED, and each of those means "nothing was sent just now".
+    //
+    // On the submit branch that correctly implies the bytes are dead: it is the
+    // first attempt, so nothing was ever sent. On THIS branch it implies
+    // nothing at all — these bytes already went out at least once. Reading
+    // "I could not reach an operator" as "the earlier bytes are dead" and
+    // dropping the record is exactly the double-send this module exists to
+    // prevent, and an unreachable gateway is an ordinary condition, not a rare
+    // one.
+    //
+    // THE COST OF KEEPING, STATED SO IT IS NOT REDISCOVERED AS A BUG: when the
+    // bytes really are dead (every operator deterministically rejected), the
+    // user retries against them until the record ages out. `ts` is not
+    // refreshed here, so that window is the REMAINDER of SEND_BINDING_TTL_MS
+    // measured from the original bind — bounded, self-healing, and costing a
+    // wait rather than money. That is the right side of the trade.
+    //
+    // DIAGNOSING ONE AFTER THE FACT: a failed replay leaves a record
+    // indistinguishable from an untouched one at a glance, which has already
+    // misled one live diagnosis. The tell is in the record itself — `wireHex`
+    // still populated AND `ts` still at the original bind time means a replay
+    // was attempted and threw. A replay that SUCCEEDED empties `wireHex` and
+    // moves `ts` (see `completeSendBinding`).
     const replay = await rebroadcast(bound.wireHex, bound.txHashHex);
     await completeSendBinding(key, replay.txHash, replay.via, now());
     return { ...replay, nonceHex: bound.nonceHex };

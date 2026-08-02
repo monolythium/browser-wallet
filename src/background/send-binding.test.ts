@@ -609,6 +609,75 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     expect(submit).not.toHaveBeenCalled();
   });
 
+  // ── The replay branch's failure handling — PINNED DELIBERATELY ───────────
+  //
+  // A failed replay leaves the record untouched: no completion write, no
+  // deletion decision, error propagates. That asymmetry with the submit branch
+  // is intended, and these pin it so it cannot be "tidied up" into symmetry.
+  //
+  // Copying the submit branch's `bytesMayBeLive` rule here would be a
+  // double-send: that predicate describes the CURRENT broadcast attempt, and
+  // its unmarked cases include "no operator reachable" / "quarantined" /
+  // "genesis mismatch" — all of which mean nothing was sent JUST NOW and say
+  // nothing about the earlier broadcast these bytes already had.
+  it("KEEPS the binding untouched when a replay throws — even on a genuine-looking failure", async () => {
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+    const before = await readSendBinding(KEY, T0);
+
+    const submit = submitter("0xshould-never-be-produced");
+    // Unmarked, i.e. `bytesMayBeLive` is FALSE — the shape that makes the
+    // submit branch delete. On this branch it must NOT.
+    const rebroadcast = vi.fn(async () => {
+      throw new Error("no Monolythium Testnet operator reachable");
+    });
+
+    await expect(
+      withSendBinding({
+        key: KEY,
+        expectedDigest: DIGEST_A,
+        now: () => T0,
+        rebroadcast,
+        bytesMayBeLive,
+        submit,
+      }),
+    ).rejects.toThrow("no Monolythium Testnet operator reachable");
+
+    // Never re-signed — the whole point of the binding.
+    expect(submit).not.toHaveBeenCalled();
+
+    // And the record is byte-for-byte what it was: bytes still there for the
+    // next attempt, `ts` NOT refreshed so the TTL still runs from the original
+    // bind, digest intact.
+    const after = await readSendBinding(KEY, T0);
+    expect(after).toEqual(before);
+    expect(after!.wireHex).toBe(WIRE_PAYING_A);
+    expect(after!.ts).toBe(T0);
+  });
+
+  it("KEEPS the binding when a replay throws with bytes that may be live", async () => {
+    await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
+    const rebroadcast = vi.fn(async () => {
+      throw transientFailure();
+    });
+
+    await expect(
+      withSendBinding({
+        key: KEY,
+        expectedDigest: DIGEST_A,
+        now: () => T0,
+        rebroadcast,
+        bytesMayBeLive,
+        submit: submitter(),
+      }),
+    ).rejects.toThrow();
+
+    // Same outcome as the unmarked case — this branch does not consult the
+    // predicate at all, and that is the property being pinned.
+    const after = await readSendBinding(KEY, T0);
+    expect(after!.wireHex).toBe(WIRE_PAYING_A);
+    expect(after!.ts).toBe(T0);
+  });
+
   // ── §0 / row 3 — the WYSIWYS regression ──────────────────────────────────
   //
   // The hand test: a send to A failed, the user pressed "Try again", changed the
