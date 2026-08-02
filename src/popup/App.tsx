@@ -34,6 +34,7 @@ import "./tokens.css";
 import "./themes.css";
 import "./glass.css";
 import "./ext.css";
+import { Icon } from "./Icon";
 import {
   Home, Networks,
   ReqConnect, ReqAuthenticate,
@@ -1400,7 +1401,16 @@ export default function App() {
     <ErrorBoundary>
     {isFullscreen && (
       <div className="ext-fullscreen-brand">
-        <span className="accent">◇</span>Monolythium Browser Wallet
+        {/* The Monolythium "M", the same inline mark the monolythium.com link
+            row uses on Resources / About / Help (Icon "mono-mark", the brand's
+            folded-ribbon glyph). It fills with `currentColor`, so the `.accent`
+            rule's var(--gold) keeps the header's existing tint and the mark
+            follows every theme. size 22 matches the wordmark's own font-size,
+            so the glyph box equals the text's em box. */}
+        <span className="accent">
+          <Icon name="mono-mark" size={22} />
+        </span>
+        Monolythium Browser Wallet
       </div>
     )}
     <div className="ext" data-denom={acc.denom}>
