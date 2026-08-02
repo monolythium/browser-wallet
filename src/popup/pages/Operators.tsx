@@ -450,8 +450,8 @@ export function Operators({
                 className="ext-card"
                 style={{
                   padding: "10px 12px",
-                  background: "rgba(220,80,80,0.08)",
-                  border: "1px solid rgba(220,80,80,0.4)",
+                  background: "rgba(var(--err-glow), 0.08)",
+                  border: "1px solid rgba(var(--err-glow), 0.4)",
                   fontSize: 12,
                   color: "var(--err)",
                 }}

@@ -1255,7 +1255,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
         borderRadius: 8,
         background: "rgba(255,255,255,0.03)",
         border: dangerBorder
-          ? "1px solid rgba(220,80,80,0.3)"
+          ? "1px solid rgba(var(--err-glow), 0.3)"
           : "1px solid var(--fg-700)",
       }}
     >
@@ -1301,10 +1301,10 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
                 letterSpacing: "0.1em",
                 textTransform: "uppercase",
                 color: "var(--err)",
-                background: "rgba(220,80,80,0.12)",
+                background: "rgba(var(--err-glow), 0.12)",
                 padding: "1px 5px",
                 borderRadius: 3,
-                border: "1px solid rgba(220,80,80,0.4)",
+                border: "1px solid rgba(var(--err-glow), 0.4)",
               }}
               title={
                 devMode
@@ -1455,13 +1455,13 @@ function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
         : "var(--fg-300)";
   const bg =
     badge.severity === "err"
-      ? "rgba(220,80,80,0.12)"
+      ? "rgba(var(--err-glow), 0.12)"
       : badge.severity === "warn"
         ? "rgba(220,180,80,0.12)"
         : "rgba(120,160,220,0.08)";
   const borderColour =
     badge.severity === "err"
-      ? "rgba(220,80,80,0.4)"
+      ? "rgba(var(--err-glow), 0.4)"
       : badge.severity === "warn"
         ? "rgba(220,180,80,0.4)"
         : "rgba(120,160,220,0.3)";
@@ -1597,8 +1597,8 @@ function OperatorRiskLegendCard({
                     <span
                       title={`${affected} operator${affected === 1 ? "" : "s"} currently affected`}
                       style={{
-                        background: "rgba(220,80,80,0.12)",
-                        border: "1px solid rgba(220,80,80,0.4)",
+                        background: "rgba(var(--err-glow), 0.12)",
+                        border: "1px solid rgba(var(--err-glow), 0.4)",
                         borderRadius: 4,
                         padding: "1px 6px",
                         color: "var(--err)",

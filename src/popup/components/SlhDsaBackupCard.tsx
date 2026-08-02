@@ -680,7 +680,7 @@ function BackupStateRow({ backup }: { backup: SlhDsaBackup | null }) {
   const tone = complete
     ? { color: "var(--ok, #7ee3c1)", border: "rgba(126,227,193,0.4)" }
     : backup !== null && backup.chainRegistrationStatus === "registration-failed"
-      ? { color: "var(--err)", border: "rgba(220,80,80,0.4)" }
+      ? { color: "var(--err)", border: "rgba(var(--err-glow), 0.4)" }
       : { color: "var(--fg-100)", border: "var(--fg-700)" };
   return (
     <div
@@ -737,9 +737,9 @@ const errBox: CSSProperties = {
   fontSize: 11,
   color: "var(--err)",
   padding: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
   borderRadius: 8,
-  background: "rgba(220,80,80,0.08)",
+  background: "rgba(var(--err-glow), 0.08)",
   lineHeight: 1.5,
 };
 
@@ -830,8 +830,8 @@ const btnDangerGhost: CSSProperties = {
   width: "100%",
   padding: "8px 12px",
   borderRadius: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.06)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.06)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 11.5,
@@ -843,7 +843,7 @@ const btnDangerFlex: CSSProperties = {
   padding: "9px 10px",
   borderRadius: 8,
   border: "1px solid var(--err)",
-  background: "rgba(220,80,80,0.12)",
+  background: "rgba(var(--err-glow), 0.12)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 12,

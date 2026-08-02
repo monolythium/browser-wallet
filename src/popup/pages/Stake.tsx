@@ -2780,8 +2780,8 @@ function AutovotePlanCard({
             fontSize: 11,
             color: "var(--err)",
             fontFamily: "var(--f-mono)",
-            background: "rgba(220,80,80,0.08)",
-            border: "1px solid rgba(220,80,80,0.4)",
+            background: "rgba(var(--err-glow), 0.08)",
+            border: "1px solid rgba(var(--err-glow), 0.4)",
             borderRadius: 8,
           }}
         >
@@ -2959,8 +2959,8 @@ const secondaryBtn: CSSProperties = {
 const errBanner: CSSProperties = {
   padding: "10px 12px",
   borderRadius: 10,
-  background: "rgba(220,80,80,0.08)",
-  border: "1px solid rgba(220,80,80,0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
   fontFamily: "var(--f-mono)",
   fontSize: 11,
   color: "var(--err)",

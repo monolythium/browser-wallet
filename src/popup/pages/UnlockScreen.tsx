@@ -453,8 +453,8 @@ export function UnlockScreen({
               display: "grid",
               placeItems: "center",
               borderRadius: "var(--r-xl)",
-              background: "rgba(220,80,80,0.10)",
-              border: "1px solid rgba(220,80,80,0.4)",
+              background: "rgba(var(--err-glow), 0.10)",
+              border: "1px solid rgba(var(--err-glow), 0.4)",
               color: "var(--err)",
               fontSize: 26,
             }}
@@ -488,8 +488,8 @@ export function UnlockScreen({
           style={{
             padding: 12,
             borderRadius: 10,
-            background: "rgba(220,80,80,0.08)",
-            border: "1px solid rgba(220,80,80,0.35)",
+            background: "rgba(var(--err-glow), 0.08)",
+            border: "1px solid rgba(var(--err-glow), 0.35)",
             fontSize: 12,
             color: "var(--fg-100)",
             lineHeight: 1.55,

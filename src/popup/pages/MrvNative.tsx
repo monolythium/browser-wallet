@@ -1629,8 +1629,8 @@ const errorBox: CSSProperties = {
   marginTop: 10,
   padding: "8px 10px",
   borderRadius: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
   color: "var(--err)",
   fontFamily: "var(--f-mono)",
   fontSize: 10.5,
@@ -1669,8 +1669,8 @@ const receiptBox: CSSProperties = {
 
 const receiptErrorBox: CSSProperties = {
   ...receiptBox,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
 };
 
 const receiptTitle: CSSProperties = {

@@ -459,8 +459,8 @@ const sendFormStyle: CSSProperties = {
   marginTop: 10,
   padding: 10,
   borderRadius: 8,
-  border: "1px dashed rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.05)",
+  border: "1px dashed rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.05)",
 };
 const sendUnverifiedStyle: CSSProperties = {
   fontSize: 10.5,

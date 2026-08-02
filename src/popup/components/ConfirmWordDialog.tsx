@@ -189,8 +189,8 @@ export function ConfirmWordDialog({
 const WARNING_CARD_STYLE: CSSProperties = {
   padding: 14,
   borderRadius: 12,
-  background: "rgba(220,80,80,0.08)",
-  border: "1px solid rgba(220,80,80,0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
   color: "var(--fg-100)",
   fontSize: 12.5,
   lineHeight: 1.6,
@@ -242,8 +242,8 @@ const CANCEL_STYLE: CSSProperties = {
 const CONFIRM_STYLE: CSSProperties = {
   padding: "10px 12px",
   borderRadius: 10,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.12)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.12)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 12,

@@ -129,8 +129,8 @@ export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
               display: "grid",
               placeItems: "center",
               borderRadius: "var(--r-xl)",
-              background: "rgba(220,80,80,0.08)",
-              border: "1px solid rgba(220,80,80,0.4)",
+              background: "rgba(var(--err-glow), 0.08)",
+              border: "1px solid rgba(var(--err-glow), 0.4)",
               color: "var(--err)",
               fontSize: 24,
             }}
@@ -246,8 +246,8 @@ export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
           style={{
             padding: 14,
             borderRadius: 12,
-            background: "rgba(220,80,80,0.08)",
-            border: "1px solid rgba(220,80,80,0.4)",
+            background: "rgba(var(--err-glow), 0.08)",
+            border: "1px solid rgba(var(--err-glow), 0.4)",
             color: "var(--fg-100)",
             fontSize: 12.5,
             lineHeight: 1.6,

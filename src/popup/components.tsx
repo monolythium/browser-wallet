@@ -2029,10 +2029,10 @@ function WarningRow({
         marginBottom: 6,
         borderRadius: 10,
         background: isDanger
-          ? "rgba(220,80,80,0.10)"
+          ? "rgba(var(--err-glow), 0.10)"
           : "rgba(244,201,122,0.08)",
         border: isDanger
-          ? "1px solid rgba(220,80,80,0.4)"
+          ? "1px solid rgba(var(--err-glow), 0.4)"
           : "1px solid rgba(244,201,122,0.4)",
       }}
     >
@@ -3054,7 +3054,7 @@ export function ReqConnect({
             borderRadius: 10,
             background: "rgba(0,0,0,0.3)",
             border: hasDanger
-              ? "1px solid rgba(220,80,80,0.4)"
+              ? "1px solid rgba(var(--err-glow), 0.4)"
               : "1px solid rgba(255,255,255,0.05)",
             fontFamily: "var(--f-mono)",
             fontSize: 11.5,

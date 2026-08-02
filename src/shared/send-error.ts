@@ -530,9 +530,9 @@ export function severityColours(severity: "err" | "warn" | "info"): {
     case "err":
       return {
         fg: "var(--err)",
-        iconBg: "rgba(220,80,80,0.12)",
-        cardBg: "rgba(220,80,80,0.08)",
-        borderRgba: "rgba(220,80,80,0.4)",
+        iconBg: "rgba(var(--err-glow), 0.12)",
+        cardBg: "rgba(var(--err-glow), 0.08)",
+        borderRgba: "rgba(var(--err-glow), 0.4)",
       };
     case "warn":
       return {
