@@ -1408,6 +1408,32 @@ describe("seedStallBaseline (STALLED speedup B2 — window survives mount/popup 
       stalled: false,
     });
   });
+
+  // CHARACTERISATION — pins the KNOWN GAP, it does not endorse it. An absurd
+  // stored head (u64 max, which `isWellFormedBlockNumberHex` accepts) is trusted
+  // on its own word and sits above every real reading, so the chip stays STALLED
+  // and cannot recover. Nothing on the path bounds a reading's magnitude.
+  //
+  // If you are here because this test went red, you changed that on purpose —
+  // check the two traps in `seedStallBaseline`'s doc comment before updating it,
+  // and confirm the four W-1 properties above still hold.
+  it("KNOWN GAP: an implausibly high stored head is trusted and pins STALLED", () => {
+    const absurd = "0xffffffffffffffff"; // u64 max — passes well-formedness
+    const base = seedStallBaseline(
+      { hex: absurd, advancedAtMs: 0 },
+      "0x3547a", // the real head
+      20_000,
+      15_000,
+    );
+    expect(base.lastBlockHex).toBe(absurd);
+    expect(base.stalled).toBe(true);
+    // And the real head can never clear it: seeded as the mark, every genuine
+    // reading below it classifies as a decrease rather than progress.
+    expect(classifyHeadReading("0x3547a", BigInt(absurd))).toEqual({
+      kind: "decreased",
+      height: 218234n,
+    });
+  });
 });
 
 describe("classifyHeadReading (W-1 — only a HIGHER head is progress)", () => {

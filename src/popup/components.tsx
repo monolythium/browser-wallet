@@ -283,6 +283,28 @@ export function headRegressionNote(
  * "different" head, took a fresh baseline and restarted the 15s window, so an
  * already-stalled chain went back to LIVE. Ordering is what makes it hold.
  * Pure + exported.
+ *
+ * KNOWN GAP — a stored head is trusted on its own word. Nothing anywhere bounds
+ * the MAGNITUDE of a head reading: the transport checks only `typeof === string`
+ * and `isWellFormedBlockNumberHex` accepts the whole u64 range. So one
+ * spuriously-high reading becomes the stored baseline, sits above every real
+ * reading forever, and pins the chip to STALLED. It survives popup close, SW
+ * hibernation and lock; a wallet wipe now clears it, and otherwise only a
+ * browser restart does. The trigger is UNOBSERVED — the gateway's known
+ * pathology is a backend stuck LOW, which the ordering above absorbs correctly.
+ *
+ * TWO TRAPS for whoever closes it, both of which re-open the W-1 defect:
+ *  1. Seeding the high-water mark from the CURRENT reading instead of the
+ *     stored head. A reopen landing on the lagging backend would then treat the
+ *     next good read as an advance and flip a dead chain to LIVE — exactly what
+ *     W-1 fixed.
+ *  2. Rejecting a stored head because it sits far above the current reading.
+ *     A legitimately lagging backend is arbitrarily far below (one observed
+ *     serving height 0 against a head of 218234), so gap magnitude cannot
+ *     separate "stale store" from "lagging backend".
+ * The discriminator that does work is corroboration over time — a genuine stall
+ * has readings EQUAL to the stored head, a wedge has them strictly below,
+ * forever. See `_dev-notes/browser-wallet/2026-08-02_stall-baseline-wedge.md`.
  */
 export function seedStallBaseline(
   stored: unknown,
