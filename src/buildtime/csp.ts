@@ -15,6 +15,25 @@ export interface EndpointLike {
   ws_url?: string;
 }
 
+/* CodeQL flags these two entries as regex-unsafe hostnames
+ * (js/incomplete-hostname-regexp). It is a false positive, measured on four
+ * independent grounds, each sufficient alone:
+ *
+ *   1. These are CSP directive values, never regex sources.
+ *   2. The flow CodeQL follows reads web_accessible_resources — a different
+ *      field of the same parsed manifest — so these values never arrive.
+ *   3. globToRegExp escapes '.', '[', ']' and the rest before compiling.
+ *   4. That call is gated on a wildcard no shipped resource contains, so it
+ *      does not run.
+ *
+ * Do NOT "fix" this by escaping these strings: a backslash here produces an
+ * invalid CSP source expression, Chrome drops the directive, and the About
+ * page's SDK check and live registry read are silently blocked.
+ *
+ * Do NOT narrow what assertPopupOnlyInvariant receives either. It is given the
+ * full manifest text deliberately, so it judges the text that ships; passing it
+ * the parsed array would clear the alert by weakening the check.
+ */
 /** Hosts the wallet legitimately reaches at runtime besides the fleet:
  *  the About page's SDK update check + live registry-genesis read. */
 const STATIC_HOSTS = [
