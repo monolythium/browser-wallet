@@ -27,8 +27,9 @@ export interface EndpointLike {
  *      does not run.
  *
  * Do NOT "fix" this by escaping these strings: a backslash here produces an
- * invalid CSP source expression, Chrome drops the directive, and the About
- * page's SDK check and live registry read are silently blocked.
+ * invalid CSP source expression, which Chrome ignores while keeping the rest
+ * of connect-src intact — so the host simply loses its only permitted origin
+ * and the About page's SDK check and live registry read fail silently.
  *
  * Do NOT narrow what assertPopupOnlyInvariant receives either. It is given the
  * full manifest text deliberately, so it judges the text that ships; passing it
