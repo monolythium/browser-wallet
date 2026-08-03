@@ -37,3 +37,17 @@ describe("Icon — restake glyph", () => {
     expect(html).not.toContain("M7 10h14l-4-4M17 14H3l4 4"); // not the generic swap glyph
   });
 });
+
+describe("Icon — wallets glyph", () => {
+  it("renders the billfold body, the behind-edge, and the clasp pocket", () => {
+    const html = renderToStaticMarkup(<Icon name="wallets" size={16} />);
+    // The behind-edge is what makes it plural; the pocket is what makes it a
+    // wallet. Both are load-bearing for the glyph reading correctly at 16px.
+    expect(html).toContain('d="M5 7V5.4A1.4 1.4 0 0 1 6.4 4H18"');
+    expect(html).toContain('d="M20 11.5h-3.2a1.9 1.9 0 0 0 0 3.8H20"');
+    expect(html).toContain('x="2" y="7" width="18" height="13"');
+    // Not `server`'s lower rack, and not `copy`'s offset rect.
+    expect(html).not.toContain('x="2" y="13"');
+    expect(html).not.toContain('x="9" y="9"');
+  });
+});

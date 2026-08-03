@@ -180,8 +180,8 @@ export function NetworkDetail({
               style={{
                 padding: "12px",
                 borderRadius: 10,
-                border: "1px solid rgba(220,80,80,0.4)",
-                background: "rgba(220,80,80,0.08)",
+                border: "1px solid rgba(var(--err-glow), 0.4)",
+                background: "rgba(var(--err-glow), 0.08)",
                 color: "var(--err)",
                 fontFamily: "var(--f-sans)",
                 fontSize: 12,
@@ -335,8 +335,8 @@ const modalCancelStyle: CSSProperties = {
 const modalDeleteStyle: CSSProperties = {
   padding: "10px 12px",
   borderRadius: 10,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.12)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.12)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 12,

@@ -2,7 +2,7 @@
 //
 // One screen, logical sections:
 //   1. Quick action — Notifications, full screen, popup/sidebar toggle.
-//   2. Manage — Contacts, Connected sites, Networks, Multisig, RISC-V.
+//   2. Manage — Wallets, Contacts, Connected sites, Networks, Multisig, RISC-V.
 //   3. Security — Security, Features, Emergency recovery.
 //   4. Settings — Settings, Display & Preferences, Operators.
 //   5. Info — About, Resources, Why Monolythium.
@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import type { UiOpenMode } from "../bg";
 import { bgGetUnread } from "../bg";
 
@@ -29,6 +30,9 @@ interface MainMenuProps {
    *  chrome.tabs.create with ?mode=fullscreen. Always available. */
   onOpenFullscreen: () => void;
   onContacts: () => void;
+  /** Wallets page — see, rename, reveal and remove the extension's wallets.
+   *  Always wired: there is always at least one wallet. */
+  onOpenWallets: () => void;
   onConnectedSites: () => void;
   onNetworks: () => void;
   /** Open the Operators directory (read-only operator health + risk
@@ -61,6 +65,7 @@ interface MainMenuProps {
   onEmergencyRecovery?: () => void;
   /** External resources / links page (docs, explorer, repo). */
   onResources: () => void;
+  onHelp: () => void;
   /** "About Monolythium" page — the §28.5 differentiation pitch. */
   onWhyMonolythium: () => void;
   onLockWallet: () => void;
@@ -79,6 +84,7 @@ export function MainMenu({
   onSwitchMode,
   onOpenFullscreen,
   onContacts,
+  onOpenWallets,
   onConnectedSites,
   onNetworks,
   onOperators,
@@ -93,6 +99,7 @@ export function MainMenu({
   onOpenRiscv,
   onEmergencyRecovery,
   onResources,
+  onHelp,
   onWhyMonolythium,
   onLockWallet,
   onResetWallet,
@@ -167,6 +174,12 @@ export function MainMenu({
 
         <MenuSection title="Manage">
           <MenuItem
+            icon="wallets"
+            label="Wallets"
+            onClick={onOpenWallets}
+            hasChevron
+          />
+          <MenuItem
             icon="contacts"
             label="Contacts"
             onClick={onContacts}
@@ -206,6 +219,10 @@ export function MainMenu({
               label="RISC-V"
               onClick={onOpenRiscv}
               hasChevron
+              /* Caller only passes onOpenRiscv under DEVELOPER_MODE, so this
+                 row is a developer surface. rightSlot, per the agent-policy
+                 row below — MenuItem.label is a plain string. */
+              rightSlot={<DevBadge />}
             />
           )}
           {onAgentPolicy && (
@@ -214,6 +231,11 @@ export function MainMenu({
               label="Automation spending limits"
               onClick={onAgentPolicy}
               hasChevron
+              /* The caller only passes onAgentPolicy under DEVELOPER_MODE, so
+                 this row exists solely as a developer surface. rightSlot is the
+                 established adjunct-content slot on a menu row (see the bell's
+                 unread pill) — MenuItem.label is a plain string. */
+              rightSlot={<DevBadge />}
             />
           )}
         </MenuSection>
@@ -268,6 +290,7 @@ export function MainMenu({
 
         <MenuSection title="Info">
           <MenuItem icon="info" label="About" onClick={onAbout} hasChevron />
+          <MenuItem icon="question" label="Help" onClick={onHelp} hasChevron />
           <MenuItem
             icon="external"
             label="Resources"

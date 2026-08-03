@@ -3,9 +3,30 @@ import type { CurrencyCode } from "./iso4217";
 export const AUTO_LOCK_MINUTES_DEFAULT = 5;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
 
-/** The exact word the user types to confirm the destructive no-re-auth wipe.
- *  Single source for the SW verify (P4-004) + both confirm screens. */
+/** The word the user types to confirm an irreversible destroy.
+ *
+ *  GLOBAL AND IDENTICAL EVERYWHERE. The same "DELETE" confirms the whole-wallet
+ *  wipe (`keystore-wipe-unauth`, which the SW compares against this constant),
+ *  Reset wallet, the unlock screen's no-phrase path, AND the removal of a single
+ *  wallet through ConfirmWordDialog. It is not derived from the thing being
+ *  destroyed and is never checked against it, so typing it proves intent to
+ *  destroy — never intent to destroy THIS one.
+ *
+ *  What identifies the target is the dialog's own copy: Wallets.tsx passes
+ *  `title={`Remove ${label}?`}` and a matching warning heading. Nothing in the
+ *  confirm step binds the typed word to that label. Anything that needs the
+ *  destroy bound to a target must pin the target itself — the removal flow does,
+ *  by snapshotting the vault id into state at mount so a re-render or a list
+ *  reorder cannot retarget an already-armed confirm. */
 export const WIPE_CONFIRM_WORD = "DELETE";
+
+/** Typed confirmation for turning the loopback opt-in ON.
+ *
+ *  Deliberately NOT {@link WIPE_CONFIRM_WORD}. Nothing is destroyed here — the
+ *  user is authorising the wallet to dial a node on their own machine — and
+ *  reusing "DELETE" would erode it on the three paths where it does signal
+ *  destruction. "CONNECT" names what is actually being authorised. */
+export const LOOPBACK_CONFIRM_WORD = "CONNECT";
 
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
@@ -105,6 +126,24 @@ export const LOCKOUT_THRESHOLDS = [
   { fails: 5, ms: 30_000 },
 ] as const;
 
+/**
+ * Shown alongside a lockout countdown on the surfaces where the user could
+ * otherwise conclude the wallet is permanently unreachable.
+ *
+ * This is true by construction, not a reassurance: the counter lives in
+ * `chrome.storage.session` (see SESSION_KEY_UNLOCK_FAIL_COUNT above), which is
+ * in-memory for the browser session and dropped when the browser closes. There
+ * is no `chrome.storage.local` mirror of it anywhere.
+ *
+ * It matters because a single counter is shared by every password surface and
+ * never decays, so a user who is locked out at the unlock screen is also locked
+ * out of Reset wallet — the recovery path — at the exact moment they need it.
+ * At the 30-minute tier, with no way to know the lockout is not permanent, the
+ * reasonable conclusion is that the wallet is dead. It is not.
+ */
+export const LOCKOUT_RESTART_HINT =
+  "This limit resets if you restart your browser.";
+
 // Exempt set — ops that do NOT bump the auto-lock deadline.
 //
 // The rule: an op belongs in this set only if it represents PASSIVE
@@ -174,3 +213,29 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "keystore-reset",
   "keystore-wipe-unauth",
 ]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Genesis-probe cache TTLs
+//
+// Moved here from background/networks.ts so BOTH the probe logic and the Help
+// page's developer-mode mechanics read the same value. The mechanics previously
+// described these two states without their number, because networks.ts cannot
+// be imported popup-side — and a typed "60" would have been a copied constant
+// inside the very blocks that exist to argue against copied constants.
+//
+// This module is a safe home: it carries no chrome API call (every `chrome.`
+// in it is comment prose naming a storage key), no side effects, and one
+// type-only import. The popup already imports it, so it costs no new bundle.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** TTL for a NON-definitive genesis-cache entry (observed === null:
+ *  unreachable / timeout / probe-unsupported). Definitive reads (a real
+ *  observed hash, match or mismatch) are cached forever; only the
+ *  "couldn't read" verdict expires, so a transient outage self-heals. */
+export const GENESIS_OBSERVED_NULL_TTL_MS = 60_000;
+
+/** C6 (R3): re-probe TTL for a DEFINITIVE positive ("passed") verdict. A pass is
+ *  bounded (not forever) so an operator that passed once then silently forked
+ *  while the SW is alive is re-detected within this window. A definitive MISMATCH
+ *  stays sticky (no TTL) — it correctly keeps the wallet paused until resolved. */
+export const GENESIS_POSITIVE_TTL_MS = 60_000;

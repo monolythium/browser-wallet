@@ -16,6 +16,9 @@ updates:
         dependency-type: development
         patterns:
           - "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: github-actions
     directory: /

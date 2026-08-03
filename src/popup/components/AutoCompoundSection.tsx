@@ -20,6 +20,16 @@ import {
   type PendingRewardsView,
 } from "../bg";
 import {
+  autoCompoundKeyParams,
+  nextSendKey,
+  type SendKeyState,
+} from "../send-key";
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
+import {
   autoCompoundTxRequest,
   AUTO_COMPOUND_UNIT_LIMIT_HEX,
 } from "../../shared/staking-tx";
@@ -46,7 +56,10 @@ export function AutoCompoundSection({ rewards, isMock, chainId }: AutoCompoundSe
   // acTarget !== null ⇒ the confirm modal is open for that TARGET value.
   const [acTarget, setAcTarget] = useState<boolean | null>(null);
   const [acSubmitting, setAcSubmitting] = useState(false);
-  const [acError, setAcError] = useState<string | null>(null);
+  const [acError, setAcError] = useState<SubmitFailure | null>(null);
+  // Key for the toggle confirmation in flight. Carried by the modal's Try again,
+  // released on success.
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
   const [acFeeDisplay, setAcFeeDisplay] = useState<string | null>(null);
   // The value we're awaiting the on-chain re-read to reflect (STRICT — the row
   // shows the actual `rewards.autoCompound` until the parent's poll confirms the
@@ -83,18 +96,39 @@ export function AutoCompoundSection({ rewards, isMock, chainId }: AutoCompoundSe
   const confirm = async () => {
     if (acTarget === null) return;
     const target = acTarget;
+    // An error already on screen means the previous attempt failed, so this
+    // press is a retry of it rather than a fresh confirmation. Read BEFORE the
+    // clear below. Safe to read from state here — unlike the shape-B surfaces,
+    // this modal round-trips through a render, so the value is already applied.
+    const isRetry = acError !== null;
     setAcSubmitting(true);
     setAcError(null);
     try {
-      const r = await bgWalletSendTx(autoCompoundTxRequest(target, chainId));
+      const keyParams = autoCompoundKeyParams(target, chainId);
+      const keyDecision = nextSendKey(
+        sendKey,
+        isRetry ? "retry" : "submit",
+        keyParams,
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
+      const r = await bgWalletSendTx({
+        ...autoCompoundTxRequest(target, chainId),
+        ...(keyDecision.use !== null ? { idempotencyKey: keyDecision.use } : {}),
+      });
       if (r.ok) {
+        setSendKey(null); // released — a later toggle is an independent send
         setAcPendingTarget(target); // await the strict re-read
         setAcTarget(null); // close the modal
       } else {
-        setAcError(r.reason ?? "Couldn't update auto-compound.");
+        setAcError(verbatimFailure(r.reason, "Couldn't update auto-compound."));
       }
     } catch (e) {
-      setAcError((e as Error).message ?? "Couldn't update auto-compound.");
+      // Classified, so a dropped popup↔SW channel reports an UNKNOWN outcome
+      // rather than asserting the toggle failed. Offering Try again over that is
+      // correct precisely BECAUSE the key makes the retry a re-broadcast of the
+      // bytes already signed, not a second transaction.
+      setAcError(submitThrowFailure(e));
     } finally {
       setAcSubmitting(false);
     }

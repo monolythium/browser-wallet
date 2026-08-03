@@ -2,6 +2,13 @@ import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
 import { bgKeystoreReset } from "../bg";
 import { PasswordInput } from "../components/PasswordInput";
+// Aliased to the name this file already used, so the three call sites below
+// are untouched. Same value as the local duplicate it replaces ("DELETE"), and
+// now the single constant the service worker's wipe check reads too.
+import {
+  LOCKOUT_RESTART_HINT,
+  WIPE_CONFIRM_WORD as CONFIRM_WORD,
+} from "../../shared/constants";
 
 interface ResetWalletProps {
   /** Returns to Settings (also used by the in-flow Cancel buttons). */
@@ -12,8 +19,6 @@ interface ResetWalletProps {
 }
 
 type Step = "reauth" | "confirm";
-
-const CONFIRM_WORD = "DELETE";
 
 export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
   const [step, setStep] = useState<Step>("reauth");
@@ -124,8 +129,8 @@ export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
               display: "grid",
               placeItems: "center",
               borderRadius: "var(--r-xl)",
-              background: "rgba(220,80,80,0.08)",
-              border: "1px solid rgba(220,80,80,0.4)",
+              background: "rgba(var(--err-glow), 0.08)",
+              border: "1px solid rgba(var(--err-glow), 0.4)",
               color: "var(--err)",
               fontSize: 24,
             }}
@@ -176,7 +181,7 @@ export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
               }}
             >
               {secondsRemaining > 0
-                ? `Too many attempts. Try again in ${secondsRemaining}s.`
+                ? `Too many attempts. Try again in ${secondsRemaining}s. ${LOCKOUT_RESTART_HINT}`
                 : error}
             </div>
           )}
@@ -241,8 +246,8 @@ export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
           style={{
             padding: 14,
             borderRadius: 12,
-            background: "rgba(220,80,80,0.08)",
-            border: "1px solid rgba(220,80,80,0.4)",
+            background: "rgba(var(--err-glow), 0.08)",
+            border: "1px solid rgba(var(--err-glow), 0.4)",
             color: "var(--fg-100)",
             fontSize: 12.5,
             lineHeight: 1.6,

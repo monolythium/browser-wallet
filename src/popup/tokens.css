@@ -45,6 +45,7 @@
   --warn:   #f4c97a;
   --warn-glow: 244, 201, 122;
   --err:    #ff8a9a;
+  --err-glow:    255, 138, 154;
   --info:   #7c7fff;
   --accent: var(--gold);
 
@@ -75,7 +76,25 @@
   /* ---------- Radii ---------- */
   --r-pill: 999px;
 
-  /* ---------- Type scale ---------- */
+  /* ---------- Type scale ----------
+     RESTORED, not invented: `1f7ccf7` (2026-07-05) removed the whole scale as
+     part of a token cleanup, but six onboarding screens had been referencing it
+     since 2026-05-04 and none of those `var()`s carries a fallback. An undefined
+     custom property makes the whole declaration invalid, so `font-size` was
+     silently dropped and those elements fell back to the UA size — 16px for the
+     divs, and 2em/1.5em for Welcome's <h1> and ForgotPassword's <h2>. The values
+     below are exactly the ones that commit deleted.
+
+     ONLY THE FOUR STILL REFERENCED are restored; the rest of the deleted scale
+     (--fs-10/14/16/18/24/32/44/64/96) has no references and stays gone, which is
+     what the cleanup was for. Note the name is the design step, NOT the pixel
+     value — --fs-11 is 12px.
+
+     `--fs-15` is referenced once (ForgotPassword.tsx) and is deliberately NOT
+     defined here: it was never in the scale, in this commit or any other, so
+     there is no value to restore and picking one is a design decision rather
+     than a repair. See the note at that call site. */
+  --fs-11: 12px; --fs-12: 13px; --fs-13: 14px; --fs-20: 20px;
 
   /* ---------- Shadows ---------- */
   --shadow-3: 0 24px 48px -16px rgba(0,0,0,0.55);

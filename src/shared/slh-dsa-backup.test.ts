@@ -296,7 +296,7 @@ describe("backupStatusLabel", () => {
     ).toBe("Chain registered");
   });
 
-  it("'Registration failed — retry' on failure", () => {
+  it("'Registration didn't complete' when the submission did not land", () => {
     expect(
       backupStatusLabel(
         fakeBackup({
@@ -304,7 +304,39 @@ describe("backupStatusLabel", () => {
           chainRegistrationError: "RPC offline",
         }),
       ),
-    ).toBe("Registration failed — retry");
+    ).toBe("Registration didn't complete");
+  });
+
+  // Why the label hedges. `registration-failed` is written on TWO different
+  // facts — the service worker refused it, and the submit threw with the
+  // outcome unknown — and the record keeps no structured field separating them
+  // (`chainRegistrationError` is free text). So one label serves both, and it
+  // must be true of the worse one: a transaction that may already be on chain.
+  it("says the same thing whether the outcome was refused or is unknown", () => {
+    const refused = backupStatusLabel(
+      fakeBackup({
+        chainRegistrationStatus: "registration-failed",
+        chainRegistrationError: "AlreadyRegistered",
+      }),
+    );
+    const unknown = backupStatusLabel(
+      fakeBackup({
+        chainRegistrationStatus: "registration-failed",
+        chainRegistrationError:
+          "The wallet lost contact with its background service while submitting, " +
+          "so it can't tell whether this was sent.",
+      }),
+    );
+    expect(unknown).toBe(refused);
+  });
+
+  it("never asserts a refusal or instructs a retry on a possibly-broadcast tx", () => {
+    const label = backupStatusLabel(
+      fakeBackup({ chainRegistrationStatus: "registration-failed" }),
+    ).toLowerCase();
+    // "retry" is the instruction that spends twice when the tx already landed.
+    expect(label).not.toContain("retry");
+    expect(label).not.toContain("failed");
   });
 });
 

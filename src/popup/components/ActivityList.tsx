@@ -443,7 +443,15 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
 
   return (
     <>
-      {indexerStatus.status &&
+      {/* Suppressed while the chain banner is up (`hideConfirmed` IS the
+         chain-is-non-live verdict). Both conditions genuinely co-occur — an
+         unreachable chain usually means a lagging indexer too — but the chain
+         is UPSTREAM of the indexer, so "indexer lagging" is a downstream
+         symptom. One actionable problem beats two, and the top-of-shell banner
+         is the one the user can act on. When the chain recovers this reappears
+         on its own if the indexer is still behind. */}
+      {!hideConfirmed &&
+        indexerStatus.status &&
         (indexerStatus.status.stale ||
           indexerStatus.status.schemaDrift ||
           indexerStatus.status.retention?.archiveRedirect) && (

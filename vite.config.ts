@@ -5,8 +5,9 @@ import react from "@vitejs/plugin-react";
 import { crx } from "@crxjs/vite-plugin";
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 import manifest from "./manifest.json" with { type: "json" };
-import { applyHardenedCsp } from "./src/buildtime/csp";
-import { applyDynamicWarUrl } from "./src/buildtime/manifest-war";
+import { applyHardenedCsp } from "./src/buildtime/csp.ts";
+import { applyDynamicWarUrl } from "./src/buildtime/manifest-war.ts";
+import { assertPopupOnlyInvariant } from "./src/buildtime/popup-only-invariant.ts";
 
 // Read the ACTUALLY-INSTALLED @monolythium/core-sdk version at build time and
 // inject it into the bundle (the About page reads it via __SDK_INSTALLED_VERSION__).
@@ -36,6 +37,11 @@ function readInstalledSdkVersion(): string {
  *    keep working, and the committed manifest.json stays CSP-free).
  *  - P6-003: flip `web_accessible_resources[].use_dynamic_url` to true
  *    (anti-fingerprinting), in BOTH prod and dev.
+ *  - DA-013: assert the popup-only invariant the service worker's popup-op gate
+ *    rests on — no web-accessible HTML, nothing web-accessible under
+ *    `src/popup/`. Checked on the FINAL text, after the two edits above, in
+ *    both prod and dev: a dev build that broke it would be loaded unpacked and
+ *    is exactly as embeddable. Throwing here fails the build.
  *
  * crxjs emits manifest.json from its own (later) generateBundle, so it isn't in
  * the bundle when an ordinary post-plugin's generateBundle runs — hook
@@ -54,6 +60,10 @@ function hardenedManifestPlugin(mode: string): Plugin {
         getRpcEndpoints("testnet-69420"),
         mode === "production", // prod-only
       );
+      // Assert on `out`, not `src`: this must judge the text that ships, and it
+      // runs even when nothing changed (the write below is conditional, the
+      // invariant is not).
+      assertPopupOnlyInvariant(out);
       if (out !== src) writeFileSync(file, out);
     },
   };
@@ -79,14 +89,22 @@ export default defineConfig(({ mode }) => ({
     // cache reuse and make the size budget legible.
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom"],
-          "vendor-sdk": ["@monolythium/core-sdk"],
-          // @noble/* deliberately NOT split — rollup tree-shakes them
-          // into the SW (which is the only consumer of keystore-mldsa.ts
-          // and the actual user of post-quantum/ciphers/hashes) and a
-          // dedicated chunk lands empty. Keeping noble co-located with
-          // the SW chunk avoids the rollup "empty chunk" warning.
+        // FUNCTION FORM, NOT THE OBJECT FORM. Rolldown — the bundler Vite 8
+        // uses in place of Rollup — accepts only a function here; the object
+        // form fails the build outright with "manualChunks is not a function".
+        // The function form works under Rollup too, so it lands ahead of the
+        // bundler swap: that keeps any change in chunk layout attributable to
+        // this predicate rather than to the engine.
+        //
+        // @noble/* deliberately NOT split — it tree-shakes into the SW (the
+        // only consumer of keystore-mldsa.ts and the actual user of
+        // post-quantum/ciphers/hashes) and a dedicated chunk lands empty,
+        // tripping the "empty chunk" warning.
+        manualChunks(id: string) {
+          if (/node_modules[/\\](react|react-dom)[/\\]/.test(id))
+            return "vendor-react";
+          if (id.includes("@monolythium/core-sdk")) return "vendor-sdk";
+          return undefined;
         },
       },
     },
@@ -101,7 +119,11 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5173,
     strictPort: true,
-    hmr: {
+    // `server.hmr.*` is deprecated in Vite 8 in favour of `server.ws.*`
+    // (`HmrOptions` carries an explicit @deprecated on each field). Same
+    // meaning, same port — this only moves off the deprecated spelling so the
+    // warning stops printing on every vite/vitest invocation.
+    ws: {
       port: 5173,
     },
   },

@@ -30,6 +30,12 @@ import { classifySendError, errorLinksOperators, severityColours } from "../../s
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
+import { DevBadge } from "../components/DevBadge";
+import {
+  nextSendKey,
+  unstakeAllKeyParams,
+  type SendKeyState,
+} from "../send-key";
 import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
@@ -304,6 +310,11 @@ export function Stake({
     savedState?.redelegateDstClusterId ?? null,
   );
   const [amountStr, setAmountStr] = useState(savedState?.amountStr ?? "");
+  // Send-idempotency: the key for the attempt in flight, and whether the next
+  // submit is a retry of the one that just failed. Component state, so it dies
+  // with the popup -- the row-7 residual.
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
+  const [retryArmed, setRetryArmed] = useState(false);
   const [action, setAction] = useState<Action>(
     initialAction ?? savedState?.action ?? "delegate",
   );
@@ -344,6 +355,11 @@ export function Stake({
   const [unstakeAllIndex, setUnstakeAllIndex] = useState(0);
   const [unstakeAllBusy, setUnstakeAllBusy] = useState(false);
   const [unstakeAllError, setUnstakeAllError] = useState<string | null>(null);
+  // The key for the item CURRENTLY on screen. Only one item is ever in flight —
+  // the walk-through submits one cluster per confirmation — so a single slot is
+  // enough, and it is deliberately separate from the single-cluster flow's
+  // `sendKey` so the two can never reach across into each other.
+  const [unstakeAllSendKey, setUnstakeAllSendKey] = useState<SendKeyState>(null);
 
   // Persist key form / selection state on every change so a
   // round-trip through ClusterDetail returns the user to the same
@@ -665,10 +681,25 @@ export function Stake({
         action === "redelegate" && redelegateDstClusterId !== null
           ? (clusters.find((c) => c.clusterId === redelegateDstClusterId)?.name ?? null)
           : null;
+      // Shape A: the retry routes back to a form step, so the user can edit the
+      // cluster or amount before confirming. The params guard is what stops an
+      // edited delegation replaying the original.
+      const keyParams = `${action}|${selectedCluster?.clusterId ?? ""}|${redelegateDstClusterId ?? ""}|${valueWeiHex}|${chainId}`;
+      const keyDecision = nextSendKey(
+        sendKey,
+        retryArmed ? "retry" : "submit",
+        keyParams,
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
+      setRetryArmed(false);
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex,
         chainIdHex: chainId,
+        ...(keyDecision.use !== null
+          ? { idempotencyKey: keyDecision.use }
+          : {}),
         data,
         executionUnitLimitHex,
         // `action` is "delegate" | "undelegate" | "redelegate" at this call
@@ -690,6 +721,7 @@ export function Stake({
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
+        setSendKey(null);
         setStep("success");
         // A delegation succeeded → retire any stale over-cap rejection banner.
         if (action !== "claim") onDelegationRejected?.(null);
@@ -758,6 +790,7 @@ export function Stake({
     setUnstakeAllIndex(0);
     setUnstakeAllError(null);
     setUnstakeAllBusy(false);
+    setUnstakeAllSendKey(null); // a re-entered walk-through is a new send
     setAction("undelegate");
     setSelectedClusterId(queue[0] ?? null);
     setStep("unstake-all");
@@ -785,6 +818,7 @@ export function Stake({
     setUnstakeAllIndex(0);
     setUnstakeAllError(null);
     setUnstakeAllBusy(false);
+    setUnstakeAllSendKey(null);
     setSelectedClusterId(null);
     setStep("pick");
   };
@@ -799,6 +833,19 @@ export function Stake({
       const rowWeightBps = delegations?.rows.find(
         (row) => row.cluster === cluster,
       )?.weightBps;
+      // An error already showing for THIS item means the previous attempt on it
+      // failed, so this press is a retry of that attempt rather than a first
+      // confirmation. Read from state safely: Undelegate is a user press with a
+      // render behind it, not a synchronous re-invoke. `goToNextUnstake` clears
+      // the error, so the first confirmation of the NEXT item always reads
+      // "submit" and mints its own key — the second guard behind the params.
+      const keyDecision = nextSendKey(
+        unstakeAllSendKey,
+        unstakeAllError !== null ? "retry" : "submit",
+        unstakeAllKeyParams(cluster, chainId),
+        () => crypto.randomUUID(),
+      );
+      setUnstakeAllSendKey(keyDecision.next);
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -806,11 +853,15 @@ export function Stake({
         data: encodeUndelegate(cluster),
         executionUnitLimitHex: "0x186A0",
         opKind: "undelegate",
+        ...(keyDecision.use !== null ? { idempotencyKey: keyDecision.use } : {}),
         clusterId: cluster,
         ...(meta?.name ? { clusterName: meta.name } : {}),
         ...(rowWeightBps !== undefined ? { delegationWeightBps: rowWeightBps } : {}),
       });
       if (r.ok) {
+        // Released before advancing: the next cluster is a different transaction
+        // and must never see this one's key.
+        setUnstakeAllSendKey(null);
         goToNextUnstake(unstakeAllIndex);
       } else {
         setUnstakeAllBusy(false);
@@ -828,7 +879,11 @@ export function Stake({
    *  through handleConfirm because handleConfirm reads `action` from
    *  state, which would still be the previous value at this call
    *  point (React state updates are async). */
-  const handleClaim = async () => {
+  // `retry` is a PARAMETER, not component state: the error view calls this
+  // synchronously, so a `setRetryArmed(true)` immediately before would still be
+  // unapplied when this reads it. Shape B has no form round-trip to let state
+  // settle in.
+  const handleClaim = async (claimOpts?: { retry?: boolean }) => {
     setAction("claim");
     setStep("submitting");
     setSubmitError(null);
@@ -840,6 +895,18 @@ export function Stake({
       // receipt's Claimed log after confirmation. valueWeiHex stays 0x0; metadata
       // never signs.
       const claim = await buildClaimMeta();
+      // A claim has no user-chosen recipient or amount, so its params are
+      // constant for the chain. That is safe here precisely because `success`
+      // releases the key: the only way to reuse one is a retry of a claim that
+      // FAILED, and a genuine later claim mints fresh.
+      const keyParams = `claim|${chainId}`;
+      const keyDecision = nextSendKey(
+        sendKey,
+        claimOpts?.retry === true ? "retry" : "submit",
+        keyParams,
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -847,12 +914,16 @@ export function Stake({
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
         opKind: "claim",
+        ...(keyDecision.use !== null
+          ? { idempotencyKey: keyDecision.use }
+          : {}),
         claimedAmount: claim.claimedAmount,
         rateAtClaim: claim.rateAtClaim,
         currency: claim.currency,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
+        setSendKey(null);
         setStep("success");
       } else {
         setSubmitError({
@@ -1077,6 +1148,7 @@ export function Stake({
                                 wordBreak: "break-word",
                               }}
                             >
+                              <DevBadge />
                               {clustersError}
                             </div>
                           )}
@@ -1296,12 +1368,17 @@ export function Stake({
             error={submitError}
             onRetry={() => {
               setSubmitError(null);
+              // Mark the next submit as a retry of the attempt that just
+              // failed. The claim branch below re-invokes its handler
+              // SYNCHRONOUSLY, so it takes the flag as an argument instead —
+              // this state would not have applied in time.
+              setRetryArmed(true);
               // Route the retry to a step that actually renders for the
               // current action. A claim has no "form" step (it never selects
               // a cluster), so re-run it directly; undelegate/redelegate have
               // their own gated form steps; delegate uses "form".
               if (action === "claim") {
-                void handleClaim();
+                void handleClaim({ retry: true });
                 return;
               }
               if (action === "undelegate") {
@@ -2170,6 +2247,7 @@ function ErrorView({
               lineHeight: 1.5,
             }}
           >
+            <DevBadge />
             {error.message}
             {(error.code !== null ||
               error.method !== null ||
@@ -2702,8 +2780,8 @@ function AutovotePlanCard({
             fontSize: 11,
             color: "var(--err)",
             fontFamily: "var(--f-mono)",
-            background: "rgba(220,80,80,0.08)",
-            border: "1px solid rgba(220,80,80,0.4)",
+            background: "rgba(var(--err-glow), 0.08)",
+            border: "1px solid rgba(var(--err-glow), 0.4)",
             borderRadius: 8,
           }}
         >
@@ -2881,8 +2959,8 @@ const secondaryBtn: CSSProperties = {
 const errBanner: CSSProperties = {
   padding: "10px 12px",
   borderRadius: 10,
-  background: "rgba(220,80,80,0.08)",
-  border: "1px solid rgba(220,80,80,0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
   fontFamily: "var(--f-mono)",
   fontSize: 11,
   color: "var(--err)",

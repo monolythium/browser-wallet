@@ -20,7 +20,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { Modal } from "../components/Modal";
+import { Section } from "../components/Section";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgOperatorsHealth,
@@ -37,6 +39,9 @@ import {
   type OperatorRiskInput,
   type OperatorRiskKind,
 } from "../../shared/operator-risk";
+import { isLoopbackRpc } from "../../shared/loopback";
+import { displayableRegion } from "../../shared/operators";
+import { operatorDisplayName } from "../../shared/operator-display";
 
 interface OperatorDirectoryProps {
   onBack: () => void;
@@ -129,6 +134,9 @@ export function OperatorDirectory({
 
   const confirmUse = async (op: OperatorHealthRow) => {
     if (usingRpc || operators === null) return;
+    // Name the operator the way the list does, so the modal copy matches the
+    // row the user tapped.
+    const label = operatorDisplayName(op.name, op.rpc);
     setUsingRpc(op.rpc);
     setConnectFlow({ op, phase: "checking" });
     try {
@@ -143,7 +151,7 @@ export function OperatorDirectory({
           op,
           phase: "result",
           ok: false,
-          message: `Can't connect to ${op.name} — ${block}`,
+          message: `Can't connect to ${label} — ${block}`,
         });
         return;
       }
@@ -154,7 +162,7 @@ export function OperatorDirectory({
           op,
           phase: "result",
           ok: false,
-          message: `Couldn't connect to ${op.name} — it's unreachable or on a different chain.`,
+          message: `Couldn't connect to ${label} — it's unreachable or on a different chain.`,
         });
         return;
       }
@@ -179,7 +187,7 @@ export function OperatorDirectory({
         op,
         phase: "result",
         ok: true,
-        message: `Connected to ${op.name}.`,
+        message: `Connected to ${label}.`,
       });
       setReloadKey((k) => k + 1);
     } finally {
@@ -338,7 +346,10 @@ export function OperatorDirectory({
                           : "on automatic operator selection"}
                         . Connect to{" "}
                         <strong style={{ color: "var(--fg-100)" }}>
-                          {connectFlow.op.name}
+                          {operatorDisplayName(
+                            connectFlow.op.name,
+                            connectFlow.op.rpc,
+                          )}
                         </strong>
                         ? The wallet runs a health &amp; security check first.
                       </div>
@@ -370,7 +381,10 @@ export function OperatorDirectory({
                     >
                       Running a health &amp; security check on{" "}
                       <strong style={{ color: "var(--fg-100)" }}>
-                        {connectFlow.op.name}
+                        {operatorDisplayName(
+                          connectFlow.op.name,
+                          connectFlow.op.rpc,
+                        )}
                       </strong>
                       …
                     </div>
@@ -420,7 +434,12 @@ export function OperatorDirectory({
         {/* 2. Reported attributes — developer-only capability telemetry. */}
         {devMode && (
         <Section
-          title="Reported attributes"
+          title={
+            <span>
+              Reported attributes
+              <DevBadge />
+            </span>
+          }
           meta={capSummary.length ? `${capSummary.length} surfaces` : undefined}
           open={open === "attrs"}
           onToggle={() => setOpen((p) => (p === "attrs" ? null : "attrs"))}
@@ -498,7 +517,8 @@ export function OperatorDirectory({
           >
             Each chip on an operator row decodes a signal the wallet collected
             from its probe round-trip. Most are advisory — the wallet's RPC
-            dispatcher already routes around offline / untrusted operators.
+            dispatcher skips offline / untrusted operators when another is
+            available.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {OPERATOR_RISK_LEGEND.filter(
@@ -538,49 +558,10 @@ export function OperatorDirectory({
   );
 }
 
-/** One of the four collapsible buttons. Closed by default; the chevron
- *  swaps right → down when open (same idiom as ClusterPicker). */
-export function Section({
-  title,
-  meta,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  meta?: string | undefined;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        style={sectionBtn(open)}
-      >
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {title}
-          {meta !== undefined && (
-            <span
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 10,
-                color: "var(--fg-400)",
-              }}
-            >
-              {meta}
-            </span>
-          )}
-        </span>
-        <Icon name={open ? "chev-d" : "chev"} size={13} />
-      </button>
-      {open && <div style={{ padding: "10px 12px 2px" }}>{children}</div>}
-    </div>
-  );
-}
+// `Section` (and its `sectionBtn` style) moved to components/Section so the
+// Help page can use it without a page-to-page import. Re-exported here so every
+// existing importer of this module keeps resolving.
+export { Section };
 
 const pickerUseBtn: CSSProperties = {
   padding: "5px 10px",
@@ -660,6 +641,9 @@ function OperatorAccordionRow({
   const badges = classifyOperatorRisk(toRiskInput(op));
   const danger = !op.trustedGenesis || !op.ok;
   const host = op.rpc.replace(/^https?:\/\//, "");
+  // Absent/placeholder region → the tag is omitted entirely, not blanked.
+  const region = displayableRegion(op.region);
+  const displayName = operatorDisplayName(op.name, op.rpc);
   // Plain-language status shown to every user (the host/latency line below is
   // developer-only). Quarantined = the operator self-reported a checkpoint
   // state-root mismatch and refuses RPC, so it must not be chosen.
@@ -721,10 +705,33 @@ function OperatorAccordionRow({
                 flexShrink: 0,
               }}
             />
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{op.name}</span>
-            <span style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
-              {op.region}
-            </span>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{displayName}</span>
+            {/* "You are talking to your own machine" is worth seeing at a
+                glance, and it is the standing counter to the social attack: a
+                user who was talked into this sees the marker on every open, not
+                only once during setup. */}
+            {isLoopbackRpc(op.rpc) && (
+              <span
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  color: "var(--gold)",
+                  border: "1px solid var(--gold)",
+                  borderRadius: 4,
+                  padding: "1px 4px",
+                  flexShrink: 0,
+                }}
+              >
+                LOCAL
+              </span>
+            )}
+            {region !== null && (
+              <span style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
+                {region}
+              </span>
+            )}
           </span>
           {devMode && (
           <span
@@ -831,7 +838,17 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
         gap: 8,
       }}
     >
-      {devMode && <DetailKv k="endpoint" v={<Mono>{op.rpc}</Mono>} />}
+      {devMode && (
+        <DetailKv
+          k={
+            <>
+              endpoint
+              <DevBadge />
+            </>
+          }
+          v={<Mono>{op.rpc}</Mono>}
+        />
+      )}
       <DetailKv
         k="Chain"
         title={devMode ? (op.observedGenesis ?? undefined) : undefined}
@@ -848,12 +865,33 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
       {devMode &&
         (op.ok ? (
           <>
-            <DetailKv k="chain id" v={<Mono>{op.chainIdDec ?? "—"}</Mono>} />
-            <DetailKv k="latency" v={<Mono>{op.latencyMs}ms</Mono>} />
+            <DetailKv
+              k={
+                <>
+                  chain id
+                  <DevBadge />
+                </>
+              }
+              v={<Mono>{op.chainIdDec ?? "—"}</Mono>}
+            />
+            <DetailKv
+              k={
+                <>
+                  latency
+                  <DevBadge />
+                </>
+              }
+              v={<Mono>{op.latencyMs}ms</Mono>}
+            />
           </>
         ) : (
           <DetailKv
-            k="probe"
+            k={
+              <>
+                probe
+                <DevBadge />
+              </>
+            }
             v={<span style={{ color: "var(--err)" }}>{op.reason}</span>}
           />
         ))}
@@ -870,6 +908,7 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
         }}
       >
         Reported surfaces
+        <DevBadge />
       </div>
       {surfaces.length === 0 ? (
         <Muted>
@@ -957,8 +996,8 @@ function LegendEntry({
               display: "flex",
               alignItems: "center",
               gap: 4,
-              background: "rgba(220,80,80,0.12)",
-              border: "1px solid rgba(220,80,80,0.4)",
+              background: "rgba(var(--err-glow), 0.12)",
+              border: "1px solid rgba(var(--err-glow), 0.4)",
               borderRadius: 4,
               padding: "1px 5px",
               cursor: "pointer",
@@ -990,15 +1029,18 @@ function LegendEntry({
           style={{
             marginTop: 6,
             padding: "6px 8px",
-            background: "rgba(220,80,80,0.06)",
-            border: "1px solid rgba(220,80,80,0.2)",
+            background: "rgba(var(--err-glow), 0.06)",
+            border: "1px solid rgba(var(--err-glow), 0.2)",
             borderRadius: 6,
             display: "flex",
             flexDirection: "column",
             gap: 3,
           }}
         >
-          {affected.map((op) => (
+          {affected.map((op) => {
+            const region = displayableRegion(op.region);
+            const displayName = operatorDisplayName(op.name, op.rpc);
+            return (
             <div
               key={op.rpc}
               style={{
@@ -1009,7 +1051,7 @@ function LegendEntry({
                 fontSize: 10.5,
               }}
             >
-              <span style={{ fontWeight: 600 }}>{op.name}</span>
+              <span style={{ fontWeight: 600 }}>{displayName}</span>
               <span
                 style={{
                   fontFamily: "var(--f-mono)",
@@ -1017,10 +1059,12 @@ function LegendEntry({
                   color: "var(--fg-400)",
                 }}
               >
-                {op.region} · {op.rpc.replace(/^https?:\/\//, "")}
+                {region !== null && `${region} · `}
+                {op.rpc.replace(/^https?:\/\//, "")}
               </span>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -1038,13 +1082,13 @@ function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
         : "var(--fg-300)";
   const bg =
     badge.severity === "err"
-      ? "rgba(220,80,80,0.12)"
+      ? "rgba(var(--err-glow), 0.12)"
       : badge.severity === "warn"
         ? "rgba(220,180,80,0.12)"
         : "rgba(120,160,220,0.08)";
   const borderColour =
     badge.severity === "err"
-      ? "rgba(220,80,80,0.4)"
+      ? "rgba(var(--err-glow), 0.4)"
       : badge.severity === "warn"
         ? "rgba(220,180,80,0.4)"
         : "rgba(120,160,220,0.3)";
@@ -1074,7 +1118,7 @@ function DetailKv({
   v,
   title,
 }: {
-  k: string;
+  k: ReactNode;
   v: ReactNode;
   title?: string | undefined;
 }) {
@@ -1177,23 +1221,6 @@ function summariseCapabilities(
         b.available - a.available || a.surface.localeCompare(b.surface),
     );
 }
-
-const sectionBtn = (open: boolean): CSSProperties => ({
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid var(--fg-700)",
-  background: open ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.04)",
-  color: "var(--fg-100)",
-  fontFamily: "var(--f-sans)",
-  fontSize: 13,
-  fontWeight: 500,
-  cursor: "pointer",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 8,
-});
 
 const NAV_BTN: CSSProperties = {
   width: "100%",

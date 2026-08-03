@@ -11,6 +11,7 @@ import type { CSSProperties } from "react";
 
 import { Modal } from "./Modal";
 import { formatLythoshiAsLyth } from "./RewardCard";
+import type { SubmitFailure } from "../submit-failure";
 
 /**
  * The fund-relevant disclosure (the safety anchor), extracted as a pure helper
@@ -43,7 +44,10 @@ export interface AutoCompoundConfirmModalProps {
    *  (→ an honest generic note, never a fabricated number). */
   feeLythDisplay: string | null;
   submitting: boolean;
-  error: string | null;
+  /** Classified failure of the previous attempt, or null. Its presence is also
+   *  what turns the primary button into the retry affordance — the parent treats
+   *  the next press as a retry of the attempt this describes. */
+  error: SubmitFailure | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -86,7 +90,14 @@ export function AutoCompoundConfirmModal({
           </span>
         </div>
 
-        {error !== null && <div style={errBox}>{error}</div>}
+        {error !== null && (
+          <div style={errBox}>
+            {error.headline !== null && (
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>{error.headline}</div>
+            )}
+            {error.body}
+          </div>
+        )}
 
         <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
           <button
@@ -103,7 +114,17 @@ export function AutoCompoundConfirmModal({
             disabled={submitting}
             style={{ ...primaryBtn, flex: 1, opacity: submitting ? 0.6 : 1 }}
           >
-            {submitting ? "Submitting…" : enabling ? "Enable" : "Disable"}
+            {/* With an error showing, this control IS the retry affordance —
+                same wording Send and Stake use, rather than a third button. The
+                parent reads the same `error !== null` to decide the next submit
+                carries the key instead of minting a fresh one. */}
+            {submitting
+              ? "Submitting…"
+              : error !== null
+                ? "Try again"
+                : enabling
+                  ? "Enable"
+                  : "Disable"}
           </button>
         </div>
       </div>
@@ -133,9 +154,9 @@ const errBox: CSSProperties = {
   fontSize: 11,
   color: "var(--err)",
   padding: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
   borderRadius: 8,
-  background: "rgba(220,80,80,0.08)",
+  background: "rgba(var(--err-glow), 0.08)",
 };
 
 const ghostBtn: CSSProperties = {

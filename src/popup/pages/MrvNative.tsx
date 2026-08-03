@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgNativeMarketOrderBookDeltas,
@@ -389,8 +390,9 @@ export function MrvNative({
 
   // Whole route is developer-only — the RISC-V contract console (bytecode,
   // raw lythoshi, RPC metadata, proof transcripts) is technical tooling and
-  // is off the LYTH-only fee-display posture. Reached only via the (now
-  // dev-gated) RISC-V menu entry; the route is gated too as defense-in-depth.
+  // is off the LYTH-only fee-display posture. Two entries reach it, both
+  // dev-gated: the Settings → Developer tools card and the RISC-V menu row.
+  // The route mount itself is NOT gated, so this check is the real backstop.
   if (!devMode) {
     return (
       <>
@@ -489,6 +491,7 @@ export function MrvNative({
           >
             MRV
           </span>
+          <DevBadge />
         </div>
         <div style={{ width: 36 }} />
       </div>
@@ -1626,8 +1629,8 @@ const errorBox: CSSProperties = {
   marginTop: 10,
   padding: "8px 10px",
   borderRadius: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
   color: "var(--err)",
   fontFamily: "var(--f-mono)",
   fontSize: 10.5,
@@ -1666,8 +1669,8 @@ const receiptBox: CSSProperties = {
 
 const receiptErrorBox: CSSProperties = {
   ...receiptBox,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
 };
 
 const receiptTitle: CSSProperties = {

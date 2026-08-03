@@ -1,6 +1,13 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { applyTheme, readTheme } from "./theme";
+import { armUnhandledRejectionDetector } from "../shared/dev-rejection-detector";
+
+// Dev builds only, and a detector rather than a handler — it reports a missing
+// `catch` to the console and changes nothing the user sees. Armed before the
+// first render so it covers mount-time effects. This entry serves all three
+// surfaces (popup, side panel, fullscreen), so one call covers them all.
+armUnhandledRejectionDetector();
 
 // Runtime mode discriminator. The earlier viewport heuristic
 // (h > 700 || w > 460) failed on shorter browser windows: a 720-pixel

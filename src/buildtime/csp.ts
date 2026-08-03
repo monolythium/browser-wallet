@@ -15,11 +15,63 @@ export interface EndpointLike {
   ws_url?: string;
 }
 
+/* CodeQL flags these two entries as regex-unsafe hostnames
+ * (js/incomplete-hostname-regexp). It is a false positive, measured on four
+ * independent grounds, each sufficient alone:
+ *
+ *   1. These are CSP directive values, never regex sources.
+ *   2. The flow CodeQL follows reads web_accessible_resources — a different
+ *      field of the same parsed manifest — so these values never arrive.
+ *   3. globToRegExp escapes '.', '[', ']' and the rest before compiling.
+ *   4. That call is gated on a wildcard no shipped resource contains, so it
+ *      does not run.
+ *
+ * Do NOT "fix" this by escaping these strings: a backslash here produces an
+ * invalid CSP source expression, which Chrome ignores while keeping the rest
+ * of connect-src intact — so the host simply loses its only permitted origin
+ * and the About page's SDK check and live registry read fail silently.
+ *
+ * Do NOT narrow what assertPopupOnlyInvariant receives either. It is given the
+ * full manifest text deliberately, so it judges the text that ships; passing it
+ * the parsed array would clear the alert by weakening the check.
+ */
 /** Hosts the wallet legitimately reaches at runtime besides the fleet:
  *  the About page's SDK update check + live registry-genesis read. */
 const STATIC_HOSTS = [
   "https://registry.npmjs.org", // sdk-latest.ts
   "https://raw.githubusercontent.com", // live-registry.ts (via the SDK)
+] as const;
+
+/**
+ * Loopback sources — the P6-001 re-open, and its entire extent.
+ *
+ * P6-001 exists so that a popup XSS cannot `fetch` the decrypted seed to an
+ * arbitrary host. It was re-opened once, narrowly, to let a user point the
+ * wallet at a node on their OWN MACHINE. Remote hosts, an `https:` widening and
+ * any wildcard host were asked about and DECLINED — see
+ * _dev-notes/browser-wallet/2026-08-02_loopback-optin-audit-note.md.
+ *
+ * READ THIS BEFORE ADDING AN ENTRY. These ship to EVERY user, opted in or not:
+ * a `connect-src` is a static manifest directive and there is no runtime API to
+ * widen it, so the wallet's own loopback toggle gates only whether the wallet
+ * will DIAL such a host — it is not, and cannot be, the boundary. Anything added
+ * here is permitted for everyone. `buildtime/loopback-allowlist-invariant.ts`
+ * asserts this list stays exactly these six shapes.
+ *
+ * Three hosts because the wallet stores and dials what the user typed rather
+ * than normalising: a node may bind only `127.0.0.1` or only `[::1]`, so
+ * rewriting one to the other would make a correctly-running node unreachable.
+ * `http:`/`ws:` only — a local node serves no TLS. Port wildcards because a node
+ * runs where its owner puts it, and pinning a port buys nothing: anyone able to
+ * bind a loopback port can bind the pinned one.
+ */
+export const LOOPBACK_SOURCES = [
+  "http://localhost:*",
+  "http://127.0.0.1:*",
+  "http://[::1]:*",
+  "ws://localhost:*",
+  "ws://127.0.0.1:*",
+  "ws://[::1]:*",
 ] as const;
 
 /** WS origin for an endpoint, mirroring ws-client.ts `deriveWsUrl`: an explicit
@@ -44,6 +96,7 @@ export function buildExtensionCsp(endpoints: readonly EndpointLike[]): string {
     connect.add(wsOrigin(ep)); // ws://<ip>:8546
   }
   for (const host of STATIC_HOSTS) connect.add(host);
+  for (const source of LOOPBACK_SOURCES) connect.add(source);
   return [
     "script-src 'self'",
     "object-src 'self'",

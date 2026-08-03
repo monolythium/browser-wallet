@@ -16,6 +16,8 @@ import {
   chainHealthMonoscanLink,
   chainHealthPresentation,
   chainHealthStallVerdict,
+  classifyHeadReading,
+  headRegressionNote,
   seedStallBaseline,
   HEALTH_TICK_MS,
   STALL_THRESHOLD_MS,
@@ -1235,13 +1237,18 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       color: "var(--err)",
       tappable: true,
     });
-    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
+    expect(chainHealthPresentation("regenesis").explanation).toMatch(
       /genesis|operators|network/i,
     );
     // The "check your balance on Monoscan" CTA lives on the balance card, not
-    // the banner tooltip — the banner taps through to Operators.
-    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
-      /Click to see operators/,
+    // the banner — the banner taps through to Operators. The tap instruction is
+    // now `action`, not part of the explanation: the explanation renders on all
+    // nine banner instances, eight of which cannot be tapped at all.
+    expect(chainHealthPresentation("regenesis").action).toMatch(
+      /operator status/i,
+    );
+    expect(chainHealthPresentation("regenesis").explanation).not.toMatch(
+      /tap to|click to|see operator/i,
     );
   });
 
@@ -1249,8 +1256,8 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(chainHealthPresentation("regenesis").color).toBe("var(--err)");
     expect(chainHealthPresentation("untrusted").color).toBe("var(--err)");
     // distinct copy: all-operators vs this-operator
-    expect(chainHealthPresentation("regenesis").tooltip).toMatch(/^All operators/);
-    expect(chainHealthPresentation("untrusted").tooltip).toMatch(/^This operator/);
+    expect(chainHealthPresentation("regenesis").explanation).toMatch(/^All operators/);
+    expect(chainHealthPresentation("untrusted").explanation).toMatch(/^This operator/);
   });
 
   it("makes the not-online states tappable, live + loading not", () => {
@@ -1272,7 +1279,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       "loading",
       "reconnecting",
     ] as const) {
-      expect(chainHealthPresentation(k).tooltip.length).toBeGreaterThan(0);
+      expect(chainHealthPresentation(k).explanation.length).toBeGreaterThan(0);
     }
   });
 
@@ -1297,7 +1304,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.color).not.toBe("var(--ok)"); // never the LIVE token
     expect(pres.tappable).toBe(false);
     expect(pres.label).not.toBe("LIVE");
-    expect(pres.tooltip.length).toBeGreaterThan(0);
+    expect(pres.explanation.length).toBeGreaterThan(0);
   });
 
   it("presents quarantined as the red 'OPERATOR QUARANTINED' tappable banner", () => {
@@ -1305,7 +1312,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.label).toBe("OPERATOR QUARANTINED");
     expect(pres.color).toBe("var(--err)");
     expect(pres.tappable).toBe(true);
-    expect(pres.tooltip.length).toBeGreaterThan(0);
+    expect(pres.explanation.length).toBeGreaterThan(0);
   });
 });
 
@@ -1372,6 +1379,201 @@ describe("seedStallBaseline (STALLED speedup B2 — window survives mount/popup 
     // advancedAtMs in the future (garbage / clock skew) is rejected → no false stall
     expect(seedStallBaseline({ hex: "0xdef", advancedAtMs: 99_999 }, "0xdef", 20_000, 15_000)).toEqual(fresh);
   });
+
+  // W-1: a reopen that lands on the LOWER backend must not restart the stall
+  // window. Hex equality alone let the gateway flip do exactly that — the head
+  // "changed", so the baseline reset and the chip went LIVE on an unmoved chain.
+  it("W-1: current head LOWER than the stored one carries the advance time (no fresh baseline)", () => {
+    const base = seedStallBaseline(
+      { hex: "0x3547a", advancedAtMs: 0 },
+      "0x0",
+      20_000,
+      15_000,
+    );
+    expect(base.lastBlockObservedAt).toBe(0); // carried, NOT reset to now
+    expect(base.stalled).toBe(true);
+    expect(base.lastBlockHex).toBe("0x3547a"); // keeps the HIGHER head
+  });
+
+  it("W-1: a genuinely higher head still takes a fresh baseline", () => {
+    const base = seedStallBaseline(
+      { hex: "0x3547a", advancedAtMs: 0 },
+      "0x3547b",
+      20_000,
+      15_000,
+    );
+    expect(base).toEqual({
+      lastBlockHex: "0x3547b",
+      lastBlockObservedAt: 20_000,
+      stalled: false,
+    });
+  });
+
+  // CHARACTERISATION — pins the KNOWN GAP, it does not endorse it. An absurd
+  // stored head (u64 max, which `isWellFormedBlockNumberHex` accepts) is trusted
+  // on its own word and sits above every real reading, so the chip stays STALLED
+  // and cannot recover. Nothing on the path bounds a reading's magnitude.
+  //
+  // If you are here because this test went red, you changed that on purpose —
+  // check the two traps in `seedStallBaseline`'s doc comment before updating it,
+  // and confirm the four W-1 properties above still hold.
+  it("KNOWN GAP: an implausibly high stored head is trusted and pins STALLED", () => {
+    const absurd = "0xffffffffffffffff"; // u64 max — passes well-formedness
+    const base = seedStallBaseline(
+      { hex: absurd, advancedAtMs: 0 },
+      "0x3547a", // the real head
+      20_000,
+      15_000,
+    );
+    expect(base.lastBlockHex).toBe(absurd);
+    expect(base.stalled).toBe(true);
+    // And the real head can never clear it: seeded as the mark, every genuine
+    // reading below it classifies as a decrease rather than progress.
+    expect(classifyHeadReading("0x3547a", BigInt(absurd))).toEqual({
+      kind: "decreased",
+      height: 218234n,
+    });
+  });
+});
+
+describe("classifyHeadReading (W-1 — only a HIGHER head is progress)", () => {
+  it("adopts the first reading as the baseline, whatever it is", () => {
+    expect(classifyHeadReading("0x3547a", null)).toEqual({
+      kind: "advanced",
+      height: 218234n,
+    });
+    // Even zero: on first contact the wallet cannot know the backend is wrong.
+    expect(classifyHeadReading("0x0", null)).toEqual({
+      kind: "advanced",
+      height: 0n,
+    });
+  });
+
+  it("calls a strictly higher head advanced", () => {
+    expect(classifyHeadReading("0x3547b", 218234n)).toEqual({
+      kind: "advanced",
+      height: 218235n,
+    });
+  });
+
+  it("calls an equal head unchanged, not advanced", () => {
+    expect(classifyHeadReading("0x3547a", 218234n)).toEqual({
+      kind: "unchanged",
+      height: 218234n,
+    });
+  });
+
+  // THE BUG. The gateway round-robins onto a height-0 backend; `!==` scored
+  // that as progress and reset the stall clock, so a chain frozen for four days
+  // reported LIVE.
+  it("calls a LOWER head decreased — never advanced", () => {
+    expect(classifyHeadReading("0x0", 218234n)).toEqual({
+      kind: "decreased",
+      height: 0n,
+    });
+  });
+
+  it("ignores leading zeros rather than seeing a change", () => {
+    expect(classifyHeadReading("0x0003547a", 218234n)).toEqual({
+      kind: "unchanged",
+      height: 218234n,
+    });
+  });
+
+  it("reports an unparsable reading rather than throwing", () => {
+    for (const bad of ["0x", "0xZZZ", "", null, undefined, 5]) {
+      expect(classifyHeadReading(bad, 218234n)).toEqual({ kind: "unparsable" });
+    }
+  });
+});
+
+describe("headRegressionNote (W-1 developer diagnostic)", () => {
+  it("is absent outside developer mode, however many regressions were seen", () => {
+    expect(headRegressionNote(0, false)).toBeNull();
+    expect(headRegressionNote(42, false)).toBeNull();
+  });
+
+  it("is absent at zero — a healthy chain shows nothing", () => {
+    expect(headRegressionNote(0, true)).toBeNull();
+  });
+
+  it("reports the count once a regression has been observed", () => {
+    expect(headRegressionNote(1, true)).toContain("1 reading");
+    expect(headRegressionNote(7, true)).toContain("7 readings");
+  });
+
+  // The counter is the one signal that separates "the chain is frozen" from
+  // "one backend is behind", so the note must not assert which — both causes
+  // are consistent with what the wallet can see from a single URL.
+  it("names both possible causes rather than asserting one", () => {
+    const note = headRegressionNote(3, true)!;
+    expect(note).toMatch(/lagging backend/i);
+    expect(note).toMatch(/reorg/i);
+  });
+});
+
+describe("W-1 composition — the tick's advance + stall decision over a sequence", () => {
+  /** Mirrors what the poll effect composes: classify against the high-water
+   *  mark, reset the clock only on an advance, else consult the stall verdict.
+   *  Returns the chip verdict at each 5s tick. */
+  const runTicks = (heads: ReadonlyArray<string>): string[] => {
+    let mark: bigint | null = null;
+    let observedAt = 0;
+    let state = "live";
+    return heads.map((hex, i) => {
+      const now = i * HEALTH_TICK_MS;
+      const r = classifyHeadReading(hex, mark);
+      if (r.kind === "unparsable") return state;
+      if (r.kind === "advanced") {
+        mark = r.height;
+        observedAt = now;
+        state = "live";
+      } else if (chainHealthStallVerdict(now, observedAt, STALL_THRESHOLD_MS)) {
+        state = "stalled";
+      }
+      return state;
+    });
+  };
+
+  // The §3.6 obligation: the fix must be invisible on a healthy chain.
+  it("a strictly ascending head stays LIVE on every tick", () => {
+    const heads = ["0x1", "0x2", "0x3", "0x4", "0x5", "0x6"];
+    expect(runTicks(heads)).toEqual(Array(heads.length).fill("live"));
+  });
+
+  // The measured gateway behaviour: strict per-request alternation between the
+  // frozen tip and a height-0 backend. Before W-1 this read LIVE on every tick.
+  it("the alternating tip/zero gateway reaches STALLED and stays there", () => {
+    const heads = [
+      "0x3547a", "0x0", "0x3547a", "0x0",
+      "0x3547a", "0x0", "0x3547a", "0x0",
+    ];
+    const verdicts = runTicks(heads);
+    expect(verdicts[0]).toBe("live"); // first reading adopts the baseline
+    expect(verdicts[3]).toBe("stalled"); // 3 ticks x 5s == the 15s threshold
+    expect(verdicts.slice(3)).toEqual(Array(5).fill("stalled")); // and stays
+  });
+
+  it("a decrease does not reset the stall clock", () => {
+    // Tick 0 sets the mark; every later tick is a decrease or unchanged, so the
+    // clock never restarts and the verdict lands exactly on the threshold.
+    expect(runTicks(["0x3547a", "0x0", "0x0", "0x0"])).toEqual([
+      "live",
+      "live",
+      "live",
+      "stalled",
+    ]);
+  });
+
+  it("a real advance after a stall clears it", () => {
+    expect(runTicks(["0x3547a", "0x0", "0x0", "0x0", "0x3547b"])).toEqual([
+      "live",
+      "live",
+      "live",
+      "stalled",
+      "live",
+    ]);
+  });
 });
 
 describe("chainHealthInlineHint (A/R1 — explanation visible inline, not hover-only)", () => {
@@ -1390,15 +1592,83 @@ describe("chainHealthInlineHint (A/R1 — explanation visible inline, not hover-
       "loading",
     ] as const) {
       const hint = chainHealthInlineHint(k);
-      expect(hint).toBe(chainHealthPresentation(k).tooltip);
+      expect(hint).toBe(chainHealthPresentation(k).explanation);
       expect((hint ?? "").length).toBeGreaterThan(0);
     }
   });
 
   it("the inline hint is the rendered explanation, not just an attribute — STALLED case", () => {
     expect(chainHealthInlineHint("stalled")).toBe(
-      "The chain hasn't advanced for a while. Tap to review your operators.",
+      "The block height hasn't risen for a while, so the wallet can't confirm your balance is current.",
     );
+  });
+
+  // W-1 / §A: the two "wrong chain" states describe DIFFERENT causes, and the
+  // untrusted copy used to describe the genesis one — i.e. the other state's.
+  // classifyNoOperatorReason returns "untrusted" only for a chain-id mismatch
+  // and "regenesis" for a genesis-hash mismatch, so the copy must not swap them.
+  it("untrusted names the chain id; regenesis names the genesis hash", () => {
+    const untrusted = chainHealthPresentation("untrusted").explanation;
+    expect(untrusted).toMatch(/chain id/i);
+    expect(untrusted).not.toMatch(/genesis/i);
+
+    const regenesis = chainHealthPresentation("regenesis").explanation;
+    expect(regenesis).toMatch(/genesis/i);
+  });
+
+  // The remedy the shipped build cannot perform: one host in the registry, and
+  // the RPC-override editor is developer-gated. Tree-wide enforcement lives in
+  // buildtime/operator-remedy-invariant; this pins the chain-state copy itself.
+  it("offers no operator-switching remedy in any state's copy", () => {
+    for (const k of [
+      "live",
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+      "reconnecting",
+      "loading",
+    ] as const) {
+      const p = chainHealthPresentation(k);
+      expect(p.explanation).not.toMatch(/switch/i);
+      expect(p.action ?? "").not.toMatch(/switch/i);
+    }
+  });
+
+  // The split's whole point: the hint reaches screens where nothing is
+  // tappable, so it must never carry a tap instruction for ANY state.
+  it("never carries a tap instruction — that is `action`, rendered only where tappable", () => {
+    for (const k of [
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+      "reconnecting",
+      "loading",
+    ] as const) {
+      expect(chainHealthInlineHint(k)).not.toMatch(/tap to|click to/i);
+    }
+  });
+
+  // Every state the banner taps through to must say what tapping does; the
+  // states with no tap target must not pretend there is one.
+  it("action is present exactly for the tappable states", () => {
+    for (const k of [
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+    ] as const) {
+      expect(chainHealthPresentation(k).tappable).toBe(true); // precondition
+      expect(chainHealthPresentation(k).action).toBeTruthy();
+    }
+    for (const k of ["live", "reconnecting", "loading"] as const) {
+      expect(chainHealthPresentation(k).tappable).toBe(false); // precondition
+      expect(chainHealthPresentation(k).action).toBeNull();
+    }
   });
 });
 

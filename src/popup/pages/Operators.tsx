@@ -11,6 +11,8 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
+import { LoopbackToggle } from "../components/LoopbackToggle";
 import { Modal } from "../components/Modal";
 import { useFeature } from "../hooks/useFeature";
 import {
@@ -347,11 +349,16 @@ export function Operators({
           style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Monolythium Testnet operators
+          <DevBadge />
         </div>
         <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
+        {/* Its own flag, not a consequence of developer mode: two deliberate
+            acts is what makes "paste this URL" a multi-step ask rather than a
+            single tap. Placed first so it is read before the address field. */}
+        <LoopbackToggle style={{ marginBottom: 10 }} />
         {!loaded ? (
           <div style={{ padding: 18, color: "var(--fg-300)", fontSize: 12 }}>
             Loading…
@@ -448,8 +455,8 @@ export function Operators({
                 className="ext-card"
                 style={{
                   padding: "10px 12px",
-                  background: "rgba(220,80,80,0.08)",
-                  border: "1px solid rgba(220,80,80,0.4)",
+                  background: "rgba(var(--err-glow), 0.08)",
+                  border: "1px solid rgba(var(--err-glow), 0.4)",
                   fontSize: 12,
                   color: "var(--err)",
                 }}

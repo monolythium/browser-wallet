@@ -137,7 +137,65 @@ vi.mock("./tx-mldsa.js", () => ({
       innerSighashHex: "0x" + "b".repeat(64),
     };
   }),
+  // The idempotent variant: identical, plus the between-sign-and-broadcast
+  // hook. It records what the binding map looked like at the MOMENT the hook
+  // returned, which is how the "written BEFORE broadcast" ordering is asserted
+  // rather than inferred.
+  submitMlDsaTxWithHooks: vi.fn(
+    async (
+      args: Record<string, unknown>,
+      _boundVaultId: string,
+      onBuilt?: (b: {
+        signedTxWireHex: string;
+        innerTxHashHex: string;
+      }) => Promise<void>,
+    ) => {
+      submitMlDsaCalls.push(args);
+      if (onBuilt !== undefined) {
+        await onBuilt({
+          signedTxWireHex: SIGNED_WIRE_HEX,
+          innerTxHashHex: SUBMITTED_TX_HASH,
+        });
+        bindingsAtBroadcast = JSON.parse(
+          JSON.stringify(storageLocal["mono.send.binding.v1"] ?? null),
+        ) as unknown;
+      }
+      if (submitFailure !== null) {
+        throw submitFailure;
+      }
+      return {
+        txHash: SUBMITTED_TX_HASH,
+        via: "mock-operator",
+        innerSighashHex: "0x" + "b".repeat(64),
+      };
+    },
+  ),
+  // Re-broadcast of stored bytes. Counts calls so a replay can be told apart
+  // from a fresh submit, and echoes the hash it was given — the real helper
+  // returns the ORIGINAL hash on `already-known`, which is the property the
+  // replay path depends on.
+  broadcastPlaintextTransaction: vi.fn(
+    async (wireHex: string, expectedTxHashHex: string) => {
+      rebroadcasts.push(wireHex);
+      return { txHash: expectedTxHashHex, via: "mock-operator-replay" };
+    },
+  ),
+  // The real structural predicate, not a stub: this mock replaces the module
+  // wholesale, so omitting it would make the SW call `undefined` on the submit
+  // failure path. Faithful here means an unmarked error reads as a genuine
+  // decline, which is what the failure tests below rely on.
+  bytesMayBeLive: (err: unknown) =>
+    !!err &&
+    typeof err === "object" &&
+    (err as { bytesMayBeLive?: boolean }).bytesMayBeLive === true,
 }));
+
+const SIGNED_WIRE_HEX = "0x" + "f1".repeat(32);
+/** Snapshot of the binding map taken inside the submit hook, i.e. after the
+ *  binding was written and before the broadcast ran. */
+let bindingsAtBroadcast: unknown = null;
+/** Wire bytes handed to every re-broadcast, in order. */
+const rebroadcasts: string[] = [];
 
 const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
 const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
@@ -370,6 +428,24 @@ let correctElevatedPassword = "correct-horse-battery-staple";
 // null (no multisig vault) so it is inert for every non-multisig test.
 let multisigMetaForTest: unknown = null;
 
+// Per-vault password-op seams. Set a message to make the keystore call throw,
+// which is how the vault-remove / vault-export-seed handler tests drive the
+// wrong-password vs structural-refusal split.
+let removeVaultThrows: string | null = null;
+let exportSeedThrows: string | null = null;
+// Same seam for the unlock path, so the structural-vs-wrong-password split can
+// be driven at keystore-unlock / keystore-reset (both call unlockContainerV4).
+let unlockThrows: string | null = null;
+// C9/C10 seam: throw an error MARKED as raised downstream of a successful
+// password check, the way removeVaultV4 marks a failed post-AEAD write.
+let removeVaultThrowsPostVerification: string | null = null;
+const REMOVE_VAULT_RESULT = {
+  removedId: "vault-removed",
+  newActiveVaultId: "vault-successor",
+  newActiveAddress: "0x00000000000000000000000000000000000000aa",
+  affectedMultisigLabels: [] as string[],
+};
+
 // M2 harness: governance-execute re-verifies co-signer signatures over the live
 // governance-proposal digest, which needs live ML-DSA sigs. This hoisted holder
 // lets each test control how many approvals re-verify (the mock reads it).
@@ -388,19 +464,32 @@ const mockUpdateSignCount = vi.hoisted(() =>
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
   clearSlhDsaBackupV4: mockClearSlhDsaBackupV4,
+  // H1 — the wipe serialises against the container on this key. Returns the
+  // real key string so the wipe contends on the same lock the keystore writers
+  // use, rather than an isolated one that would make the test vacuous.
+  vaultContainerLockKey: vi.fn(() => "mono.vaults.v4"),
+  // C9/C10 — real implementation, not a stub: the whole point is that the
+  // decision follows the MARKER on the error, so a mock that always said false
+  // (or always true) would make these tests prove nothing.
+  isPostVerificationFailure: (err: unknown) =>
+    !!err &&
+    typeof err === "object" &&
+    (err as { postVerification?: boolean }).postVerification === true,
   hasContainerV4: vi.fn(async () => true),
   storedContainerNeedsRestoreV4: vi.fn(async () => false),
-  unlockContainerV4: vi.fn(async () => ({
-    address: DETERMINISTIC_ADDRESS,
-    vaultId: "v1",
-  })),
+  unlockContainerV4: vi.fn(async () => {
+    if (unlockThrows) throw new Error(unlockThrows);
+    return { address: DETERMINISTIC_ADDRESS, vaultId: "v1" };
+  }),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
   // T1-04(a) passkey-cap gate seams. Default-inert (null active vault).
   getActiveVaultIdV4: vi.fn(() => activePasskeyVaultId),
   readPasskeyStateV4: vi.fn(async () => passkeyStateForTest),
   updatePasskeyCredentialSignCountV4: mockUpdateSignCount,
-  verifyContainerPasswordV4: vi.fn(
-    async (pw: string) => pw === correctElevatedPassword,
+  verifyContainerPasswordV4: vi.fn(async (pw: string) =>
+    pw === correctElevatedPassword
+      ? { verified: true }
+      : { verified: false, structural: false },
   ),
   tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
@@ -416,6 +505,19 @@ vi.mock("./keystore-mldsa.js", () => ({
     address: DETERMINISTIC_ADDRESS,
   })),
   exportMnemonicV4: vi.fn(async () => ({ mnemonic: "" })),
+  exportMnemonicForVaultV4: vi.fn(async () => {
+    if (exportSeedThrows) throw new Error(exportSeedThrows);
+    return { mnemonic: "abandon ".repeat(23) + "art" };
+  }),
+  removeVaultV4: vi.fn(async () => {
+    if (removeVaultThrowsPostVerification) {
+      const err = new Error(removeVaultThrowsPostVerification);
+      (err as { postVerification?: boolean }).postVerification = true;
+      throw err;
+    }
+    if (removeVaultThrows) throw new Error(removeVaultThrows);
+    return REMOVE_VAULT_RESULT;
+  }),
   personalSignV4: vi.fn(() => new Uint8Array(65)),
   signTypedDataV4FromV4: vi.fn(() => new Uint8Array(65)),
   // Multisig-execute seams (used only by the multisig-execute handler test).
@@ -510,6 +612,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
   };
 });
 
+import { STORAGE_KEY_LOOPBACK_ALLOWED } from "../shared/loopback.js";
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import { deriveNativeMultisigAddress } from "../shared/native-multisig.js";
 import {
@@ -755,6 +858,10 @@ beforeEach(() => {
   // Non-multisig active vault by default — the multisig-execute tests set this
   // to a roster and it must not leak into later single-signer submit paths.
   multisigMetaForTest = null;
+  removeVaultThrows = null;
+  exportSeedThrows = null;
+  unlockThrows = null;
+  removeVaultThrowsPostVerification = null;
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -811,6 +918,147 @@ describe("keystore-status address privacy", () => {
 // keystore wipe-scope — default-deny (S6 #43 B2)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Send idempotency. The headline case is a worker that signed, broadcast,
+// recorded the nonce, and died BEFORE its reply landed: today's retry derives
+// max(committed, pending+1) = N+1 and broadcasts a SECOND VALID transaction.
+//
+// The key identifies one user CONFIRMATION. With one present, a repeat must
+// never re-derive or re-sign — it re-broadcasts the bytes already signed, or,
+// once those have landed, answers with the hash they produced.
+describe("send idempotency — a repeat of one confirmation never signs twice", () => {
+  const KEY = "confirm-abc";
+
+  function sendWith(key?: string) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0x000000000000000000000000000000000000dEaD",
+        valueWeiHex: "0x1",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        ...(key !== undefined ? { idempotencyKey: key } : {}),
+      },
+    }) as Promise<{ ok: boolean; txHash?: string; reason?: string }>;
+  }
+
+  beforeEach(() => {
+    bindingsAtBroadcast = null;
+    rebroadcasts.length = 0;
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  });
+
+  it("a repeat of the SAME confirmation does not sign again", async () => {
+    const first = await sendWith(KEY);
+    expect(first.ok).toBe(true);
+    const signsAfterFirst = submitMlDsaCalls.length;
+
+    const repeat = await sendWith(KEY);
+
+    expect(repeat.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(signsAfterFirst);
+    expect(repeat.txHash).toBe(first.txHash);
+  });
+
+  it("a DIFFERENT confirmation signs again — a genuine second send still works", async () => {
+    await sendWith(KEY);
+    const signsAfterFirst = submitMlDsaCalls.length;
+
+    const second = await sendWith("confirm-xyz");
+
+    expect(second.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(signsAfterFirst + 1);
+  });
+
+  it("the binding is written BEFORE the broadcast, not after", async () => {
+    await sendWith(KEY);
+    // Snapshot taken inside the hook, i.e. while the broadcast had not run.
+    const atBroadcast = bindingsAtBroadcast as Record<
+      string,
+      { wireHex: string }
+    > | null;
+    expect(atBroadcast).not.toBeNull();
+    expect(atBroadcast![KEY]!.wireHex).toBe(SIGNED_WIRE_HEX);
+  });
+
+  it("completion discards the wire bytes but keeps the hash", async () => {
+    const first = await sendWith(KEY);
+    const map = storageLocal["mono.send.binding.v1"] as Record<
+      string,
+      { wireHex: string; txHashHex: string }
+    >;
+    expect(map[KEY]!.wireHex).toBe("");
+    expect(map[KEY]!.txHashHex).toBe(first.txHash);
+  });
+
+  it("a repeat AFTER completion is answered without re-broadcasting", async () => {
+    await sendWith(KEY);
+    expect(rebroadcasts).toHaveLength(0);
+
+    await sendWith(KEY);
+
+    // Nothing left to broadcast — the answer came from the stored hash.
+    expect(rebroadcasts).toHaveLength(0);
+  });
+
+  it("a repeat before completion re-broadcasts the SAME bytes", async () => {
+    await sendWith(KEY);
+    // The digest the first send actually bound. READ rather than hard-coded, so
+    // this fixture cannot drift from whatever `submitTrackedTx` computes — and
+    // so this test keeps exercising the REPLAY path rather than silently
+    // becoming an old-record refusal.
+    const boundDigest = (
+      storageLocal["mono.send.binding.v1"] as Record<string, { digest?: string }>
+    )[KEY]!.digest;
+    // Put the binding back into the pre-completion state a dead worker would
+    // have left: bytes present, never completed. A worker that got this far had
+    // already written the digest, so it is part of that state.
+    (storageLocal["mono.send.binding.v1"] as Record<string, unknown>)[KEY] = {
+      nonceHex: "0x0",
+      wireHex: SIGNED_WIRE_HEX,
+      txHashHex: SUBMITTED_TX_HASH,
+      via: "",
+      ts: Date.now(),
+      digest: boundDigest,
+    };
+    const signsBefore = submitMlDsaCalls.length;
+
+    const repeat = await sendWith(KEY);
+
+    expect(repeat.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(signsBefore); // never re-signed
+    expect(rebroadcasts).toEqual([SIGNED_WIRE_HEX]); // the identical bytes
+    expect(repeat.txHash).toBe(SUBMITTED_TX_HASH); // the original hash
+  });
+
+  it("a FAILED broadcast drops the binding so a later attempt signs afresh", async () => {
+    submitFailure = new Error("no Monolythium Testnet operator accepted the broadcast");
+    const failed = await sendWith(KEY);
+    expect(failed.ok).toBe(false);
+
+    const map = storageLocal["mono.send.binding.v1"] as Record<string, unknown>;
+    expect(map[KEY]).toBeUndefined();
+
+    submitFailure = null;
+    const retryAfterFailure = await sendWith(KEY);
+    expect(retryAfterFailure.ok).toBe(true);
+  });
+
+  it("WITHOUT a key the path is unchanged — every send signs", async () => {
+    await sendWith();
+    const afterFirst = submitMlDsaCalls.length;
+    await sendWith();
+    expect(submitMlDsaCalls.length).toBe(afterFirst + 1);
+    expect(storageLocal["mono.send.binding.v1"]).toBeUndefined();
+  });
+});
+
 describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
   // The sensitive families (+ the vault entries) the wipe must remove, per the
   // audit durable-key inventory. All durable wallet keys are mono.*-prefixed.
@@ -838,6 +1086,29 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     expect(r.ok).toBe(true);
     for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
     expect(storageLocal["nonmono.keep"]).toBe("survives");
+  });
+
+  // The loopback opt-in decides whether the wallet will dial a node on this
+  // machine. A flag that survived a wipe would silently re-arm a custom dial for
+  // the next owner of the profile. It is stored in the LOCAL area under `mono.`
+  // precisely so the default-deny scan covers it with no key list to maintain —
+  // this pins that it actually does, on both paths.
+  it("both wipe paths clear the loopback opt-in", async () => {
+    for (const op of ["keystore-wipe-unauth", "keystore-reset"] as const) {
+      storageLocal[STORAGE_KEY_LOOPBACK_ALLOWED] = true;
+      const payload =
+        op === "keystore-wipe-unauth"
+          ? { confirmToken: "DELETE" }
+          : { password: "pw" };
+      const r = (await dispatchPopup({ kind: "popup", op, payload })) as {
+        ok: boolean;
+      };
+      expect(r.ok, `${op} did not succeed`).toBe(true);
+      expect(
+        storageLocal[STORAGE_KEY_LOOPBACK_ALLOWED],
+        `${op} left the loopback opt-in set`,
+      ).toBeUndefined();
+    }
   });
 
   it("keystore-reset (password-confirmed) wipes the IDENTICAL set", async () => {
@@ -873,6 +1144,146 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
       payload: { password: "pw" },
     });
     for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
+  });
+
+  it("clears the chain-liveness baseline on both wipe paths", async () => {
+    // Same device-handoff class as the P2-007 set above: a prior owner's
+    // last-seen head and the time it last advanced are not secret, but they
+    // are predecessor state and nothing else clears them — no lock, no
+    // re-genesis migration (that lists `mono.ws.` under LOCAL prefixes while
+    // both keys are written to SESSION), and no TTL. Until this, they outlived
+    // a full wipe and only a browser restart cleared them.
+    //
+    // The wipe is also the ONLY in-wallet action that can clear a stall
+    // baseline stuck above every live reading, which pins the banner to
+    // STALLED. That wedge is not fixed here — see
+    // `_dev-notes/browser-wallet/2026-08-02_stall-baseline-wedge.md` — but it
+    // must not be the case that nothing a user can reach clears it.
+    const LIVENESS = ["mono.ws.lastBlockHex", "mono.ws.lastBlockAdvancedAt"];
+
+    storageSession["mono.ws.lastBlockHex"] = "0x3547a";
+    storageSession["mono.ws.lastBlockAdvancedAt"] = {
+      hex: "0x3547a",
+      advancedAtMs: 1,
+    };
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
+    for (const k of LIVENESS) expect(storageSession[k]).toBeUndefined();
+
+    storageSession["mono.ws.lastBlockHex"] = "0x3547a";
+    storageSession["mono.ws.lastBlockAdvancedAt"] = {
+      hex: "0x3547a",
+      advancedAtMs: 1,
+    };
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+    for (const k of LIVENESS) expect(storageSession[k]).toBeUndefined();
+  });
+
+  // H2 — the wipe removes mono.chains.user / mono.chain.active from DISK, but
+  // the SW mirrors both in memory (`userChains`, `session.chainId`) and nothing
+  // in the reset handler touched them. Until the next worker restart the new
+  // owner saw the previous owner's custom chains. Custom chains are not
+  // necessarily deliberate: a connected dApp can add one via
+  // wallet_addEthereumChain, so this is device-handoff residue like the P2-007
+  // set the same handler already clears.
+  const PRIOR_OWNER_CHAIN = {
+    chainId: "0xbeef01",
+    name: "Prior owner chain",
+    rpc: "http://127.0.0.1:9999",
+  };
+
+  async function addPriorOwnerChain() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "chain-add-manual",
+      payload: { chain: PRIOR_OWNER_CHAIN },
+    });
+  }
+
+  async function chainIdsFromList(): Promise<string[]> {
+    const list = (await dispatchPopup({
+      kind: "popup",
+      op: "chain-list",
+    })) as Array<{ chainId: string }>;
+    return list.map((c) => c.chainId.toLowerCase());
+  }
+
+  async function activeChainIdLower(): Promise<string> {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-active-chain",
+    })) as { chainId: string };
+    return r.chainId.toLowerCase();
+  }
+
+  it("H2: keystore-reset drops the prior owner's custom chains from SW MEMORY", async () => {
+    expect(await addPriorOwnerChain()).toMatchObject({ ok: true });
+    expect(await chainIdsFromList()).toContain(PRIOR_OWNER_CHAIN.chainId);
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+
+    // Disk was already handled by the mono.* scan; this asserts the in-memory
+    // registry, which is what chain-list actually reads.
+    expect(await chainIdsFromList()).not.toContain(PRIOR_OWNER_CHAIN.chainId);
+  });
+
+  it("H2: keystore-reset returns the active chain to the built-in default", async () => {
+    await addPriorOwnerChain();
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-set-active-chain",
+      payload: { chainId: PRIOR_OWNER_CHAIN.chainId },
+    });
+    // canonicalChainKey normalises the hex casing, so compare lowercased.
+    expect(await activeChainIdLower()).toBe(PRIOR_OWNER_CHAIN.chainId);
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+
+    expect(await activeChainIdLower()).toBe(TESTNET_CHAIN_ID_HEX.toLowerCase());
+  });
+
+  it("H2: the forgot-password wipe clears the SAME chain residue", async () => {
+    // keystore-wipe-unauth is the lost-control path and its own comment
+    // requires it to wipe at least as much as the re-auth path. Both share one
+    // teardown helper so they cannot drift.
+    await addPriorOwnerChain();
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-set-active-chain",
+      payload: { chainId: PRIOR_OWNER_CHAIN.chainId },
+    });
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    });
+
+    expect(await chainIdsFromList()).not.toContain(PRIOR_OWNER_CHAIN.chainId);
+    expect(await activeChainIdLower()).toBe(TESTNET_CHAIN_ID_HEX.toLowerCase());
+  });
+
+  it("H2: the built-in chain still survives a reset — this clears residue, not the registry", async () => {
+    await addPriorOwnerChain();
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+    expect(await chainIdsFromList()).toContain(
+      TESTNET_CHAIN_ID_HEX.toLowerCase(),
+    );
   });
 
   it("keystore-wipe-unauth requires the SW-verified confirm token (P4-004)", async () => {
@@ -8665,5 +9076,612 @@ describe("native-multisig-send", () => {
     const nonceCall = rpcCalls.find((c) => c.method === "lyth_getTransactionCount");
     expect(nonceCall?.params[0]).toBe(expectedMonom);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("vault-remove / vault-export-seed — per-vault password ops", () => {
+  const PW = "correct-horse-battery-staple";
+
+  const remove = (payload: unknown = { password: PW, vaultId: "v2" }) =>
+    dispatchPopup({ kind: "popup", op: "vault-remove", payload }) as Promise<{
+      ok: boolean;
+      reason?: string;
+      failCount?: number;
+      secondsRemaining?: number;
+      removedId?: string;
+      newActiveVaultId?: string;
+      newActiveAddress?: string;
+      affectedMultisigLabels?: string[];
+    }>;
+
+  const exportSeed = (payload: unknown = { password: PW, vaultId: "v2" }) =>
+    dispatchPopup({
+      kind: "popup",
+      op: "vault-export-seed",
+      payload,
+    }) as Promise<{
+      ok: boolean;
+      reason?: string;
+      failCount?: number;
+      mnemonic?: string;
+    }>;
+
+  it("vault-remove returns the keystore result and clears the lockout counters", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 3;
+    const r = await remove();
+    expect(r.ok).toBe(true);
+    expect(r.removedId).toBe(REMOVE_VAULT_RESULT.removedId);
+    expect(r.newActiveVaultId).toBe(REMOVE_VAULT_RESULT.newActiveVaultId);
+    expect(r.affectedMultisigLabels).toEqual([]);
+    // A correct password resets the shared brute-force state, exactly as
+    // keystore-unlock / keystore-export-seed / keystore-reset do.
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove rejects a payload missing the password or the vault id", async () => {
+    expect((await remove({ vaultId: "v2" })).ok).toBe(false);
+    expect((await remove({ password: PW })).ok).toBe(false);
+    expect((await remove({})).ok).toBe(false);
+  });
+
+  // Regression guard for the remove-with-a-correct-password bug: the action
+  // sheet verified the password at its gate but never carried it to the submit,
+  // so it sent "". That reached Argon2id, derived a wrong MEK, failed the AEAD
+  // tag with "invalid tag" — a message the classifier does not recognise — and
+  // so was reported as wrong_password AND burned a lockout attempt. Every
+  // attempt with a CORRECT password pushed the user toward a real lockout.
+  //
+  // The popup-side fix is to carry the verified password through. These pin the
+  // service-worker half: an empty password is a malformed request, never a
+  // guess, so it must cost no attempt and never reach the keystore.
+  it("vault-remove rejects an EMPTY password without burning a lockout attempt", async () => {
+    const r = await remove({ password: "", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password or vaultId");
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove does not reach the keystore with an empty password", async () => {
+    // Belt and braces: no Argon2id derivation should be spent on a request that
+    // cannot succeed.
+    removeVaultThrows = "should never be called";
+    const r = await remove({ password: "", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(keystoreMldsaMock.removeVaultV4).not.toHaveBeenCalled();
+  });
+
+  it("vault-export-seed rejects an EMPTY password without burning a lockout attempt", async () => {
+    const r = await exportSeed({ password: "", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password or vaultId");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("a NON-empty wrong password still fails, still bumps, still says wrong_password", async () => {
+    // The guard above must not have weakened the throttle.
+    removeVaultThrows = "invalid tag";
+    const r = await remove({ password: "definitely-not-the-password", vaultId: "v2" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-remove maps an unrecognised keystore throw to wrong_password and bumps the counter", async () => {
+    removeVaultThrows = "wrong password";
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(r.failCount).toBe(1);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-remove classifies a NOVEL keystore error as wrong_password, not structural", async () => {
+    // The fail-closed default is the whole guard against a lockout bypass: any
+    // message the classifier does not explicitly recognise must count against
+    // the brute-force budget. A future keystore error, a storage failure, or a
+    // typo'd message must never fall through as a free retry.
+    removeVaultThrows = "QuotaExceededError: storage write failed";
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-export-seed classifies a NOVEL keystore error as wrong_password, not structural", async () => {
+    exportSeedThrows = "TypeError: Cannot read properties of undefined";
+    const r = await exportSeed();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-remove surfaces the last-vault refusal verbatim WITHOUT burning an attempt", async () => {
+    // The user's password may be perfectly correct here — the removal is
+    // structurally impossible. Throttling them, or telling them the password
+    // was wrong, would both be lies.
+    removeVaultThrows = "cannot remove the last vault — use Reset wallet instead";
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/cannot remove the last vault/);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove treats a locked container and an unknown id as structural too", async () => {
+    removeVaultThrows = "container is locked";
+    expect((await remove()).reason).toBe("container is locked");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+
+    removeVaultThrows = "unknown vault id";
+    expect((await remove()).reason).toBe("unknown vault id");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("vault-remove refuses while a lockout window is open", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    const r = await remove();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("rate_limited");
+    expect(r.secondsRemaining).toBeGreaterThan(0);
+  });
+
+  it("vault-export-seed returns the targeted vault's phrase", async () => {
+    const r = await exportSeed();
+    expect(r.ok).toBe(true);
+    expect(r.mnemonic?.split(/\s+/)).toHaveLength(24);
+  });
+
+  it("vault-export-seed refuses while a lockout window is open", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    const r = await exportSeed();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("rate_limited");
+    expect(r.mnemonic).toBeUndefined();
+  });
+
+  it("vault-export-seed shares the lockout counter with vault-remove", async () => {
+    // One shared brute-force budget across every password-taking op — an
+    // attacker cannot get extra guesses by alternating between them.
+    removeVaultThrows = "wrong password";
+    await remove();
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+
+    exportSeedThrows = "wrong password";
+    const r = await exportSeed();
+    expect(r.failCount).toBe(2);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(2);
+  });
+
+  it("vault-export-seed does not leak a phrase on failure", async () => {
+    exportSeedThrows = "wrong password";
+    const r = await exportSeed();
+    expect(r.ok).toBe(false);
+    expect(r.mnemonic).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `vault-verify-password` — CHARACTERISATION (DA-015)
+//
+// READ THIS BEFORE "FIXING" A FAILING TEST HERE.
+//
+// These tests document what the op does TODAY. They are not a statement that
+// today's behaviour is correct: two of them deliberately pin KNOWN DEFECTS,
+// and each of those is labelled DA-004 / DA-003 in its own name and comment.
+// FG-LOCKOUT (the next remediation pass) is expected to CHANGE those, and when
+// it does the right response is to update the test to the new behaviour — NOT
+// to "repair" the production code back to what the test says.
+//
+// The op had zero coverage anywhere before this block, which is why it is
+// pinned first: FG-LOCKOUT is about to change its lockout accounting, and this
+// is the diff that will show exactly what moved.
+//
+// Cost note: `verifyContainerPasswordV4` is mocked at the top of this file
+// (`pw === correctElevatedPassword`), so nothing here runs a real Argon2id
+// derivation.
+// ---------------------------------------------------------------------------
+describe("vault-verify-password — characterisation (DA-015)", () => {
+  const GOOD = "correct-horse-battery-staple";
+
+  it("CORRECT password returns ok and clears both lockout counters", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 2;
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = 0;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    // Success REMOVES the keys rather than zeroing them.
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+    expect(storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]).toBeUndefined();
+  });
+
+  it("WRONG password returns wrong_password and increments the shared counter", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "nope" },
+    })) as { ok: boolean; reason?: string; failCount?: number; secondsRemaining?: number };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(r.failCount).toBe(1);
+    // Below the first threshold (5 fails) there is no lockout window yet.
+    expect(r.secondsRemaining).toBe(0);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("EMPTY password is refused as a malformed payload, spending no attempt", async () => {
+    // This op DOES carry the empty-password guard. DA-003 is about the three
+    // ops that DON'T (keystore-unlock / -export-seed / -reset) — see the guard
+    // table in Appendix D. Pinned here so a future refactor that "unifies" the
+    // password ops cannot quietly remove the guard from this one.
+    const keystore = await import("./keystore-mldsa.js");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password");
+    expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("a non-string password is refused the same way", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: 1234 },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("DA-004 (FIXED): a STRUCTURAL failure does NOT burn a lockout attempt", async () => {
+    // WAS, before FG-LOCKOUT: `verifyContainerPasswordV4` returned a bare
+    // `false` for the structural cases "no container" and "container is missing
+    // its active vault", so the op could not tell them from a wrong guess and
+    // charged the brute-force counter for both — throttling a user whose
+    // password was right all along.
+    //
+    // NOW: the helper returns a discriminated result, and a structural verdict
+    // returns its reason without spending an attempt. The password was never
+    // evaluated on this path, so there is nothing to charge.
+    const keystore = await import("./keystore-mldsa.js");
+    vi.mocked(keystore.verifyContainerPasswordV4).mockResolvedValueOnce({
+      verified: false,
+      structural: true,
+      reason: "no-container",
+    });
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    // The structural reason is surfaced verbatim, NOT mislabelled as a bad
+    // password, and the counter is untouched.
+    expect(r.reason).toBe("no-container");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("an OPEN lockout is honoured before any derivation is spent", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 5;
+    const keystore = await import("./keystore-mldsa.js");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean; reason?: string; secondsRemaining?: number; failCount?: number };
+    expect(r.ok).toBe(false);
+    // NOTE the reason string: this op says "rate_limited" where the sibling
+    // `slh-dsa-backup-clear` says "locked_out" for the same condition. Pinned
+    // as-is; the inconsistency is recorded in Appendix D, not fixed here.
+    expect(r.reason).toBe("rate_limited");
+    expect(r.secondsRemaining).toBeGreaterThan(0);
+    expect(r.failCount).toBe(5);
+    // A CORRECT password is still refused while the window is open, and the
+    // helper is never called — the point of checking the lockout first.
+    expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+  });
+
+  it("the 5th consecutive wrong password opens a 30 s lockout window", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 4;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "nope" },
+    })) as { ok: boolean; failCount?: number; secondsRemaining?: number };
+    expect(r.ok).toBe(false);
+    expect(r.failCount).toBe(5);
+    expect(r.secondsRemaining).toBe(30);
+    expect(storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]).toBeGreaterThan(
+      Date.now(),
+    );
+  });
+
+  it("a correct password AFTER the window expires succeeds and resets the count", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 5;
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() - 1_000;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: GOOD },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DA-003 — the empty-password guard must cover EVERY password-taking op.
+//
+// An inconsistent guard is the finding, not the fix: five of the eight charge
+// sites rejected an empty password without spending an attempt, three did not.
+// On those three, "" reached the KDF, failed the AEAD, and burned one of the
+// user's five tries — for a string the password policy (MIN_PASSWORD_LENGTH)
+// guarantees can never be correct.
+// ---------------------------------------------------------------------------
+describe("empty-password guard covers every password op (DA-003)", () => {
+  const CASES: Array<{ op: string; payload: Record<string, unknown> }> = [
+    { op: "keystore-unlock", payload: { password: "" } },
+    { op: "keystore-export-seed", payload: { password: "" } },
+    { op: "keystore-reset", payload: { password: "" } },
+  ];
+
+  for (const c of CASES) {
+    it(`${c.op} refuses an empty password without charging`, async () => {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: c.op,
+        payload: c.payload,
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe("missing password");
+      expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+    });
+
+    it(`${c.op} refuses a non-string password without charging`, async () => {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: c.op,
+        payload: { ...c.payload, password: 1234 },
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe("missing password");
+      expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DA-004 / C11 — a STRUCTURAL failure must not burn a brute-force attempt.
+//
+// A structural refusal is one where the attempt NEVER EVALUATED THE PASSWORD:
+// no container, a container with a dangling activeVaultId, an unreadable
+// container, an unknown vault id, the last-vault guard. The outcome is
+// identical for every password including the correct one, so charging it
+// throttles a user whose password was right all along — and, for keystore-reset
+// and the unrecognised-container case, throttles them out of the recovery path
+// at the exact moment they need it.
+//
+// Each of these is cleared as NOT attacker-inducible-into-an-oracle: every one
+// short-circuits before any AEAD tag is checked, so an attacker who steers a
+// wrong guess into one of them learns nothing about the guess.
+// ---------------------------------------------------------------------------
+describe("structural failures do not charge the counter (DA-004, C11)", () => {
+  it("keystore-reset: an unreadable container does not charge", async () => {
+    unlockThrows = "v4 vaults container is unrecognised — refusing to read";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("keystore-unlock: a dangling activeVaultId does not charge", async () => {
+    unlockThrows = "container is missing its active vault";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-unlock",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("keystore-unlock: a REAL wrong password still charges (fail-closed)", async () => {
+    unlockThrows = "wrong password";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-unlock",
+      payload: { password: "nope" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("keystore-unlock: a NOVEL error still charges (fail-closed default)", async () => {
+    unlockThrows = "TypeError: something nobody anticipated";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-unlock",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { reason?: string };
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("vault-verify-password: a structural verdict does not charge", async () => {
+    const keystore = await import("./keystore-mldsa.js");
+    vi.mocked(keystore.verifyContainerPasswordV4).mockResolvedValueOnce({
+      verified: false,
+      structural: true,
+      reason: "missing-active-vault",
+    });
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-verify-password",
+      payload: { password: "correct-horse-battery-staple" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D3 — the allowlist rule, enforced by a test rather than by a comment.
+//
+// `isStructuralVaultRefusal` is an exact-match allowlist with a fail-closed
+// default. Every entry must be a refusal raised BEFORE any AEAD tag is checked,
+// so the attempt evaluates no password and an attacker who induces it learns
+// nothing about their guess. A comment saying so is the weakest enforcement
+// available — this codebase produced four false security claims in a single
+// day — so the rule is asserted here instead.
+//
+// ADDING AN ENTRY TO THE ALLOWLIST? Add a row here too. A new entry with no row
+// leaves the count assertion failing, and a row whose refusal actually reaches
+// the verification helper fails its own case.
+// ---------------------------------------------------------------------------
+describe("structural allowlist — every entry refuses without evaluating a password (D3)", () => {
+  // Mirrors isStructuralVaultRefusal. `prefix` marks the one startsWith arm.
+  const ALLOWLIST: Array<{ message: string; prefix?: true }> = [
+    { message: "container is locked" },
+    { message: "no v4 vaults container" },
+    { message: "no v4 vault — run onboarding first" },
+    { message: "container is missing its active vault" },
+    { message: "v4 vaults container is unrecognised — refusing to read" },
+    { message: "unknown vault id" },
+    { message: "cannot remove the last vault — use Reset wallet instead", prefix: true },
+  ];
+
+  it("has exactly the entries this suite knows about", () => {
+    // Guards against an entry being added to the production allowlist without a
+    // row here. If this fails, do not just bump the number — add the row and
+    // prove the new entry never reaches the crypto.
+    expect(ALLOWLIST.length).toBe(7);
+  });
+
+  for (const entry of ALLOWLIST) {
+    it(`"${entry.message}" refuses vault-remove WITHOUT charging or verifying`, async () => {
+      const keystore = await import("./keystore-mldsa.js");
+      removeVaultThrows = entry.message;
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: "vault-remove",
+        payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      // Surfaced verbatim — never relabelled as a password failure.
+      expect(r.reason).toBe(entry.message);
+      // And it costs the user nothing.
+      expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+      // The refusal happened before any password evaluation.
+      expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+    });
+  }
+
+  it("a message NOT on the list still charges (the fail-closed default)", async () => {
+    removeVaultThrows = "container is locked "; // trailing space — not an exact match
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-remove",
+      payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+    })) as { reason?: string };
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C9 / C10 — a failure AFTER the password was proven correct is not a guess.
+//
+// Two shapes: the container write rejecting once the AEAD has already passed
+// (C9), and infrastructure failing on the success path after a correct unlock
+// (C10). Both currently return `wrong_password` and burn an attempt for a
+// password that was RIGHT — the exact defect DA-004 exists to remove.
+//
+// Deliberately NOT solved by adding a string to isStructuralVaultRefusal: that
+// list is matched by message and shared across ops, and this class is safe only
+// because of WHERE it is raised (downstream of the AEAD), not WHAT it says. A
+// message entry would be enforced nowhere, and the moment some future op writes
+// before verifying it would hand out free guesses. The signal is positive and
+// tied to the verification event instead.
+// ---------------------------------------------------------------------------
+describe("post-verification failures are not wrong passwords (C9/C10)", () => {
+  it("vault-remove: a failure after the AEAD passed does not charge", async () => {
+    removeVaultThrowsPostVerification =
+      "failed to persist the vault container: QUOTA_BYTES quota exceeded";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-remove",
+      payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+
+  it("an UNMARKED storage-shaped error still charges (fail-closed preserved)", async () => {
+    // The marker is the signal, not the wording. An error that merely LOOKS
+    // like a storage failure but was not raised downstream of the AEAD keeps
+    // counting — this is the invariant pinned by the NOVEL-error tests.
+    removeVaultThrows = "failed to persist the vault container: whatever";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "vault-remove",
+      payload: { password: "correct-horse-battery-staple", vaultId: "v1" },
+    })) as { reason?: string };
+    expect(r.reason).toBe("wrong_password");
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H8 — the counter's read-modify-write must be atomic.
+//
+// Every charge site reads the counter, spends a ~2.76 s Argon2id derivation,
+// then writes read+1. The read happens BEFORE the derivation, so N concurrent
+// attempts all read the same value and all write the same value+1: N guesses
+// cost one attempt. Demonstrated before the fix at ten concurrent attempts
+// producing a single charge, which lets the progressive lockout be prevented
+// from ever tripping.
+//
+// The lock wraps ONLY the increment. Wrapping the original read-to-write span
+// would hold it across the KDF and serialise every password op behind a
+// derivation — the same trap the container lock had to avoid.
+// ---------------------------------------------------------------------------
+describe("the lockout counter increments atomically (H8)", () => {
+  it("two concurrent wrong-password attempts charge two", async () => {
+    const [, ] = await Promise.all([
+      dispatchPopup({ kind: "popup", op: "vault-verify-password", payload: { password: "wrong-a" } }),
+      dispatchPopup({ kind: "popup", op: "vault-verify-password", payload: { password: "wrong-b" } }),
+    ]);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(2);
+  });
+
+  it("ten concurrent wrong-password attempts charge ten", async () => {
+    const replies = (await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        dispatchPopup({
+          kind: "popup",
+          op: "vault-verify-password",
+          payload: { password: "wrong-" + i },
+        }),
+      ),
+    )) as Array<{ reason?: string }>;
+    // All ten were really evaluated — this is not ten no-ops.
+    expect(replies.every((r) => r.reason === "wrong_password")).toBe(true);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(10);
   });
 });

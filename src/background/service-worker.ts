@@ -28,6 +28,7 @@
 // `eth_estimateGas` ARE served by the chain as read-only native-executor
 // views (not retired — just not proxied here); the six filters ARE retired.
 
+import { armUnhandledRejectionDetector } from "../shared/dev-rejection-detector.js";
 import { RpcClient } from "@monolythium/core-sdk";
 import {
   addressToTypedBech32,
@@ -81,12 +82,17 @@ import {
   lockV4,
   createVaultFromMnemonic,
   exportMnemonicV4,
+  exportMnemonicForVaultV4,
+  removeVaultV4,
+  vaultContainerLockKey,
+  isPostVerificationFailure,
   personalSignV4,
   signTypedDataV4FromV4,
   getUnlockedPublicKeyV4,
   signWalletAuthDigestV4,
   // Multi-vault surface.
   hasContainerV4,
+  storedContainerAddressesV4,
   storedContainerNeedsRestoreV4,
   unlockContainerV4,
   selectActiveVaultV4,
@@ -220,6 +226,7 @@ import {
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
+  isLoopbackAllowed,
   setOperatorOverride,
   readOperatorOverride,
   getDefaultOperators,
@@ -232,7 +239,11 @@ import {
   rehydrateGenesisCache,
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
-import { hardenedChains, overrideWithinFleet } from "../shared/hardened-dial.js";
+import {
+  hardenedChains,
+  overrideRefusalReason,
+} from "../shared/hardened-dial.js";
+import { STORAGE_KEY_LOOPBACK_ALLOWED } from "../shared/loopback.js";
 import { migrateRegenesisSensitiveState } from "./regenesis-migration.js";
 import {
   clampToSaneBound,
@@ -307,13 +318,17 @@ import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
   submitMlDsaTx,
+  submitMlDsaTxWithHooks,
   broadcastPlaintextTransaction,
+  bytesMayBeLive,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   testnetResolveNameConsensus,
   testnetReverseNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
+import { withSendBinding } from "./send-binding.js";
+import { sendIntentDigest } from "../shared/send-intent-digest.js";
 import { hexToBytes, type NativeEvmTxFields } from "@monolythium/core-sdk/crypto";
 import { isFeatureEnabled } from "../shared/two-tier-features.js";
 import {
@@ -338,6 +353,7 @@ import {
   markWsDown,
   type WsStatus,
 } from "./ws-client.js";
+import { parseBlockHeight } from "../shared/block-height.js";
 import {
   DEFAULT_ACTIVITY_KIND_ENVELOPE,
   normaliseActivityKind,
@@ -688,13 +704,16 @@ function lookupChain(id: string): NetInfo | null {
   return null;
 }
 
+/** Hydrate `userChains` from storage. AUTHORITATIVE: storage is the source of
+ *  truth, so an absent or malformed key means "no user chains" and clears the
+ *  in-memory copy rather than leaving whatever was there before. Assigning only
+ *  on a hit made this unable to represent deletion — after a wipe removed the
+ *  key, re-running it would not have reset the registry. */
 async function loadUserChains(): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.get([USER_CHAINS_STORAGE_KEY], (res) => {
       const v = res?.[USER_CHAINS_STORAGE_KEY];
-      if (v && typeof v === "object") {
-        userChains = v as Record<string, NetInfo>;
-      }
+      userChains = v && typeof v === "object" ? (v as Record<string, NetInfo>) : {};
       resolve();
     });
   });
@@ -766,13 +785,26 @@ export async function purgeDemoAddrCacheKeys(): Promise<void> {
  *  and the caller's `session.connectedOrigins.clear()`). Every removed key is
  *  read-with-a-default at boot, so a clean Welcome + fresh import still work. */
 async function wipeAllLocalWalletState(): Promise<void> {
-  const all = await new Promise<Record<string, unknown>>((resolve) => {
-    chrome.storage.local.get(null, (res) => resolve(res ?? {}));
-  });
-  const toRemove = Object.keys(all).filter((k) => k.startsWith("mono."));
-  if (toRemove.length === 0) return;
-  await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(toRemove, () => resolve());
+  // H1 — the vault container is one of the keys this removes, and it is removed
+  // by prefix scan rather than through the keystore's locked writers. Take the
+  // SAME container lock so a wipe cannot interleave with an in-flight vault
+  // write: without it, a writer holding a pre-wipe snapshot could re-persist
+  // the container milliseconds after the wipe "succeeded", resurrecting a prior
+  // owner's wallet on a device that was supposed to be clean.
+  //
+  // Nothing inside this function calls a locked keystore writer, so it cannot
+  // deadlock by re-entering the same key; the callers' surrounding work
+  // (connected-sites clear, session removes, triggerAutoLock, lockV4) performs
+  // no container write either.
+  return withKeyLock(vaultContainerLockKey(), async () => {
+    const all = await new Promise<Record<string, unknown>>((resolve) => {
+      chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+    });
+    const toRemove = Object.keys(all).filter((k) => k.startsWith("mono."));
+    if (toRemove.length === 0) return;
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.remove(toRemove, () => resolve());
+    });
   });
 }
 
@@ -824,6 +856,36 @@ const session: SessionState = {
   connectedOrigins: new Set<string>(),
   autoLockMinutes: AUTO_LOCK_MINUTES_DEFAULT,
 };
+
+/**
+ * In-memory teardown shared by BOTH wipe paths (keystore-reset and the
+ * forgot-password keystore-wipe-unauth). Storage is wiped by the mono.* scan;
+ * this drops the copies the worker holds, which no scan can reach.
+ *
+ * H2 — `userChains` and `session.chainId` were missed. The wipe removes
+ * mono.chains.user and mono.chain.active from disk, but the SW mirrors both in
+ * memory, so until the next worker restart the new owner saw the previous
+ * owner's custom chains, with one of them possibly still active. Custom chains
+ * are not necessarily the prior owner's own doing — a connected dApp can add
+ * one through `wallet_addEthereumChain` — so this is exactly the device-handoff
+ * residue the P2-007 session-key block exists to clear, in memory rather than
+ * in storage. The chain-delete handler already performs the same reset when the
+ * active chain goes away.
+ *
+ * Called from a `finally` in both handlers for the F-B2V-1 reason lockV4 is:
+ * a rejection anywhere in the wipe sequence must not leave memory ahead of
+ * disk. lockV4 is sync + idempotent, so a later triggerAutoLock tail is a
+ * harmless no-op.
+ *
+ * Shared rather than written out twice because the two paths are required to
+ * wipe identically — the forgot-password path is the lost-control path and must
+ * clear at least as much as the re-auth one.
+ */
+function clearInMemoryWalletState(): void {
+  lockV4();
+  userChains = {};
+  session.chainId = TESTNET_CHAIN_ID_HEX;
+}
 
 // Hydrate user-added chains and the persisted active chain id as soon as
 // the worker spins up. Service-worker hibernation → we re-read on every
@@ -1063,7 +1125,16 @@ function prefillUnknownWsEndpointsDown(): void {
 // up the new list immediately rather than waiting for the 10s TTL.
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
-  if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
+  // The loopback opt-in gates whether a stored override is dialable, so a change
+  // to EITHER must re-run the dial-set. Without this, turning the opt-in off
+  // would leave a loopback operator dialled until the next SW boot — the same
+  // shape of gap as an override applied against a stale flag.
+  if (
+    !(STORAGE_KEY_OPERATOR_OVERRIDE in changes) &&
+    !(STORAGE_KEY_LOOPBACK_ALLOWED in changes)
+  ) {
+    return;
+  }
   void loadOperatorOverride().then(prefillUnknownWsEndpointsDown);
   cachedOperator = null;
   // Drop the persisted liveness hint too — a since-removed operator must not be
@@ -1230,11 +1301,120 @@ async function gatedEnqueue(
 // Progressive brute-force lockout — state lives in chrome.storage.session
 // only (no module mirror, since SW hibernation would desync). Returns the
 // longest matching window for `fails`, or 0 if no threshold is met.
+/** Lock key for the shared brute-force counter. Distinct from any storage key
+ *  so it can never collide with a container lock. */
+const LOCKOUT_COUNTER_LOCK_KEY = "lock:mono.unlock-fail-counter";
+
+/** Whole seconds until `until`, or 0 when no window is open. Derived from the
+ *  deadline rather than from the window length, because the charge is now
+ *  computed inside the counter lock and the caller only sees its result. */
+function secondsUntil(until: number): number {
+  const remaining = until - Date.now();
+  return remaining > 0 ? Math.ceil(remaining / 1000) : 0;
+}
+
+/**
+ * Charge ONE failed password attempt, atomically.
+ *
+ * H8 — every call site reads the counter, spends a ~2.76 s Argon2id derivation,
+ * then writes read+1. Because all the reads are issued before any of the writes,
+ * N concurrent attempts all read the same value and all write the same value+1:
+ * N guesses cost a single attempt. Measured at ten concurrent attempts charging
+ * once, which lets the progressive lockout be prevented from ever tripping. The
+ * Argon2id cost bounds the RATE, not the COUNT — it does not close this.
+ *
+ * The lock wraps only this increment, and the counter is re-read INSIDE it, so
+ * the value written is derived from a read no other charge can have superseded.
+ * It deliberately does NOT span the caller's earlier read-through-derivation
+ * window: holding a lock across the KDF would serialise every password op
+ * behind a derivation, on the unlock path.
+ *
+ * SCOPE OF THIS CONTROL, stated because it is easy to overclaim: the counter is
+ * defence against a human at the keyboard, and against a compromised content
+ * script (which the router's popup-URL check already rejects). It is NOT a
+ * defence against code running in the popup — `chrome.storage.session` keeps
+ * its default TRUSTED_CONTEXTS access level, so popup-context script can clear
+ * these keys directly. Argon2id is what bounds an automated attacker.
+ */
+async function chargeFailedPasswordAttempt(): Promise<{
+  failCount: number;
+  lockoutUntil: number;
+}> {
+  return withKeyLock(LOCKOUT_COUNTER_LOCK_KEY, async () => {
+    const cur = await chrome.storage.session.get([
+      SESSION_KEY_UNLOCK_FAIL_COUNT,
+      SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+    ]);
+    const failCount =
+      (typeof cur[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+        ? (cur[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+        : 0) + 1;
+    const ms = lockoutMsFor(failCount);
+    const lockoutUntil =
+      ms > 0
+        ? Date.now() + ms
+        : typeof cur[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (cur[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+    await chrome.storage.session.set({
+      [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+      [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+    });
+    return { failCount, lockoutUntil };
+  });
+}
+
 function lockoutMsFor(fails: number): number {
   for (const t of LOCKOUT_THRESHOLDS) {
     if (fails >= t.fails) return t.ms;
   }
   return 0;
+}
+
+/** Refusals the per-vault password ops raise BEFORE any key derivation: a
+ *  locked container, a missing container, an unknown id, and the last-vault
+ *  guard. None of these is a failed password guess, so none may burn a lockout
+ *  attempt — a user with the right password would otherwise be throttled for
+ *  asking something structurally impossible, and the "use Reset wallet instead"
+ *  refusal would surface as "wrong password".
+ *
+ *  The list is exact and the DEFAULT is to treat a throw as wrong-password, so
+ *  a message this function does not recognise still counts against the lockout.
+ *  That is the fail-closed direction: mis-classifying a password failure as
+ *  structural would hand out unlimited guesses. */
+// THE RULE FOR ADDING AN ENTRY HERE — every entry must satisfy BOTH:
+//   1. The refusal is raised BEFORE any AEAD tag is checked, so the attempt
+//      never evaluates the password and the reply is identical for every
+//      password including the correct one; and
+//   2. an attacker holding a WRONG password who induces this class therefore
+//      learns nothing about the guess — it is not a free-guess oracle.
+// A class that is attacker-inducible is fine PROVIDED (1) holds: "unknown vault
+// id" is trivially inducible (the caller supplies the id) and is still safe,
+// because the id lookup short-circuits before the crypto.
+//
+// Do NOT add a refusal whose safety depends on WHERE it is thrown rather than
+// on WHAT it is — this list is matched by message and shared across ops, so a
+// position-dependent entry would be enforced nowhere. Post-verification
+// failures use the separate `PostVerificationError` signal instead.
+//
+// `isStructuralAllowlistEntry` in the test suite enumerates this list and
+// asserts each entry refuses WITHOUT reaching the verification helper; a new
+// entry with no row there fails the suite.
+function isStructuralVaultRefusal(message: string): boolean {
+  return (
+    message === "container is locked" ||
+    message === "no v4 vaults container" ||
+    message === "no v4 vault — run onboarding first" ||
+    // The container exists but its activeVaultId names no record. Decided by a
+    // container read only; no MEK is ever tested against a ciphertext.
+    message === "container is missing its active vault" ||
+    // The stored blob failed shape validation, so nothing was decrypted at all.
+    // Charging this locked a corrupt-container user out of Reset wallet — the
+    // one path that could still recover them.
+    message === "v4 vaults container is unrecognised — refusing to read" ||
+    message === "unknown vault id" ||
+    message.startsWith("cannot remove the last vault")
+  );
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1795,18 +1975,91 @@ export async function recordSubmittedNonce(
 export async function submitTrackedTx(
   req: Omit<EthSendTxFields, "nonce"> & { nonce?: string },
   boundVaultId: string,
-  opts: { from: string; chainIdHex: string; preferredNonceHex?: string | undefined },
+  opts: {
+    from: string;
+    chainIdHex: string;
+    preferredNonceHex?: string | undefined;
+    /** Identifies one user CONFIRMATION. Present → this submit is idempotent
+     *  under that key. Absent → the path below is byte-identical to before. */
+    idempotencyKey?: string | undefined;
+  },
 ): Promise<{ txHash: string; via: string; nonceHex: string }> {
-  const nonceHex =
-    opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
-  const { txHash, via } = await submitMlDsaTx(
-    { ...req, nonce: nonceHex },
-    boundVaultId,
-  );
-  // Success path only (a reject threw above). Awaited so a rapid next send sees
-  // it immediately. Once per logical tx — the fan-out already happened inside.
-  await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
-  return { txHash, via, nonceHex };
+  const key = opts.idempotencyKey;
+
+  if (key === undefined) {
+    const nonceHex =
+      opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
+    const { txHash, via } = await submitMlDsaTx(
+      { ...req, nonce: nonceHex },
+      boundVaultId,
+    );
+    // Success path only (a reject threw above). Awaited so a rapid next send sees
+    // it immediately. Once per logical tx — the fan-out already happened inside.
+    await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
+    return { txHash, via, nonceHex };
+  }
+
+  // The keyed path. `withSendBinding` owns read / replay / write / complete /
+  // drop; everything below it is what stays specific to THIS path — deriving the
+  // nonce, signing through `submitMlDsaTxWithHooks` (which carries the 0x40
+  // front-door guard), and recording the nonce it spent.
+  //
+  // The nonce is derived INSIDE `submit`, which runs only when no live binding
+  // was found. A replay must never derive one: the nonce was chosen and recorded
+  // by the original attempt, and the bytes being re-broadcast already carry it.
+  // What this confirmation is FOR. Computed here because this is where the
+  // transaction is still in scope — the binding layer only ever compares two of
+  // these strings, so it keeps its zero imports and its suite keeps needing no
+  // signer, no SDK and no network. `nonce` is absent by construction (it is
+  // derived below, inside `submit`), and the fee fields are excluded on purpose
+  // — see src/shared/send-intent-digest.ts.
+  const intentDigest = sendIntentDigest({
+    from: opts.from,
+    to: req.to,
+    value: req.value,
+    data: req.data,
+    chainIdHex: opts.chainIdHex,
+  });
+
+  return withSendBinding({
+    key,
+    expectedDigest: intentDigest,
+    now: () => Date.now(),
+    rebroadcast: broadcastPlaintextTransaction,
+    // The fan-out marks a failure whose bytes may already have reached an
+    // operator; the binding is kept in that case so a retry re-broadcasts them
+    // instead of signing a second transaction at the next nonce.
+    bytesMayBeLive,
+    submit: async (bind) => {
+      const nonceHex =
+        opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
+      const { txHash, via } = await submitMlDsaTxWithHooks(
+        { ...req, nonce: nonceHex },
+        boundVaultId,
+        // BEFORE broadcast, by construction: the hook fires between signing and
+        // the fan-out, so from this point on a dead worker leaves recoverable
+        // bytes rather than an unrepeatable transaction.
+        async (built) => {
+          await bind({
+            nonceHex,
+            // Scoping for a later account-level lookup. Both are values this
+            // submit is already bound to — `from` is the sender the nonce was
+            // derived for, `chainIdHex` the chain it signed against — so neither
+            // can disagree with the transaction.
+            from: opts.from,
+            chainIdHex: opts.chainIdHex,
+            // What these bytes were signed FOR. Stored so a later call under
+            // this key can be checked against it instead of trusted.
+            digest: intentDigest,
+            wireHex: built.signedTxWireHex,
+            txHashHex: built.innerTxHashHex,
+          });
+        },
+      );
+      await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
+      return { txHash, via, nonceHex };
+    },
+  });
 }
 
 // ── Name-registry (0x110E) submit helpers ────────────────────────────────────
@@ -1855,6 +2108,12 @@ async function submitNameTx(opts: {
   from: string;
   chainIdHex: string;
   boundVaultId: string;
+  /** One user CONFIRMATION of this name operation. Present → the submit is
+   *  idempotent under that key and a retry re-broadcasts the bytes already
+   *  signed. `unknown` because it arrives straight off an IPC payload; the
+   *  guard below is the same one the `wallet-send-tx` call site applies, kept
+   *  here so all three name ops share it rather than repeating it. */
+  idempotencyKey?: unknown;
 }): Promise<{ txHash: string; via?: string; costLythoshiHex: string }> {
   const fee = await suggestFee(opts.chainIdHex);
   const costLythoshi =
@@ -1877,6 +2136,13 @@ async function submitNameTx(opts: {
   const { txHash, via } = await submitTrackedTx(txReq, opts.boundVaultId, {
     from: opts.from,
     chainIdHex: opts.chainIdHex,
+    // Same hook, same route as the `wallet-send-tx` call site — not a parallel
+    // path. Absent (or not a non-empty string) spreads nothing, so the options
+    // object is exactly `{ from, chainIdHex }` as before and submitTrackedTx's
+    // `key !== undefined` branch is never entered.
+    ...(typeof opts.idempotencyKey === "string" && opts.idempotencyKey.length > 0
+      ? { idempotencyKey: opts.idempotencyKey }
+      : {}),
   });
   return { txHash, via, costLythoshiHex: "0x" + costLythoshi.toString(16) };
 }
@@ -3065,7 +3331,8 @@ const OPERATOR_CACHE_TTL_MS = 10_000;
 // Shared between `wallet-operator-status` (popup chain-status banner) and
 // `wallet-chain-block-number` (popup chain-health poll). Both want the same
 // "first alive testnet operator" answer; caching name+rpc together avoids
-// re-running the operator probe loop at the 8-second health-poll cadence.
+// re-running the operator probe loop on every health-poll tick (the popup's
+// HEALTH_TICK_MS cadence).
 let cachedOperator: {
   name: string | null;
   rpc: string | null;
@@ -6503,6 +6770,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           custody: "sw" as const,
           algo: "mldsa" as const,
           legacyRestoreRequired: true as const,
+          // The addresses this container recorded. `address` above stays null —
+          // the locked-screen chip must never hint the active address before an
+          // unlock. This is the deliberate exception: THIS container can never
+          // be unlocked, so there is no "before unlock" to protect, and a
+          // restore may land on a different address (pre-BIP-39-change vaults),
+          // which the user can only notice if they can see what was recorded.
+          // Read-only, never decrypts.
+          legacyAddresses: await storedContainerAddressesV4(),
         };
       }
       // v4 (ML-DSA-65) is the only vault format. A populated multi-vault
@@ -6927,12 +7202,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // up-front with a clear reason instead of persisting an override that
       // hardened-dial would silently narrow back to the defaults (the "Save
       // reverts to defaults" report). Dev builds skip this and honor any host.
-      if (isHardenedBuild() && !overrideWithinFleet(getDefaultOperators(), validated)) {
-        return {
-          ok: false,
-          reason:
-            "This build only dials the built-in operators. Reorder or pin the listed operators — adding a custom RPC host needs a developer build.",
-        };
+      //
+      // TWO refusals, chosen by the HOST rather than the toggle: a host that
+      // stays refused with the opt-in on must not be told to turn the opt-in on.
+      const refusal = isHardenedBuild()
+        ? overrideRefusalReason(
+            getDefaultOperators(),
+            validated,
+            isLoopbackAllowed(),
+          )
+        : null;
+      if (refusal !== null) {
+        return { ok: false, reason: refusal };
       }
       await setOperatorOverride(validated);
       cachedOperator = null;
@@ -6956,6 +7237,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
+      // DA-003 — an EMPTY password is a malformed request, not a guess. The
+      // password policy floors real passwords at MIN_PASSWORD_LENGTH, so "" can
+      // never be correct; letting it through costs an Argon2id derivation and,
+      // the point, burns one of the user's five brute-force attempts on a value
+      // that could not have succeeded. Rejecting it here also means a caller bug
+      // that sends "" surfaces as a visible payload error instead of silently
+      // walking the user into a lockout with a password that was right all
+      // along. Applied to EVERY password-taking op — a guard on some of them
+      // implies a coverage that does not exist.
+      if (typeof p?.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
       // P1-003: a stored pre-V5 (no-AAD) container can't be opened by the V5
       // AAD-bound seal. Detect it (read-only — never decrypts) and tell the
       // user to restore from their recovery phrase, instead of a misleading
@@ -7014,19 +7307,26 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // [address] here so a still-connected dApp re-learns the account.
           broadcastEvent("accountsChanged", [r.address]);
           return { ok: true, address: r.address };
-        } catch {
-          failCount += 1;
-          const ms = lockoutMsFor(failCount);
-          if (ms > 0) lockoutUntil = Date.now() + ms;
-          await chrome.storage.session.set({
-            [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-            [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-          });
+        } catch (e) {
+          // DA-004 — a structural refusal never evaluated the password, so it
+          // must not spend one of the user's attempts. The default stays
+          // fail-closed: anything the allowlist does not recognise counts.
+          const msg = (e as Error).message;
+          // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
+        if (isStructuralVaultRefusal(msg)) {
+            return { ok: false, reason: msg };
+          }
+          ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
           return {
             ok: false,
             reason: "wrong_password",
             failCount,
-            secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+            secondsRemaining: secondsUntil(lockoutUntil),
           };
         }
       }
@@ -7060,6 +7360,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // no "no_mnemonic_stored" branch — wrong password is the only
       // failure case beyond the rate limit.
       const p = message.payload as { password: string };
+      // DA-003 — see the note on keystore-unlock. "" can never be a correct
+      // password under the policy floor, so refusing it here spends no
+      // derivation and burns no brute-force attempt.
+      if (typeof p?.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
       const ses = await chrome.storage.session.get([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -7089,19 +7395,24 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ]);
         await resetAutoLock();
         return { ok: true, mnemonic: r.mnemonic };
-      } catch {
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+      } catch (e) {
+        // DA-004 — see keystore-unlock. Fail-closed default preserved.
+        const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
           failCount,
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
     }
@@ -7111,6 +7422,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // keystore-unlock — wrong-password attempts here count toward the
       // shared brute-force lockout window.
       const p = message.payload as { password: string };
+      // DA-003 — see the note on keystore-unlock. Charging an attempt here is
+      // the worst case of the three, because a lockout on the shared counter
+      // blocks Reset wallet itself — the recovery path.
+      if (typeof p?.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
       const ses = await chrome.storage.session.get([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -7134,19 +7451,26 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         await unlockContainerV4(p.password);
-      } catch {
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+      } catch (e) {
+        // DA-004 / C11 — the worst case of the three: charging here locks the
+        // user out of Reset wallet, which is the recovery path they are already
+        // on. Fail-closed default preserved.
+        const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
           failCount,
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
       // Password verified — default-deny wipe of ALL persisted wallet state
@@ -7179,10 +7503,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           SESSION_KEY_GENESIS_CACHE,
           SESSION_KEY_PASSKEY_USAGE,
           PENDING_NONCE_KEY,
+          // Same class: the last head seen and when it last advanced. Nothing
+          // else clears these — not lock, and not the re-genesis migration,
+          // which lists `mono.ws.` among LOCAL prefixes while both keys are
+          // written to SESSION. They are also the only state that can pin the
+          // chip to STALLED against a live chain, so the wipe being the one
+          // in-wallet action that clears them matters beyond handoff hygiene.
+          STORAGE_KEY_WS_LAST_BLOCK_HEX,
+          STORAGE_KEY_WS_BLOCK_ADVANCE,
         ]);
         await triggerAutoLock();
       } finally {
-        lockV4();
+        clearInMemoryWalletState();
       }
       // S6 closeout C2: clear the toolbar pip so a prior owner's unread COUNT
       // doesn't linger after the store is wiped (device-handoff #43). Best-
@@ -7244,10 +7576,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           SESSION_KEY_GENESIS_CACHE,
           SESSION_KEY_PASSKEY_USAGE,
           PENDING_NONCE_KEY,
+          // Same class: the last head seen and when it last advanced. Nothing
+          // else clears these — not lock, and not the re-genesis migration,
+          // which lists `mono.ws.` among LOCAL prefixes while both keys are
+          // written to SESSION. They are also the only state that can pin the
+          // chip to STALLED against a live chain, so the wipe being the one
+          // in-wallet action that clears them matters beyond handoff hygiene.
+          STORAGE_KEY_WS_LAST_BLOCK_HEX,
+          STORAGE_KEY_WS_BLOCK_ADVANCE,
         ]);
         await triggerAutoLock();
       } finally {
-        lockV4();
+        clearInMemoryWalletState();
       }
       // S6 closeout C2: clear the toolbar pip so a prior owner's unread COUNT
       // doesn't linger after the store is wiped (device-handoff #43). Best-
@@ -7435,6 +7775,207 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
+    case "vault-verify-password": {
+      // Pure password re-verification for a UI gate — proves the caller knows
+      // the master password WITHOUT retrieving any secret. Deliberately NOT
+      // routed through vault-export-seed: using a seed export as an "is this
+      // the right password" check would pull a 24-word mnemonic into popup
+      // memory for a question that does not need it.
+      //
+      // verifyContainerPasswordV4 re-derives the MEK and attempts the AEAD
+      // unwrap, returns false rather than throwing, and zeroes everything it
+      // derived. Shares the same lockout counters as every other password op,
+      // so this gate cannot be used as an unthrottled oracle.
+      const p = message.payload as { password?: string };
+      if (typeof p?.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const now = Date.now();
+      // Honour an open lockout BEFORE spending an Argon2id derivation.
+      if (lockoutUntil > now) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+          failCount,
+        };
+      }
+      const verdict = await verifyContainerPasswordV4(p.password);
+      // DA-004 — a structural verdict means the password was never evaluated
+      // (no container, or a dangling activeVaultId), so it must not spend an
+      // attempt. Only a real AEAD verdict counts.
+      if (!verdict.verified && verdict.structural) {
+        return { ok: false, reason: verdict.reason };
+      }
+      if (!verdict.verified) {
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
+        return {
+          ok: false,
+          reason: "wrong_password",
+          failCount,
+          secondsRemaining: secondsUntil(lockoutUntil),
+        };
+      }
+      await chrome.storage.session.remove([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      await resetAutoLock();
+      return { ok: true };
+    }
+    case "vault-remove": {
+      // Password-gated removal of ONE vault. Shares the
+      // SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL counters with keystore-unlock /
+      // keystore-export-seed / keystore-reset, so wrong-password attempts here
+      // count toward the same brute-force lockout window.
+      const p = message.payload as { password?: string; vaultId?: string };
+      // An EMPTY password is a malformed request, not a guess: the password
+      // policy floors real passwords at MIN_PASSWORD_LENGTH, so "" can never be
+      // correct. Rejecting it here costs no Argon2id derivation and — the point
+      // — burns no brute-force attempt, so a caller bug that sends "" surfaces
+      // as a visible payload error instead of silently walking the user into a
+      // lockout with a password that was right all along.
+      if (
+        typeof p?.password !== "string" ||
+        p.password.length === 0 ||
+        typeof p?.vaultId !== "string"
+      ) {
+        return { ok: false, reason: "missing password or vaultId" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+          failCount,
+        };
+      }
+      try {
+        const r = await removeVaultV4(p.password, p.vaultId);
+        await chrome.storage.session.remove([
+          SESSION_KEY_UNLOCK_FAIL_COUNT,
+          SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+        ]);
+        await resetAutoLock();
+        // Removing the active vault promotes a successor, so the address a
+        // connected dApp holds may now be stale. Same EIP-1193 contract as
+        // vault-select.
+        broadcastEvent("accountsChanged", [r.newActiveAddress]);
+        return { ok: true, ...r };
+      } catch (e) {
+        const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
+        return {
+          ok: false,
+          reason: "wrong_password",
+          failCount,
+          secondsRemaining: secondsUntil(lockoutUntil),
+        };
+      }
+    }
+    case "vault-export-seed": {
+      // Re-auth path returning a SPECIFIC vault's 24-word recovery phrase, for
+      // revealing a non-active wallet from a wallet list. Mirrors
+      // keystore-export-seed exactly, including the shared lockout counters —
+      // only the vault targeting differs. The phrase is returned to the caller
+      // and never cached, persisted, or logged here.
+      const p = message.payload as { password?: string; vaultId?: string };
+      // An EMPTY password is a malformed request, not a guess: the password
+      // policy floors real passwords at MIN_PASSWORD_LENGTH, so "" can never be
+      // correct. Rejecting it here costs no Argon2id derivation and — the point
+      // — burns no brute-force attempt, so a caller bug that sends "" surfaces
+      // as a visible payload error instead of silently walking the user into a
+      // lockout with a password that was right all along.
+      if (
+        typeof p?.password !== "string" ||
+        p.password.length === 0 ||
+        typeof p?.vaultId !== "string"
+      ) {
+        return { ok: false, reason: "missing password or vaultId" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+          failCount,
+        };
+      }
+      try {
+        const r = await exportMnemonicForVaultV4(p.password, p.vaultId);
+        await chrome.storage.session.remove([
+          SESSION_KEY_UNLOCK_FAIL_COUNT,
+          SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+        ]);
+        await resetAutoLock();
+        return { ok: true, mnemonic: r.mnemonic };
+      } catch (e) {
+        const msg = (e as Error).message;
+        // C9/C10 — raised downstream of a successful password check, so it is
+        // not a guess. Checked BEFORE the message allowlist: the signal is the
+        // marker, never the wording.
+        if (isPostVerificationFailure(e)) {
+          return { ok: false, reason: msg };
+        }
+        if (isStructuralVaultRefusal(msg)) {
+          return { ok: false, reason: msg };
+        }
+        ({ failCount, lockoutUntil } = await chargeFailedPasswordAttempt());
+        return {
+          ok: false,
+          reason: "wrong_password",
+          failCount,
+          secondsRemaining: secondsUntil(lockoutUntil),
+        };
+      }
+    }
     case "multisig-propose": {
       // Create a tx proposal inside a multisig
       // vault's meta. The proposer is the first self-signer in the
@@ -7614,6 +8155,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = (message.payload ?? {}) as {
         vaultId?: string;
         proposalId?: string;
+        /** Identifies one user CONFIRMATION of this execution. Present → the
+         *  submit below is idempotent under that key. Absent → the path is
+         *  byte-identical to before. */
+        idempotencyKey?: unknown;
       };
       if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
         return { ok: false, reason: "missing vaultId or proposalId" };
@@ -7730,7 +8275,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               chainIdHex: action.chainIdHex,
             },
             p.vaultId,
-            { from: fromAddr, chainIdHex: action.chainIdHex },
+            {
+              from: fromAddr,
+              chainIdHex: action.chainIdHex,
+              // Same hook, same route as the `wallet-send-tx` call site — not a
+              // parallel path. Absent (or not a non-empty string) spreads
+              // nothing, so the options object is exactly
+              // `{ from, chainIdHex }` as before and submitTrackedTx's
+              // `key !== undefined` branch is never entered.
+              ...(typeof p.idempotencyKey === "string" &&
+              p.idempotencyKey.length > 0
+                ? { idempotencyKey: p.idempotencyKey }
+                : {}),
+            },
           );
           txHash = r.txHash;
         } catch (e) {
@@ -8689,10 +9246,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
       ]);
-      let failCount =
-        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
-          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
-          : 0;
+      // The count itself is not surfaced by this op; the charge is computed
+      // inside the counter lock (H8), so only the resulting deadline is needed.
       let lockoutUntil =
         typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
           ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
@@ -8707,18 +9262,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       const verified = await verifyContainerPasswordV4(p.password);
-      if (!verified) {
-        failCount += 1;
-        const ms = lockoutMsFor(failCount);
-        if (ms > 0) lockoutUntil = Date.now() + ms;
-        await chrome.storage.session.set({
-          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-        });
+      // DA-004 — see vault-verify-password.
+      if (!verified.verified && verified.structural) {
+        return { ok: false, reason: verified.reason };
+      }
+      if (!verified.verified) {
+        ({ lockoutUntil } = await chargeFailedPasswordAttempt());
         return {
           ok: false,
           reason: "wrong_password",
-          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          secondsRemaining: secondsUntil(lockoutUntil),
         };
       }
       // Correct password — clear the shared fail/lockout counters as the
@@ -8950,7 +9503,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Real chain-liveness probe for the popup's status-bar health
       // indicator. Calls `eth_blockNumber` on the active testnet
       // operator and returns the hex result; the popup tracks block-
-      // advance freshness client-side at an 8-second cadence to drive
+      // advance freshness client-side at its HEALTH_TICK_MS cadence to drive
       // the LIVE / STALLED / OFFLINE state machine.
       //
       // Reuses `cachedOperator` (shared with `wallet-operator-status`) to avoid
@@ -8959,7 +9512,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // stale) — so the block read below is tried against it FIRST, skipping
       // the probe RTT. A stale candidate that fails falls through to a fresh
       // probe in the SAME tick (so a dead persisted operator self-heals now,
-      // not at the next 8 s poll); a genuinely-fresh operator that fails means
+      // not at the next poll tick); a genuinely-fresh operator that fails means
       // the fleet is unhealthy and surfaces as-is.
       //
       // Close the cold-wake boot race: the popup message dispatch does NOT
@@ -9837,6 +10390,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // responders, or any error returns no address (the popup tells the user
       // to paste it); we NEVER fall back to the operator-echoed label cache for
       // a signed send.
+      //
+      // CURRENT CONDITION: forward resolution ALWAYS returns `insufficient`
+      // and therefore never yields an address. NAME_RESOLVE_QUORUM_MIN is 2
+      // and the SDK chain registry publishes ONE endpoint, so at most one
+      // operator can answer. This is a FLEET-TOPOLOGY consequence, not a
+      // wallet defect, and it is the fail-closed branch working: one operator
+      // must never be the sole authority for a signed recipient. It lights up
+      // on its own once the registry publishes a second genesis-trusted
+      // operator. Do NOT "fix" it by lowering the threshold — that would hand
+      // a signed recipient to a single operator, which is the exact attack
+      // P5-002 closed.
       const p = message.payload as { name?: unknown; chainIdHex?: unknown };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
@@ -9906,7 +10470,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // reverts a taken/invalid/unowned name post-inclusion; we pre-check
       // availability (+ agent-parent ownership) to avoid a wasted-fee revert,
       // but never fabricate success.
-      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      const p = message.payload as {
+        name?: unknown;
+        chainIdHex?: unknown;
+        idempotencyKey?: unknown;
+      };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
       }
@@ -9955,6 +10523,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           from: fromAddr,
           chainIdHex: p.chainIdHex,
           boundVaultId,
+          idempotencyKey: p.idempotencyKey,
         });
         await recordOwnedName(fromAddr, v.canonical, v.category);
         return {
@@ -9977,6 +10546,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         name?: unknown;
         recipientAddr0x?: unknown;
         chainIdHex?: unknown;
+        idempotencyKey?: unknown;
       };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
@@ -10018,6 +10588,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           from: fromAddr,
           chainIdHex: p.chainIdHex,
           boundVaultId,
+          idempotencyKey: p.idempotencyKey,
         });
         return { ok: true, txHash: r.txHash, via: r.via, canonical: v.canonical };
       } catch (e) {
@@ -10029,7 +10600,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // U-curve registration cost (value == cost), within the 24h window. There
       // is no on-chain pending-proposal reader, so a stale/absent proposal
       // reverts post-inclusion (fail-safe) — surfaced honestly, never faked.
-      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      const p = message.payload as {
+        name?: unknown;
+        chainIdHex?: unknown;
+        idempotencyKey?: unknown;
+      };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
       }
@@ -10051,6 +10626,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           from: fromAddr,
           chainIdHex: p.chainIdHex,
           boundVaultId,
+          idempotencyKey: p.idempotencyKey,
         });
         await recordOwnedName(fromAddr, v.canonical, v.category);
         return {
@@ -10165,6 +10741,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // disagreement / insufficient responders / any error returns null (the UI
       // shows the bech32m address — never a single-operator-asserted name). A
       // confirmed-miss (quorum agrees "no name") is cached as null.
+      //
+      // CURRENT CONDITION: like forward-resolve above, this always returns
+      // `insufficient` today — NAME_RESOLVE_QUORUM_MIN is 2 against a registry
+      // publishing ONE endpoint — so no `.mono` name is ever displayed and
+      // every address renders as bech32m. A fleet-topology consequence, not a
+      // wallet defect; do NOT lower the threshold to make names appear.
       const p = message.payload as { address?: unknown; chainIdHex?: unknown };
       if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing address or chainIdHex" };
@@ -11126,7 +11708,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       //
       // Graceful degradation: if WS unavailable, the IPC returns
       // `{ ok: true, status: "unavailable" }` and the popup keeps its
-      // existing 8 s blockNumber poll active.
+      // existing HEALTH_TICK_MS blockNumber poll active.
       const client = getWsClient();
       // First call: install the storage-write listener exactly once
       // per SW boot via the `wsNewHeadsListenerInstalled` flag.
@@ -11162,7 +11744,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   typeof prev === "object" && prev !== null
                     ? (prev as { hex?: unknown }).hex
                     : undefined;
-                if (prevHex !== number) {
+                // W-1: only a STRICTLY HIGHER head is an advance. This used to
+                // compare hexes for inequality, so a push from a lagging backend
+                // rewrote the advance timestamp and reset the popup's stall
+                // window. An absent/unparsable previous head means no baseline
+                // yet, so the first well-formed push establishes one.
+                const prevHeight = parseBlockHeight(prevHex);
+                const nextHeight = parseBlockHeight(number);
+                if (
+                  nextHeight !== null &&
+                  (prevHeight === null || nextHeight > prevHeight)
+                ) {
                   chrome.storage.session
                     .set({
                       [STORAGE_KEY_WS_BLOCK_ADVANCE]: {
@@ -11238,6 +11830,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // verifies the assertion before signing (verifyPasskeyAssertionForSend).
         passkeyChallengeId?: unknown;
         passkeyAssertion?: unknown;
+        /** One user CONFIRMATION. Present → this submit is idempotent under
+         *  that key; a retry re-broadcasts the bytes already signed. */
+        idempotencyKey?: string;
       };
       if (
         typeof p?.to !== "string" ||
@@ -11422,10 +12017,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 SESSION_KEY_UNLOCK_FAIL_COUNT,
                 SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
               ]);
-              let failCount =
-                typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
-                  ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
-                  : 0;
+              // The count itself is not surfaced by this op; the charge is
+              // computed inside the counter lock (H8), so only the resulting
+              // deadline is needed here.
               let lockoutUntil =
                 typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
                   ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
@@ -11442,19 +12036,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               const verified = await verifyContainerPasswordV4(
                 p.elevatedPassword,
               );
-              if (!verified) {
-                failCount += 1;
-                const ms = lockoutMsFor(failCount);
-                if (ms > 0) lockoutUntil = Date.now() + ms;
-                await chrome.storage.session.set({
-                  [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
-                  [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
-                });
+              // DA-004 — a structural verdict never evaluated the password.
+              if (!verified.verified && verified.structural) {
+                return { ok: false, reason: verified.reason };
+              }
+              if (!verified.verified) {
+                ({ lockoutUntil } = await chargeFailedPasswordAttempt());
                 return {
                   ok: false,
                   passkeyElevation: "wrong_password" as const,
                   reason: "wrong_password",
-                  secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+                  secondsRemaining: secondsUntil(lockoutUntil),
                 };
               }
               await chrome.storage.session.remove([
@@ -11549,7 +12141,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const { txHash, via, nonceHex } = await submitTrackedTx(
           txReq,
           boundVaultId,
-          { from: fromAddr, chainIdHex: p.chainIdHex },
+          {
+            from: fromAddr,
+            chainIdHex: p.chainIdHex,
+            // Present only once the popup mints one at Confirm; absent keeps
+            // the pre-existing path exactly.
+            ...(typeof p.idempotencyKey === "string" && p.idempotencyKey.length > 0
+              ? { idempotencyKey: p.idempotencyKey }
+              : {}),
+          },
         );
         // Part 3: SW-authoritative daily-cap count. A daily-mode passkey-
         // unlocked send was just submitted — append to the usage ledger here
@@ -11865,6 +12465,14 @@ void bootHydrated
     // Best-effort badge reconciliation. Storage/action failures must not escape
     // module initialization or keep the service worker alive.
   });
+
+// Dev builds only. The worker's console is a separate devtools window most
+// people never open, so an unhandled rejection here is even less visible than
+// one in the popup — and this file is full of deliberate fire-and-forget
+// (`void persistPendingRowBackground(...)` and friends) whose internal swallows
+// this does not touch. A detector, not a handler: it reports and suppresses
+// nothing. See src/shared/dev-rejection-detector.ts.
+armUnhandledRejectionDetector();
 
 // ---- message routing ----
 

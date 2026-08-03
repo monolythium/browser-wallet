@@ -30,8 +30,9 @@
 //   §28.3.1— diversity scoring (rendered as region count + ASN proxy)
 //   §30.5  — Foundation-cluster sunset (entity flag badge)
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgStakingClusterStatus,
@@ -252,7 +253,15 @@ function ClusterIdentityCard({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {devMode && (
-        <KeyValueRow label="Cluster id" value={String(cluster.clusterId)} />
+        <KeyValueRow
+          label={
+            <>
+              Cluster id
+              <DevBadge />
+            </>
+          }
+          value={String(cluster.clusterId)}
+        />
       )}
       <KeyValueRow
         label="Name"
@@ -469,6 +478,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
           }}
         >
           Operator slate
+          <DevBadge />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {status.members.map((m) => (
@@ -646,7 +656,7 @@ function KeyValue({
   value,
   tooltip,
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   tooltip?: string;
 }) {
@@ -676,7 +686,7 @@ function KeyValueRow({
   tooltip,
   muted,
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   tooltip?: string;
   muted?: boolean;
