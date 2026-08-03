@@ -29,6 +29,8 @@
 //     this extension, which is the same trust level the popup already has.
 //   - It is a build-time check. It cannot see a manifest edited after packaging.
 
+import { escapeRegExpExceptWildcard } from "./escape-regexp.js";
+
 /** One web-accessible resource that would void the popup-op gate. */
 export interface EmbeddablePageViolation {
   /** Index into `web_accessible_resources` — the block the resource came from. */
@@ -56,9 +58,10 @@ const EMBEDDABLE_PROBES = [
  *  to a RegExp so a pattern can be tested against the probe paths rather than
  *  guessed at by inspecting the string. */
 function globToRegExp(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*");
+  // The escape and the `*` translation must stay in this order: the shared
+  // helper deliberately leaves `*` alone so that this line, and only this line,
+  // decides what a Chrome wildcard means.
+  const escaped = escapeRegExpExceptWildcard(pattern).replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`);
 }
 
