@@ -26,7 +26,7 @@
   "dependencies": {
     "@monolythium/core-sdk": "0.6.11",
     "@noble/ciphers": "2.2.0",
-    "@noble/hashes": "2.2.0",
+    "@noble/hashes": "2.3.0",
     "@noble/post-quantum": "0.6.1",
     "@scure/bip39": "2.2.0",
     "qrcode.react": "4.2.0"
