@@ -603,7 +603,7 @@ export function Settings({
             }}
           >
             {devMode
-              ? "Override the Monolythium Testnet operator RPC list with your own operator nodes. Defaults use the published operators in round-robin."
+              ? "Override the Monolythium Testnet operator RPC list with your own operator nodes. Defaults use the published operators."
               : "Review the Monolythium Testnet operators the wallet connects to."}
           </div>
           <button

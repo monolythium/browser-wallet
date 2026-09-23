@@ -27,6 +27,9 @@ import {
 } from "../bg";
 import { AddContactModal } from "./Contacts";
 import { ContactsPickerModal } from "../components/ContactsPickerModal";
+import { DevBadge } from "../components/DevBadge";
+import { nextSendKey, type SendKeyState } from "../send-key";
+import { mintSendConfirmationKey } from "../../shared/send-confirmation-key";
 import type { ContactRecord } from "../bg";
 import { useContacts } from "../hooks/useContacts";
 import { useFeature } from "../hooks/useFeature";
@@ -169,6 +172,14 @@ export function Send({
   const [elevatedErr, setElevatedErr] = useState<string | null>(null);
   const [elevatedBusy, setElevatedBusy] = useState(false);
 
+  // Send-idempotency key for the attempt currently in flight, plus the flag
+  // that tells the next submit it is a RETRY of the one that just failed.
+  // Both are component state, so they die with the popup — which is exactly the
+  // row-7 residual: a retry after reopening the popup mints fresh and takes the
+  // normal path.
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
+  const [retryArmed, setRetryArmed] = useState(false);
+
   // Form state — single source of truth so preview and "Try again" can
   // round-trip without prop drilling.
   const [to, setTo] = useState("");
@@ -220,6 +231,7 @@ export function Send({
     code: number | null;
     method: string | null;
     via: string | null;
+    staleConfirmation: boolean;
   } | null>(null);
 
   // Fetch fee suggestion when the screen opens or the chain changes.
@@ -490,6 +502,7 @@ export function Send({
             code: null,
             method: null,
             via: null,
+            staleConfirmation: false,
           });
           setStep("error");
         }
@@ -531,11 +544,31 @@ export function Send({
           };
         }
       }
+      // Which key this submit carries. `params` is the user's INTENT only —
+      // recipient, amount, chosen tier. Deliberately not the quoted fee, which
+      // moves between attempts on its own and would make every retry look like
+      // an edit, so the mechanism would never fire.
+      //
+      // An `opts` call is a CONTINUATION of this same send (the over-limit
+      // password re-auth, or the passkey assertion), not a new one, so it
+      // carries rather than mints.
+      const keyParams = `${effectiveAddr0x}|${valueLythoshiHex}|${tier}`;
+      const keyDecision = nextSendKey(
+        sendKey,
+        retryArmed || opts !== undefined ? "retry" : "submit",
+        keyParams,
+        mintSendConfirmationKey,
+      );
+      setSendKey(keyDecision.next);
+      setRetryArmed(false);
       const r = await bgWalletSendTx({
         to: effectiveAddr0x,
         valueWeiHex: valueLythoshiHex,
         chainIdHex: chainId,
         opKind: "send",
+        ...(keyDecision.use !== null
+          ? { idempotencyKey: keyDecision.use }
+          : {}),
         // T1-04(a) — present only on the over-limit re-auth path; the SW
         // verifies it before signing.
         ...(opts?.elevatedPassword
@@ -553,6 +586,17 @@ export function Send({
       });
       if (r.ok) {
         if (opts?.viaElevated) setElevatedOpen(false);
+        // The send landed — release the key so a deliberate second send of the
+        // same amount to the same address gets its own nonce instead of being
+        // answered as a replay of this one.
+        setSendKey(
+          nextSendKey(
+            keyDecision.next,
+            "success",
+            keyParams,
+            mintSendConfirmationKey,
+          ).next,
+        );
         setTxHash(r.result.txHash);
         // The daily-cap usage ledger is appended by the service worker itself
         // on a successful daily-mode passkey send (the SW is the authoritative
@@ -586,6 +630,7 @@ export function Send({
           code: null,
           method: null,
           via: null,
+          staleConfirmation: false,
         });
         setStep("error");
       } else {
@@ -595,6 +640,7 @@ export function Send({
           code: typeof r.code === "number" ? r.code : null,
           method: typeof r.method === "string" ? r.method : null,
           via: typeof r.via === "string" ? r.via : null,
+          staleConfirmation: r.staleConfirmation === true,
         });
         setStep("error");
       }
@@ -605,6 +651,7 @@ export function Send({
         code: null,
         method: null,
         via: null,
+        staleConfirmation: false,
       });
       setStep("error");
     }
@@ -648,6 +695,7 @@ export function Send({
           code: null,
           method: null,
           via: null,
+          staleConfirmation: false,
         });
         setStep("error");
       } else if (passkeyDecision?.kind === "over-limit") {
@@ -842,12 +890,26 @@ export function Send({
         code={submitError.code}
         method={submitError.method}
         via={submitError.via}
+        staleConfirmation={submitError.staleConfirmation}
         {...(onOpenOperators ? { onOpenOperators } : {})}
         onRetry={() => {
           setSubmitError(null);
+          // Mark the NEXT submit as a retry of the attempt that just failed, so
+          // it carries that key and the service worker re-broadcasts the bytes
+          // it already signed instead of deriving a new nonce. This routes back
+          // to the form, so the user can edit before confirming — nextSendKey's
+          // params guard is what stops an edited transaction replaying the
+          // original.
+          setRetryArmed(true);
           setStep("form");
         }}
         onCancel={onBack}
+        onStartNew={() => {
+          setSendKey(null);
+          setRetryArmed(false);
+          setSubmitError(null);
+          setStep("form");
+        }}
       />
     );
   }
@@ -1143,6 +1205,7 @@ export function Send({
                           wordBreak: "break-word",
                         }}
                       >
+                        <DevBadge />
                         {feeError}
                       </div>
                     )}
@@ -1205,6 +1268,7 @@ export function Send({
                   }}
                 >
                   Low-level compatibility fee details
+                  <DevBadge />
                 </summary>
                 {estimatedFeeDisplay?.source === "structured" ? (
                   estimatedFeeDisplay.detailTexts.map((detail) => (
@@ -2823,8 +2887,10 @@ interface ErrorViewProps {
   code: number | null;
   method: string | null;
   via: string | null;
+  staleConfirmation: boolean;
   onRetry: () => void;
   onCancel: () => void;
+  onStartNew: () => void;
   /** Optional — when set and the error is genesis-mismatch, the body's
    *  "Operators" word becomes a button that opens the Operators directory. */
   onOpenOperators?: () => void;
@@ -2864,12 +2930,29 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
   );
 }
 
-function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperators }: ErrorViewProps) {
+function ErrorView({
+  message,
+  code,
+  method,
+  via,
+  staleConfirmation,
+  onRetry,
+  onCancel,
+  onStartNew,
+  onOpenOperators,
+}: ErrorViewProps) {
   const display = formatSendError({ message, code, method, via });
   const devMode = useFeature("DEVELOPER_MODE");
   // Typed classification on top of the formatted message. Unknown kinds
   // preserve the formatted display string in the body.
-  const classified = classifySendError(display);
+  const classified = staleConfirmation
+    ? {
+        kind: "unknown" as const,
+        headline: "Check the previous send",
+        body: message,
+        severity: "warn" as const,
+      }
+    : classifySendError(display);
   const colours = severityColours(classified.severity);
   return (
     <>
@@ -2931,6 +3014,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
                 }}
               >
                 Technical details
+                <DevBadge />
               </summary>
               <div
                 style={{
@@ -2968,14 +3052,14 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
           </button>
           <button
             className="ext-act prim"
-            onClick={onRetry}
+            onClick={staleConfirmation ? onStartNew : onRetry}
             style={{
               padding: "12px",
               flexDirection: "row",
               gap: 8,
             }}
           >
-            Try again
+            {staleConfirmation ? "Start new send" : "Try again"}
           </button>
         </div>
       </div>

@@ -20,7 +20,9 @@
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
     "useDefineForClassFields": true,
-    "types": ["chrome", "vite/client"]
+    "types": ["chrome", "vite/client"],
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src/**/*", "vite.config.ts", "manifest.json"],
   "exclude": ["node_modules", "dist"]

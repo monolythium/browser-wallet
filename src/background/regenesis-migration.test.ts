@@ -79,6 +79,11 @@ describe("Posture-C re-genesis migration", () => {
       ),
     ).toBe(true);
     expect(isRegenesisSensitiveLocalKey("mono.names.cache")).toBe(true);
+    // Matcher-only, and deliberately so: `mono.ws.` IS in the local prefix list,
+    // but no writer in the tree puts a `mono.ws.*` key in local — both writers
+    // target session (see the migration test below). So this pins the prefix
+    // matcher as a FORWARD guard, should such a key ever be written to local. It
+    // does NOT mean the block-height keys are cleared; they are not.
     expect(isRegenesisSensitiveLocalKey("mono.ws.lastBlockHex")).toBe(true);
 
     expect(isRegenesisSensitiveLocalKey("mono.vaults.v4")).toBe(false);
@@ -109,7 +114,6 @@ describe("Posture-C re-genesis migration", () => {
         },
         "mono.names.cache": { "0xabc": "old" },
         "mono.sent-addrs.0xabc.0x10f2c": ["old"],
-        "mono.ws.lastBlockHex": "0x63",
         "mono.vaults.v4": { encrypted: true },
         "mono.contacts.v1": [{ name: "preserved" }],
         "mono.connected-sites": { "https://example.test": true },
@@ -121,6 +125,15 @@ describe("Posture-C re-genesis migration", () => {
         "mono.session.genesis-cache.v2": { old: true },
         "mono.session.operator.v1": { rpc: "https://old.invalid" },
         "mono.session.passkey-usage.v1": { preserved: true },
+        // The block-height keys, seeded in the area the tree actually writes
+        // them to. `service-worker.ts` and `components.tsx` write both via
+        // chrome.storage.session ONLY; nothing writes them to local. An earlier
+        // version of this test seeded `mono.ws.lastBlockHex` into the LOCAL
+        // fixture above and asserted it was removed — a state no writer can
+        // produce, so it exercised the prefix matcher and asserted nothing
+        // about the migration.
+        "mono.ws.lastBlockHex": "0x63",
+        "mono.ws.lastBlockAdvancedAt": { hex: "0x63", advancedAtMs: 1 },
       },
     );
 
@@ -131,7 +144,6 @@ describe("Posture-C re-genesis migration", () => {
       local["mono.notifications.history.0xabc.0x10f2c.v1"],
     ).toBeUndefined();
     expect(local["mono.names.cache"]).toBeUndefined();
-    expect(local["mono.ws.lastBlockHex"]).toBeUndefined();
     expect(local["mono.vaults.v4"]).toEqual({ encrypted: true });
     expect(local["mono.contacts.v1"]).toEqual([{ name: "preserved" }]);
     expect(local["mono.connected-sites"]).toEqual({
@@ -148,6 +160,29 @@ describe("Posture-C re-genesis migration", () => {
     expect(session["mono.session.operator.v1"]).toBeUndefined();
     expect(session["mono.session.passkey-usage.v1"]).toEqual({
       preserved: true,
+    });
+
+    // CHARACTERISATION — the block-height keys SURVIVE. The session removal
+    // list is exact-key and names neither of them, while `mono.ws.` sits in the
+    // LOCAL prefix list where these keys never appear. So this migration does
+    // not touch predecessor-chain block heights at all.
+    //
+    // That gap is INERT, which is why this pins the behaviour rather than
+    // fixing it: chrome.storage.session is destroyed by the extension reload
+    // that delivers a new genesis pin, so both keys are already gone when this
+    // stamp-gated migration runs — and in the one case where they could be
+    // stale (a re-genesis with NO wallet update) the stamp still matches and
+    // the migration does not run. Moving the prefix to the session list would
+    // therefore change nothing either.
+    //
+    // What this CAN catch: someone adding `mono.ws.*` to the session removal
+    // list on the assumption it does something. It deliberately cannot fail
+    // against a migration that clears nothing — for THIS key family, clearing
+    // nothing is the current behaviour.
+    expect(session["mono.ws.lastBlockHex"]).toBe("0x63");
+    expect(session["mono.ws.lastBlockAdvancedAt"]).toEqual({
+      hex: "0x63",
+      advancedAtMs: 1,
     });
   });
 

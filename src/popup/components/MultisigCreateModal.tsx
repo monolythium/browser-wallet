@@ -32,6 +32,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import {
+  ML_DSA_65_PUBLIC_KEY_LEN,
   hexToBytes,
   mlDsa65AddressFromPublicKey,
 } from "@monolythium/core-sdk/crypto";
@@ -57,7 +58,11 @@ import {
 } from "../bg";
 
 const MAX_LABEL_LEN = 32;
-const ML_DSA_65_PUBKEY_HEX_LEN = 2 + 1952 * 2;
+/** `0x` + two hex chars per pubkey byte. DERIVED from the SDK's exported
+ *  length rather than restating `1952`: a restated wire value is a copy that
+ *  can drift when the other side moves — the exact shape of the variant-index
+ *  outage — and the SDK is already the authority for every other byte here. */
+const ML_DSA_65_PUBKEY_HEX_LEN = 2 + ML_DSA_65_PUBLIC_KEY_LEN * 2;
 
 export interface MultisigCreateModalProps {
   open: boolean;

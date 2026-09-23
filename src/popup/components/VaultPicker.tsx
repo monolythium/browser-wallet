@@ -42,7 +42,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 
-import { Icon } from "../Icon";
+import { Icon, type IconName } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { useFitText } from "./useFitText";
 import { Modal } from "./Modal";
@@ -87,6 +87,17 @@ export interface VaultPickerProps {
    *  would still reflect the pre-import vault, leaving the chip showing
    *  a stale label until lock/unlock or reopen remounted the tree. */
   onVaultComplete?: () => void;
+  /** Navigates to the Wallets page, where renaming, revealing a recovery
+   *  phrase and removing a wallet all live. When omitted the entry is hidden,
+   *  matching the optional-callback idiom the rest of the popup uses.
+   *
+   *  This picker deliberately carries NO destructive or disclosing action of
+   *  its own: duplicating the gated remove / reveal flow on a second surface
+   *  would double the maintenance and open a second path to mnemonic
+   *  disclosure for no user gain. It links to that surface instead. The
+   *  Wallets page gates itself on entry — this link neither bypasses nor
+   *  pre-satisfies that gate. */
+  onManageWallets?: () => void;
 }
 
 /**
@@ -113,6 +124,7 @@ export function VaultPicker({
   activeVaultLabel,
   onNewWalletFlow,
   onVaultComplete,
+  onManageWallets,
 }: VaultPickerProps) {
   // undefined = pre-fetch tick; null = bgVaultsList resolved with no
   // container (still legacy single-vault); array = container ready.
@@ -230,6 +242,7 @@ export function VaultPicker({
   };
 
   const handleStartRename = (id: string) => {
+    setOpen(false);
     setRenameId(id);
   };
 
@@ -265,6 +278,12 @@ export function VaultPicker({
   const handleAddMultisig = () => {
     setOpen(false);
     setMultisigOpen(true);
+  };
+  const handleManageWallets = () => {
+    // Close before navigating — the same order the three add CTAs use, so the
+    // portalled list never lingers over the screen we route to.
+    setOpen(false);
+    onManageWallets?.();
   };
   const handleAddCancel = () => setAddMode(null);
   const handleAddComplete = async () => {
@@ -541,7 +560,14 @@ export function VaultPicker({
               top: anchor.top,
               left: anchor.left,
               width: anchor.width,
-              zIndex: 9999,
+              // Must stay strictly BELOW the shared Modal's z-index (1000) so
+              // modals opened from this list — rename, add, multisig — paint
+              // above it instead of underneath. The PORTAL below is what
+              // escapes `.ext`'s backdrop-filter stacking trap, NOT the
+              // magnitude: `.ext` sits at the auto/0 level of the body
+              // stacking context, so any positive value clears the frame.
+              // Do not "fix" this back up to a maximal value.
+              zIndex: 500,
               background: "var(--ink-100, #15161a)",
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 12,
@@ -571,6 +597,24 @@ export function VaultPicker({
               onClick={handleAddMultisig}
               label="New multisig wallet"
             />
+            {onManageWallets && (
+              <>
+                {/* Second divider, same rule as the one above the CTAs: this
+                   entry is navigation, not creation, so it sits apart from the
+                   three "New / Import" actions. */}
+                <div
+                  style={{
+                    borderTop: "1px solid rgba(255,255,255,0.06)",
+                    margin: "4px 0",
+                  }}
+                />
+                <FooterButton
+                  onClick={handleManageWallets}
+                  label="Manage wallets"
+                  icon="wallets"
+                />
+              </>
+            )}
           </div>,
           document.body,
         )}
@@ -727,7 +771,12 @@ function VaultRow({ vault, onSelect, onRename }: VaultRowProps) {
           cursor: "pointer",
         }}
       >
-        <Icon name="more" size={14} />
+        {/* Rename, and only rename — the same `pen` the top-bar rename control
+           uses. This was a `more` kebab, which promised a menu the button never
+           had; the aria-label always said "Rename", so only sighted users were
+           misled. Seeing the same pencil in the top bar and on each row is
+           honest repetition: both do the same thing to different wallets. */}
+        <Icon name="pen" size={14} />
       </button>
     </div>
   );
@@ -736,9 +785,12 @@ function VaultRow({ vault, onSelect, onRename }: VaultRowProps) {
 interface FooterButtonProps {
   onClick: () => void;
   label: string;
+  /** Defaults to `plus` — the three creation CTAs. Navigation entries pass
+   *  their own glyph so they don't read as "add something". */
+  icon?: IconName;
 }
 
-function FooterButton({ onClick, label }: FooterButtonProps) {
+function FooterButton({ onClick, label, icon = "plus" }: FooterButtonProps) {
   return (
     <button
       type="button"
@@ -759,7 +811,7 @@ function FooterButton({ onClick, label }: FooterButtonProps) {
         cursor: "pointer",
       }}
     >
-      <Icon name="plus" size={12} />
+      <Icon name={icon} size={12} />
       {label}
     </button>
   );

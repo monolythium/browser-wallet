@@ -12,6 +12,19 @@
 import { STORAGE_KEY_CONNECTED_SITES } from "../shared/constants.js";
 
 export interface ConnectedSiteRecord {
+  /** The account that was active when the user approved this origin.
+   *
+   *  RECORDED ONLY — it is not a scope, and no grant check reads it. Every gate
+   *  in the service worker is `session.connectedOrigins.has(origin)`, and the
+   *  boot rehydrate takes `Object.keys(sites)` and discards the value entirely.
+   *  The Connected sites page sorts on `approvedAt` and does not read this
+   *  either; the only code that touches it is the shape check in
+   *  `loadConnectedSites` below.
+   *
+   *  So a grant follows the CONNECTION, not the account: switching the active
+   *  wallet neither revokes nor re-scopes an approved origin. That is the
+   *  accepted posture — stated here so the field is not mistaken for an
+   *  enforcement point by anyone extending this. */
   address: string;
   approvedAt: number;
 }

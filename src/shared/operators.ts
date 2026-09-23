@@ -40,6 +40,42 @@ export interface OperatorEntry {
 }
 
 /**
+ * Region strings that carry no geographic information. `region` is a required
+ * `string` on OperatorEntry (the wire types mirror it), so an operator with no
+ * known region is represented by a value rather than by absence — these are the
+ * values that mean "absent".
+ *
+ * `unknown` is here because the wallet itself used to mint it when the SDK
+ * registry omitted `region`; a user override saved while that prefill was live
+ * can still carry it, so the check stays even though the prefill is gone.
+ * Compared lower-cased and trimmed.
+ */
+const REGION_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  "unknown",
+  "n/a",
+  "na",
+  "none",
+  "-",
+  "—",
+  "?",
+]);
+
+/**
+ * The region to display for an operator, or `null` when there is nothing
+ * honest to show. Callers omit the field/row entirely on `null` — no "—",
+ * no "N/A", no empty element (honest absence, as in NotificationDetail).
+ *
+ * Display-only: it never changes the stored `region`, the operator's
+ * identity (dedup keys on `rpc`), or anything sent to an RPC.
+ */
+export function displayableRegion(region: string): string | null {
+  const trimmed = region.trim();
+  if (trimmed.length === 0) return null;
+  if (REGION_PLACEHOLDERS.has(trimmed.toLowerCase())) return null;
+  return trimmed;
+}
+
+/**
  * Validate an unknown input as an OperatorEntry[]. Returns the validated
  * list on success, null on any structural failure. Used by the SW
  * testnet-operators-set IPC handler as defense-in-depth on top of the
@@ -51,11 +87,10 @@ export interface OperatorEntry {
  *     (0-32 chars; allow blank for the user-supplied case), and a `rpc`
  *     that parses via `new URL()`.
  */
-/** Upper bound on a user/override-supplied operator list. The live fleet — the
- *  v0.4.0 four-cluster DVT set, whose exact operator count comes from the SDK
- *  registry and can change — is well under this; 64 is generous headroom while
- *  bounding a pathological input (a tampered override could otherwise
- *  materialize an unbounded array). */
+/** Upper bound on a user/override-supplied operator list. The live fleet —
+ *  whose operator count comes from the SDK registry and can change — is well
+ *  under this; 64 is generous headroom while bounding a pathological input (a
+ *  tampered override could otherwise materialize an unbounded array). */
 export const MAX_OPERATORS = 64;
 
 export function validateOperatorList(input: unknown): OperatorEntry[] | null {

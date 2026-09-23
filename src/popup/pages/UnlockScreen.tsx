@@ -9,7 +9,10 @@ import { Modal } from "../components/Modal";
 import { PasswordInput } from "../components/PasswordInput";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bech32mDisplay } from "../../shared/bech32m";
-import { WIPE_CONFIRM_WORD as RESET_CONFIRM_WORD } from "../../shared/constants";
+import {
+  LOCKOUT_RESTART_HINT,
+  WIPE_CONFIRM_WORD as RESET_CONFIRM_WORD,
+} from "../../shared/constants";
 
 interface UnlockScreenProps {
   /** Truncated address chip rendered above the password field, in bech32m form (e.g. "mono1abc…wxyz"). */
@@ -37,6 +40,9 @@ interface UnlockScreenProps {
    *  cannot be opened — show a "restore from your recovery phrase" message +
    *  the restore entry point instead of the password field. */
   legacyRestoreRequired?: boolean;
+  /** Addresses recorded in the unopenable container, shown so the user can note
+   *  them before restoring. Only meaningful with `legacyRestoreRequired`. */
+  legacyAddresses?: string[];
 }
 
 function shortAddress(addr: string | null): string {
@@ -52,6 +58,7 @@ export function UnlockScreen({
   onForgotImport,
   onForgotReset,
   legacyRestoreRequired = false,
+  legacyAddresses,
 }: UnlockScreenProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -216,8 +223,40 @@ export function UnlockScreen({
           >
             This wallet predates an encryption upgrade and can no longer be
             unlocked with your password. Restore it from your 24-word recovery
-            phrase to continue — your address is unchanged.
+            phrase to continue.
           </div>
+          {legacyAddresses && legacyAddresses.length > 0 && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <div>
+                {legacyAddresses.length === 1
+                  ? "This wallet's recorded address:"
+                  : "Recorded addresses:"}
+              </div>
+              {legacyAddresses.map((a) => (
+                <div
+                  key={a}
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 11,
+                    color: "var(--fg-200)",
+                    wordBreak: "break-all",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  {bech32mDisplay(a)}
+                </div>
+              ))}
+            </div>
+          )}
           {showForgotLink && (
             <button
               type="button"
@@ -270,7 +309,7 @@ export function UnlockScreen({
               }}
             >
               {secondsRemaining > 0
-                ? `Too many attempts. Try again in ${secondsRemaining}s.`
+                ? `Too many attempts. Try again in ${secondsRemaining}s. ${LOCKOUT_RESTART_HINT}`
                 : error}
             </div>
           )}
@@ -414,8 +453,8 @@ export function UnlockScreen({
               display: "grid",
               placeItems: "center",
               borderRadius: "var(--r-xl)",
-              background: "rgba(220,80,80,0.10)",
-              border: "1px solid rgba(220,80,80,0.4)",
+              background: "rgba(var(--err-glow), 0.10)",
+              border: "1px solid rgba(var(--err-glow), 0.4)",
               color: "var(--err)",
               fontSize: 26,
             }}
@@ -449,8 +488,8 @@ export function UnlockScreen({
           style={{
             padding: 12,
             borderRadius: 10,
-            background: "rgba(220,80,80,0.08)",
-            border: "1px solid rgba(220,80,80,0.35)",
+            background: "rgba(var(--err-glow), 0.08)",
+            border: "1px solid rgba(var(--err-glow), 0.35)",
             fontSize: 12,
             color: "var(--fg-100)",
             lineHeight: 1.55,

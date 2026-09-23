@@ -179,8 +179,8 @@ export function UnstakeForm({
 const sourceClusterCardStyle: CSSProperties = {
   padding: "10px 12px",
   borderRadius: 10,
-  background: "rgba(220,80,80,0.05)",
-  border: "1px solid rgba(220,80,80,0.3)",
+  background: "rgba(var(--err-glow), 0.05)",
+  border: "1px solid rgba(var(--err-glow), 0.3)",
 };
 
 const changeBtnStyle: CSSProperties = {

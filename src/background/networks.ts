@@ -11,7 +11,12 @@ import {
   type OperatorEntry,
 } from "../shared/operators.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
+import {
+  GENESIS_OBSERVED_NULL_TTL_MS,
+  GENESIS_POSITIVE_TTL_MS,
+} from "../shared/constants.js";
 import { hardenedOperators } from "../shared/hardened-dial.js";
+import { STORAGE_KEY_LOOPBACK_ALLOWED } from "../shared/loopback.js";
 import {
   TESTNET_BLOCK0_HASH,
   TESTNET_GENESIS_HASH,
@@ -76,7 +81,12 @@ export const MAX_EXECUTION_UNIT_LIMIT = 30_000_000n; // 0x1C9C380
 export const TESTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
   getRpcEndpoints("testnet-69420").map((endpoint, i) => ({
     name: `operator-${i + 1}`,
-    region: endpoint.region ?? "unknown",
+    // The registry's `region` is optional and the current gateway entry omits
+    // it. Carry the absence through as an empty string instead of minting
+    // "unknown": a placeholder here would be rendered verbatim by every
+    // operator surface, and prefilled into the override form for the user to
+    // save. Consumers use `displayableRegion()` and omit the field.
+    region: endpoint.region ?? "",
     rpc: endpoint.url,
     // Pull SDK's ws_url through when present so the
     // WS client can subscribe without per-operator auto-discovery. When
@@ -92,6 +102,21 @@ let activeOperators: OperatorEntry[] = TESTNET_OPERATOR_RPCS_DEFAULTS.map(
   (d) => ({ ...d }),
 );
 
+/** The user's loopback opt-in, mirrored in memory from
+ *  `STORAGE_KEY_LOOPBACK_ALLOWED`. Refreshed by `loadOperatorOverride()` — which
+ *  runs at boot and on every storage echo — so it cannot go stale relative to
+ *  the override it gates. Defaults to FALSE: before the first read the wallet
+ *  dials only the built-in fleet. */
+let loopbackAllowed = false;
+
+/** Whether the user has opted in to dialling a node on this machine. Read by the
+ *  operators IPC so its refusal and the dial-set agree on one value. NOT a
+ *  security boundary — the loopback `connect-src` entries ship to every user
+ *  regardless; this only decides whether the wallet will dial such a host. */
+export function isLoopbackAllowed(): boolean {
+  return loopbackAllowed;
+}
+
 /** Snapshot of the current effective operator list (defaults or override).
  *  RPC dispatch (`testnetJsonRpc`, `probeFirstAliveOperator`) calls
  *  this on every iteration so a hot-swapped override takes effect on
@@ -104,18 +129,28 @@ export function getActiveOperators(): ReadonlyArray<OperatorEntry> {
  *  Call at SW boot and from the chrome.storage.onChanged listener. */
 export async function loadOperatorOverride(): Promise<void> {
   return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEY_OPERATOR_OVERRIDE], (res) => {
-      const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
-      const validated = validateOperatorList(raw);
-      // Hardened builds ignore the stored override (it would brick RPC under
-      // the strict connect-src) and always dial the allowlisted defaults.
-      activeOperators = hardenedOperators(
-        TESTNET_OPERATOR_RPCS_DEFAULTS,
-        validated,
-        isHardenedBuild(),
-      );
-      resolve();
-    });
+    chrome.storage.local.get(
+      [STORAGE_KEY_OPERATOR_OVERRIDE, STORAGE_KEY_LOOPBACK_ALLOWED],
+      (res) => {
+        const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
+        const validated = validateOperatorList(raw);
+        // Read the opt-in in the SAME get as the override. Reading it later, or
+        // from a cached copy, would open a window where the override is applied
+        // against a stale flag — and this function runs at every boot and on
+        // every storage echo, so that window would be the common path.
+        loopbackAllowed = res?.[STORAGE_KEY_LOOPBACK_ALLOWED] === true;
+        // Hardened builds ignore an override they cannot dial (it would brick
+        // RPC under the strict connect-src) and fall back to the allowlisted
+        // defaults. A loopback override is dialable only with the opt-in on.
+        activeOperators = hardenedOperators(
+          TESTNET_OPERATOR_RPCS_DEFAULTS,
+          validated,
+          isHardenedBuild(),
+          loopbackAllowed,
+        );
+        resolve();
+      },
+    );
   });
 }
 
@@ -127,13 +162,19 @@ export async function loadOperatorOverride(): Promise<void> {
 export async function setOperatorOverride(
   override: OperatorEntry[] | null,
 ): Promise<void> {
-  // Hardened builds never apply an override in memory (it would brick RPC under
-  // the strict connect-src). The override is still persisted so a later dev
-  // build honors it; in a hardened build the in-memory set stays the defaults.
+  // Hardened builds never apply an override they cannot dial (it would brick RPC
+  // under the strict connect-src). The override is still persisted so a later dev
+  // build — or the same build once the loopback opt-in is on — honors it; in a
+  // hardened build the in-memory set otherwise stays the defaults.
+  //
+  // Uses the in-memory mirror rather than re-reading storage: this runs
+  // synchronously before the write below, and the storage echo re-enters
+  // loadOperatorOverride, which refreshes both together.
   activeOperators = hardenedOperators(
     TESTNET_OPERATOR_RPCS_DEFAULTS,
     override,
     isHardenedBuild(),
+    loopbackAllowed,
   );
   return new Promise((resolve) => {
     if (override === null) {
@@ -501,17 +542,10 @@ export async function verifyOperatorGenesis(
   return result.ok;
 }
 
-/** TTL for a NON-definitive genesis-cache entry (observed === null:
- *  unreachable / timeout / probe-unsupported). Definitive reads (a real
- *  observed hash, match or mismatch) are cached forever; only the
- *  "couldn't read" verdict expires, so a transient outage self-heals. */
-const GENESIS_OBSERVED_NULL_TTL_MS = 60_000;
-
-/** C6 (R3): re-probe TTL for a DEFINITIVE positive ("passed") verdict. A pass is
- *  bounded (not forever) so an operator that passed once then silently forked
- *  while the SW is alive is re-detected within this window. A definitive MISMATCH
- *  stays sticky (no TTL) — it correctly keeps the wallet paused until resolved. */
-const GENESIS_POSITIVE_TTL_MS = 60_000;
+// The two genesis-cache TTLs moved to shared/constants so the popup can read
+// them without importing this module (which the Help page's developer-mode
+// mechanics need in order to RENDER the values rather than restate them).
+// Values and semantics unchanged; see their doc-comments at the new home.
 
 /** Force-refresh a single operator's genesis check. Surfaced via the
  *  About-page probe so the user can re-evaluate after a regenesis. */

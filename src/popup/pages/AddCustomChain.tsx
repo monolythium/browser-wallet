@@ -10,6 +10,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { bgChainAddManual } from "../bg";
 
 interface AddCustomChainProps {
@@ -85,6 +86,7 @@ export function AddCustomChain({ existingChainIds, onBack, onAdded }: AddCustomC
           style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Add custom chain
+          <DevBadge />
         </div>
         <div style={{ width: 36 }} />
       </div>
@@ -201,8 +203,8 @@ export function AddCustomChain({ existingChainIds, onBack, onAdded }: AddCustomC
             className="ext-card"
             style={{
               padding: "10px 12px",
-              background: "rgba(220,80,80,0.08)",
-              border: "1px solid rgba(220,80,80,0.4)",
+              background: "rgba(var(--err-glow), 0.08)",
+              border: "1px solid rgba(var(--err-glow), 0.4)",
               fontSize: 12,
               color: "var(--err)",
             }}

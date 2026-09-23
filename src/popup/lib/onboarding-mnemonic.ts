@@ -38,6 +38,16 @@ import { generateMnemonic } from "@monolythium/core-sdk/crypto";
  *  with the default 32-byte buffer). */
 export function generateOnboardingMnemonic(): string {
   return generateMnemonic((out) => {
-    crypto.getRandomValues(out);
+    // TypeScript 7's lib.dom narrows `getRandomValues` to
+    // `ArrayBufferView<ArrayBuffer>`, excluding SharedArrayBuffer-backed
+    // views, while the SDK types this callback's parameter as a plain
+    // `Uint8Array` — i.e. `Uint8Array<ArrayBufferLike>`. Annotating the
+    // parameter narrower is contravariantly unsound and the compiler
+    // rejects it, so the assertion sits on the call instead. It is
+    // accurate rather than merely quieting: `generateMnemonic` allocates
+    // the buffer itself as `new Uint8Array(32)` and passes it straight
+    // in, so a shared-backed view cannot reach this callback. Type-only
+    // — erased at emit, the emitted bytes are unchanged.
+    crypto.getRandomValues(out as Uint8Array<ArrayBuffer>);
   });
 }
