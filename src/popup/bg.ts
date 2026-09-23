@@ -1354,6 +1354,7 @@ export async function bgWalletSendTx(args: {
       code?: number;
       method?: string;
       via?: string;
+      staleConfirmation?: boolean;
       /** Set when the per-vault passkey cap blocked the send. "required" =
        *  no/empty password supplied; "wrong_password"/"rate_limited" = a
        *  supplied password failed the SW-side re-auth. */
@@ -1372,6 +1373,7 @@ export async function bgWalletSendTx(args: {
         code?: number;
         method?: string;
         via?: string;
+        staleConfirmation?: boolean;
         passkeyElevation?: "required" | "wrong_password" | "rate_limited";
         passkeyReregister?: "required";
         secondsRemaining?: number;

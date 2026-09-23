@@ -926,7 +926,7 @@ describe("keystore-status address privacy", () => {
 // never re-derive or re-sign — it re-broadcasts the bytes already signed, or,
 // once those have landed, answers with the hash they produced.
 describe("send idempotency — a repeat of one confirmation never signs twice", () => {
-  const KEY = "confirm-abc";
+  const KEY = `s1.${Date.now()}.00000000-0000-4000-8000-000000000001`;
 
   function sendWith(key?: string) {
     return dispatchPopup({
@@ -970,10 +970,20 @@ describe("send idempotency — a repeat of one confirmation never signs twice", 
     await sendWith(KEY);
     const signsAfterFirst = submitMlDsaCalls.length;
 
-    const second = await sendWith("confirm-xyz");
+    const second = await sendWith(`s1.${Date.now()}.00000000-0000-4000-8000-000000000002`);
 
     expect(second.ok).toBe(true);
     expect(submitMlDsaCalls.length).toBe(signsAfterFirst + 1);
+  });
+
+  it("refuses an old confirmation key with a structured stale state", async () => {
+    const old = `s1.${Date.now() - 16 * 60 * 1000}.00000000-0000-4000-8000-000000000003`;
+    const signsBefore = submitMlDsaCalls.length;
+    const result = await sendWith(old) as { ok: boolean; reason?: string; staleConfirmation?: boolean };
+    expect(result.ok).toBe(false);
+    expect(result.staleConfirmation).toBe(true);
+    expect(result.reason).toContain("Check Activity");
+    expect(submitMlDsaCalls.length).toBe(signsBefore);
   });
 
   it("the binding is written BEFORE the broadcast, not after", async () => {

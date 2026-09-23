@@ -16,8 +16,8 @@
 // by then. The cost is that for a short window the disk holds a VALID,
 // UNBROADCAST signed transaction — the user authorised it, so the exposure is
 // narrow, but it is why the wire bytes are discarded the moment the broadcast
-// succeeds (`completeSendBinding`) rather than left to expire. The TTL only
-// reaps orphans from a worker that died before it could clean up.
+// succeeds (`completeSendBinding`) rather than left to expire. Expiry retires
+// signed bytes into a small tombstone; it never authorizes a fresh sign.
 //
 // WHAT IT HOLDS. The nonce, the signed wire bytes, the canonical tx hash, the
 // accepting operator, a timestamp, and — for an account-level lookup — the
@@ -29,13 +29,29 @@
 // a field that survives the bind but not the completion is invisible to exactly
 // the lookup the completion stub exists to serve.
 
+import { isFreshSendConfirmationKey } from "../shared/send-confirmation-key.js";
+
 /** Versioned `chrome.storage.local` key for the binding map. */
 export const STORAGE_KEY_SEND_BINDINGS = "mono.send.binding.v1";
+export const STORAGE_KEY_SEND_TOMBSTONES = "mono.send.tombstones.v1";
+export const SEND_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_SEND_TOMBSTONES = 2048;
 
-/** D4 — 15 minutes, 3x the 5-minute pending-nonce window this must outlive.
- *  A binding that expires while the user is still looking at the error screen
- *  would send "Try again" down the normal path and re-derive the nonce, which
- *  is the exact defect this closes. Eager deletion is the real cleanup. */
+export interface SendTombstone {
+  /** When this confirmation stopped being replayable. */
+  retiredAt: number;
+}
+export type SendTombstoneMap = Record<string, SendTombstone>;
+
+export class SendBindingStaleError extends Error {
+  constructor() {
+    super("This send may already have been broadcast. Check Activity before starting a new send.");
+    this.name = "SendBindingStaleError";
+  }
+}
+
+/** Signed bytes remain replayable for 15 minutes. After that, the confirmation
+ *  is retired and its key is refused; a new user confirmation mints a new key. */
 export const SEND_BINDING_TTL_MS = 15 * 60 * 1000;
 
 /** The signed transaction produced for one confirmation. */
@@ -149,11 +165,9 @@ async function withConfirmationLock<T>(key: string, work: () => Promise<T>): Pro
 function isWellFormed(v: unknown): v is SendBinding {
   if (v === null || typeof v !== "object") return false;
   const b = v as Partial<SendBinding>;
-  // OPTIONAL FIELDS ARE DELIBERATELY NOT CHECKED. Requiring one would invalidate
-  // every record written before it existed — and "invalid" here means the caller
-  // signs afresh and derives a new nonce, which is the double-send this store
-  // exists to prevent. Leaving them unchecked means an older record still
-  // replays correctly and is only invisible to the newer lookup.
+  // Optional account fields stay unchecked so an older record can still replay.
+  // A malformed record is retired by bindingForSubmit, never treated as an
+  // absent confirmation that can authorize fresh signing.
   return (
     typeof b.nonceHex === "string" &&
     typeof b.wireHex === "string" &&
@@ -203,6 +217,58 @@ export function pruneExpired(map: SendBindingMap, now: number): SendBindingMap {
   return out;
 }
 
+/** Keep tombstones for seven days unless the count cap forces oldest-first
+ * eviction. A key's issuance time independently refuses it once the signed
+ * binding has expired, including after tombstone eviction. */
+export function compactTombstones(map: SendTombstoneMap, now: number): SendTombstoneMap {
+  const entries = Object.entries(map)
+    .filter(([, value]) =>
+      value !== null && typeof value === "object" &&
+      Number.isFinite(value.retiredAt) &&
+      value.retiredAt <= now && now - value.retiredAt <= SEND_TOMBSTONE_TTL_MS)
+    .sort(([ka, a], [kb, b]) => a.retiredAt - b.retiredAt || ka.localeCompare(kb));
+  return Object.fromEntries(entries.slice(-MAX_SEND_TOMBSTONES));
+}
+
+async function loadTombstones(): Promise<SendTombstoneMap> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get([STORAGE_KEY_SEND_TOMBSTONES], (res) => {
+      const error = chrome.runtime?.lastError;
+      if (error) {
+        reject(new Error(`failed to read send tombstones: ${error.message}`));
+        return;
+      }
+      const raw = res?.[STORAGE_KEY_SEND_TOMBSTONES];
+      if (raw === undefined) resolve({});
+      else if (raw !== null && typeof raw === "object" && !Array.isArray(raw) &&
+        Object.values(raw).every((value) => value !== null && typeof value === "object" &&
+          Number.isFinite((value as SendTombstone).retiredAt)))
+        resolve(raw as SendTombstoneMap);
+      else reject(new Error("send tombstones are malformed"));
+    });
+  });
+}
+
+async function saveTombstones(map: SendTombstoneMap): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [STORAGE_KEY_SEND_TOMBSTONES]: map }, () => {
+      const error = chrome.runtime?.lastError;
+      if (error) reject(new Error(`failed to persist send tombstones: ${error.message}`));
+      else resolve();
+    });
+  });
+}
+
+/** Caller holds store lock. Tombstone persistence precedes any removal of
+ * signed bytes, so a storage failure refuses the operation without losing the
+ * evidence that this key may already have gone on the wire. */
+async function addTombstones(keys: string[], now: number): Promise<void> {
+  if (keys.length === 0) return;
+  const tombstones = await loadTombstones();
+  for (const key of keys) tombstones[key] = { retiredAt: now };
+  await saveTombstones(compactTombstones(tombstones, now));
+}
+
 async function loadMap(): Promise<SendBindingMap> {
   return new Promise((resolve, reject) => {
     chrome.storage.local.get([STORAGE_KEY_SEND_BINDINGS], (res) => {
@@ -212,7 +278,10 @@ async function loadMap(): Promise<SendBindingMap> {
         return;
       }
       const raw = res?.[STORAGE_KEY_SEND_BINDINGS];
-      resolve(raw && typeof raw === "object" ? (raw as SendBindingMap) : {});
+      if (raw === undefined) resolve({});
+      else if (raw !== null && typeof raw === "object" && !Array.isArray(raw))
+        resolve(raw as SendBindingMap);
+      else reject(new Error("send bindings are malformed"));
     });
   });
 }
@@ -238,6 +307,33 @@ export async function readSendBinding(
   return readValidBinding(await loadMap(), key, now);
 }
 
+/** Read both durable stores under the mutation lock. A failed read, a retired
+ * key, or a malformed binding must never become permission to sign afresh. */
+async function bindingForSubmit(
+  key: string,
+  now: number,
+): Promise<SendBinding | null> {
+  return withStoreLock(async () => {
+    const tombstones = await loadTombstones();
+    const map = await loadMap();
+    if (Object.prototype.hasOwnProperty.call(tombstones, key)) {
+      throw new SendBindingStaleError();
+    }
+    const raw = map[key];
+    if (raw !== undefined) {
+      if (!isWellFormed(raw) || !isLive(raw, now)) {
+        await addTombstones([key], now);
+        throw new SendBindingStaleError();
+      }
+      return raw;
+    }
+    if (!isFreshSendConfirmationKey(key, now)) {
+      throw new SendBindingStaleError();
+    }
+    return null;
+  });
+}
+
 /** Bind `key` to `binding`, pruning orphans in the same write. */
 export async function writeSendBinding(
   key: string,
@@ -245,7 +341,20 @@ export async function writeSendBinding(
 ): Promise<void> {
   await withStoreLock(async () => {
     const map = await loadMap();
+    const expired = Object.entries(map)
+      .filter(([, value]) => !isWellFormed(value) || !isLive(value, binding.ts))
+      .map(([expiredKey]) => expiredKey);
+    await addTombstones(expired, binding.ts);
     await saveMap(withBinding(pruneExpired(map, binding.ts), key, binding));
+  });
+}
+
+/** Retire a changed confirmation before deleting its signed bytes. */
+async function retireSendBinding(key: string, now: number): Promise<void> {
+  await withStoreLock(async () => {
+    await addTombstones([key], now);
+    const map = await loadMap();
+    if (key in map) await saveMap(withoutBinding(map, key));
   });
 }
 
@@ -386,7 +495,7 @@ async function runWithSendBinding(args: {
 }): Promise<SendBindingResult> {
   const { key, expectedDigest, now, rebroadcast, bytesMayBeLive, submit } = args;
 
-  const bound = await readSendBinding(key, now());
+  const bound = await bindingForSubmit(key, now());
   if (bound !== null) {
     // §0 / row 3 — CHECKED FIRST, before `isCompleted` and before anything can
     // reach `rebroadcast`. The hand test replayed bytes paying A while the
@@ -396,14 +505,12 @@ async function runWithSendBinding(args: {
     // An ABSENT digest is a record written before this field existed. It is
     // refused rather than trusted: the store cannot prove those bytes match, and
     // "cannot prove" must not read as "matches". The window is bounded by the
-    // TTL, so this self-clears within SEND_BINDING_TTL_MS of an upgrade.
+    // TTL, after which the key is retired.
     //
-    // The binding is DROPPED on the way out. Leaving it would mean the next
-    // attempt hits the same refusal for the rest of the TTL; dropping it lets a
-    // fresh confirmation bind normally. What is NOT done here is falling through
-    // to `submit` under this key — see SendBindingMismatchError.
+    // The binding is retired on the way out. A genuinely new confirmation
+    // requires a new key; this one can never fall through to `submit`.
     if (bound.digest === undefined || bound.digest !== expectedDigest) {
-      await deleteSendBinding(key);
+      await retireSendBinding(key, now());
       // The message is what the user reads — handlers surface
       // `(e as Error).message` and the Send error screen renders it, the same
       // way the operator-save refusal states its reason in a sentence.
@@ -452,9 +559,8 @@ async function runWithSendBinding(args: {
     // THE COST OF KEEPING, STATED SO IT IS NOT REDISCOVERED AS A BUG: when the
     // bytes really are dead (every operator deterministically rejected), the
     // user retries against them until the record ages out. `ts` is not
-    // refreshed here, so that window is the REMAINDER of SEND_BINDING_TTL_MS
-    // measured from the original bind — bounded, self-healing, and costing a
-    // wait rather than money. That is the right side of the trade.
+    // refreshed here. After expiry the wallet refuses this confirmation and
+    // asks for a new one, so no stale retry signs automatically.
     //
     // DIAGNOSING ONE AFTER THE FACT: a failed replay leaves a record
     // indistinguishable from an untouched one at a glance, which has already
@@ -470,6 +576,9 @@ async function runWithSendBinding(args: {
   let accepted = false;
   try {
     const result = await submit(async (fields) => {
+      // The signer may have waited on user authentication after the initial
+      // lookup. Expiry here must stop the pre-broadcast hook too.
+      if (!isFreshSendConfirmationKey(key, now())) throw new SendBindingStaleError();
       await writeSendBinding(key, { ...fields, via: "", ts: now() });
     });
     accepted = true;

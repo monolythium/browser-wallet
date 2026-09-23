@@ -36,6 +36,7 @@ import {
   unstakeAllKeyParams,
   type SendKeyState,
 } from "../send-key";
+import { mintSendConfirmationKey } from "../../shared/send-confirmation-key";
 import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
@@ -689,7 +690,7 @@ export function Stake({
         sendKey,
         retryArmed ? "retry" : "submit",
         keyParams,
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       setRetryArmed(false);
@@ -843,7 +844,7 @@ export function Stake({
         unstakeAllSendKey,
         unstakeAllError !== null ? "retry" : "submit",
         unstakeAllKeyParams(cluster, chainId),
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setUnstakeAllSendKey(keyDecision.next);
       const r = await bgWalletSendTx({
@@ -904,7 +905,7 @@ export function Stake({
         sendKey,
         claimOpts?.retry === true ? "retry" : "submit",
         keyParams,
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       const r = await bgWalletSendTx({

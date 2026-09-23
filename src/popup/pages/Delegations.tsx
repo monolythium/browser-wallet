@@ -28,6 +28,7 @@ import {
 } from "../bg";
 import { buildClaimMeta } from "../claim-meta";
 import { claimKeyParams, nextSendKey, type SendKeyState } from "../send-key";
+import { mintSendConfirmationKey } from "../../shared/send-confirmation-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -209,7 +210,7 @@ export function Delegations({
         sendKey,
         opts?.retry === true ? "retry" : "submit",
         keyParams,
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       const r = await bgWalletSendTx({

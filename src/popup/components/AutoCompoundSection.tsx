@@ -24,6 +24,7 @@ import {
   nextSendKey,
   type SendKeyState,
 } from "../send-key";
+import { mintSendConfirmationKey } from "../../shared/send-confirmation-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -109,7 +110,7 @@ export function AutoCompoundSection({ rewards, isMock, chainId }: AutoCompoundSe
         sendKey,
         isRetry ? "retry" : "submit",
         keyParams,
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       const r = await bgWalletSendTx({

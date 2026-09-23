@@ -30,6 +30,7 @@ import {
   nextSendKey,
   type SendKeyState,
 } from "../send-key";
+import { mintSendConfirmationKey } from "../../shared/send-confirmation-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -176,7 +177,7 @@ export function SlhDsaBackupCard({
         sendKey,
         opts?.retry === true ? "retry" : "submit",
         keyParams,
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       const r = await bgSlhDsaBackupSubmitRegistration({

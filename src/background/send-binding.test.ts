@@ -13,8 +13,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   SEND_BINDING_TTL_MS,
+  SEND_TOMBSTONE_TTL_MS,
+  MAX_SEND_TOMBSTONES,
   STORAGE_KEY_SEND_BINDINGS,
+  STORAGE_KEY_SEND_TOMBSTONES,
   SendBindingMismatchError,
+  SendBindingStaleError,
+  compactTombstones,
   completeSendBinding,
   deleteSendBinding,
   isCompleted,
@@ -120,6 +125,26 @@ describe("pruneExpired — the TTL is a backstop, not the cleanup", () => {
       bad: { wireHex: "0x1" },
     } as unknown as SendBindingMap;
     expect(Object.keys(pruneExpired(map, T0))).toEqual(["good"]);
+  });
+});
+
+describe("durable tombstone bounds", () => {
+  it("retains a tombstone through seven days, then expires it", () => {
+    const map = { key: { retiredAt: T0 } };
+    expect(compactTombstones(map, T0 + SEND_TOMBSTONE_TTL_MS)).toEqual(map);
+    expect(compactTombstones(map, T0 + SEND_TOMBSTONE_TTL_MS + 1)).toEqual({});
+  });
+
+  it("evicts oldest first when the count cap is exceeded", () => {
+    const map = Object.fromEntries(Array.from({ length: MAX_SEND_TOMBSTONES + 2 }, (_, i) =>
+      [`key-${i}`, { retiredAt: T0 + i }],
+    ));
+    const compacted = compactTombstones(map, T0 + MAX_SEND_TOMBSTONES + 2);
+    expect(Object.keys(compacted)).toHaveLength(MAX_SEND_TOMBSTONES);
+    expect(compacted["key-0"]).toBeUndefined();
+    expect(compacted["key-1"]).toBeUndefined();
+    expect(compacted["key-2"]).toBeDefined();
+    expect(compacted[`key-${MAX_SEND_TOMBSTONES + 1}`]).toBeDefined();
   });
 });
 
@@ -361,7 +386,7 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     };
   });
 
-  const KEY = "confirm-1";
+  const KEY = `s1.${T0}.00000000-0000-4000-8000-000000000001`;
 
   /** Signed bytes for the transaction the user FIRST confirmed (recipient A).
    *  Same value the fixture below has always carried, named so the row-3
@@ -497,22 +522,110 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     expect(r).toEqual({ txHash: "0xlanded", via: "op-1", nonceHex: "0x7" });
   });
 
-  it("signs afresh once the binding has expired — an orphan must not resurrect", async () => {
+  it("refuses an expired confirmation instead of signing fresh bytes", async () => {
     await writeSendBinding(KEY, { ...fields, via: "", ts: T0 });
     const submit = submitter();
     const rebroadcast = vi.fn();
 
-    await withSendBinding({
+    await expect(withSendBinding({
       key: KEY,
       expectedDigest: DIGEST_A,
       now: () => T0 + SEND_BINDING_TTL_MS + 1,
       rebroadcast,
       bytesMayBeLive,
       submit,
-    });
+    })).rejects.toBeInstanceOf(SendBindingStaleError);
 
-    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).not.toHaveBeenCalled();
     expect(rebroadcast).not.toHaveBeenCalled();
+    expect((local[STORAGE_KEY_SEND_TOMBSTONES] as Record<string, unknown>)[KEY]).toBeDefined();
+  });
+
+  it("keeps the tombstone when an unrelated send prunes expired signed bytes", async () => {
+    await writeSendBinding(KEY, { ...fields, ts: T0, via: "" });
+    const later = T0 + SEND_BINDING_TTL_MS + 1;
+    const other = `s1.${later}.00000000-0000-4000-8000-000000000002`;
+    await writeSendBinding(other, { ...fields, ts: later, via: "" });
+    expect((local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap)[KEY]).toBeUndefined();
+    expect((local[STORAGE_KEY_SEND_TOMBSTONES] as Record<string, unknown>)[KEY]).toBeDefined();
+    const submit = submitter();
+    await expect(withSendBinding({
+      key: KEY, expectedDigest: DIGEST_A, now: () => later,
+      rebroadcast: vi.fn(), bytesMayBeLive, submit,
+    })).rejects.toBeInstanceOf(SendBindingStaleError);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses an old key even after its tombstone is evicted", async () => {
+    const submit = submitter();
+    await expect(withSendBinding({
+      key: KEY, expectedDigest: DIGEST_A,
+      now: () => T0 + SEND_TOMBSTONE_TTL_MS + 1,
+      rebroadcast: vi.fn(), bytesMayBeLive, submit,
+    })).rejects.toBeInstanceOf(SendBindingStaleError);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a failed tombstone read without signing", async () => {
+    const runtime: { lastError?: { message: string } } = {};
+    chrome.runtime = runtime as typeof chrome.runtime;
+    const original = chrome.storage.local.get;
+    chrome.storage.local.get = ((keys: string[], cb: (r: Record<string, unknown>) => void) => {
+      if (keys.includes(STORAGE_KEY_SEND_TOMBSTONES)) {
+        runtime.lastError = { message: "read failed" };
+        cb({});
+        delete runtime.lastError;
+      } else original(keys, cb);
+    }) as typeof chrome.storage.local.get;
+    const submit = submitter();
+    await expect(withSendBinding({
+      key: KEY, expectedDigest: DIGEST_A, now: () => T0,
+      rebroadcast: vi.fn(), bytesMayBeLive, submit,
+    })).rejects.toThrow("failed to read send tombstones");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a failed binding read without signing", async () => {
+    const runtime: { lastError?: { message: string } } = {};
+    chrome.runtime = runtime as typeof chrome.runtime;
+    const original = chrome.storage.local.get;
+    chrome.storage.local.get = ((keys: string[], cb: (r: Record<string, unknown>) => void) => {
+      if (keys.includes(STORAGE_KEY_SEND_BINDINGS)) {
+        runtime.lastError = { message: "read failed" };
+        cb({});
+        delete runtime.lastError;
+      } else original(keys, cb);
+    }) as typeof chrome.storage.local.get;
+    const submit = submitter();
+    await expect(withSendBinding({
+      key: KEY, expectedDigest: DIGEST_A, now: () => T0,
+      rebroadcast: vi.fn(), bytesMayBeLive, submit,
+    })).rejects.toThrow("failed to read send bindings");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("leaves signed bytes intact if a tombstone write fails before pruning", async () => {
+    await writeSendBinding(KEY, { ...fields, ts: T0, via: "" });
+    const runtime: { lastError?: { message: string } } = {};
+    chrome.runtime = runtime as typeof chrome.runtime;
+    const original = chrome.storage.local.set;
+    chrome.storage.local.set = ((items: Record<string, unknown>, cb: () => void) => {
+      if (STORAGE_KEY_SEND_TOMBSTONES in items) {
+        runtime.lastError = { message: "quota exceeded" };
+        cb();
+        delete runtime.lastError;
+      } else original(items, cb);
+    }) as typeof chrome.storage.local.set;
+    const later = T0 + SEND_BINDING_TTL_MS + 1;
+    await expect(writeSendBinding("other", { ...fields, ts: later, via: "" })).rejects.toThrow("failed to persist send tombstones");
+    expect((local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap)[KEY]?.wireHex).toBe(WIRE_PAYING_A);
+    expect((local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap).other).toBeUndefined();
+    const submit = submitter();
+    await expect(withSendBinding({
+      key: KEY, expectedDigest: DIGEST_A, now: () => later,
+      rebroadcast: vi.fn(), bytesMayBeLive, submit,
+    })).rejects.toThrow("failed to persist send tombstones");
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it("drops the binding when the submit throws, so nothing is replayed later", async () => {
@@ -654,9 +767,10 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     // Neither re-broadcast nor re-signed under the old key.
     expect(rebroadcast).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
-    // And dropped, so the next confirmation can bind normally instead of
-    // hitting this same refusal for the rest of the TTL.
+    // The bytes are dropped, and a durable tombstone keeps the SAME key from
+    // being mistaken for a fresh confirmation later.
     expect(await readSendBinding(KEY, T0)).toBeNull();
+    expect((local[STORAGE_KEY_SEND_TOMBSTONES] as Record<string, unknown>)[KEY]).toBeDefined();
   });
 
   // A completed stub still answers from its hash — but only for the transaction

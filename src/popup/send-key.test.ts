@@ -155,6 +155,14 @@ describe("reset — starting over is a new send", () => {
     const r = nextSendKey(cleared.next, "retry", P1, minter("k2"));
     expect(r.use).toBe("k2");
   });
+
+  it("a new confirmation after a stale retry uses a different key", () => {
+    const expired = { key: "old-confirmation", params: P1 };
+    const cleared = nextSendKey(expired, "reset", P1, minter("unused"));
+    const fresh = nextSendKey(cleared.next, "submit", P1, minter("new-confirmation"));
+    expect(fresh.use).toBe("new-confirmation");
+    expect(fresh.use).not.toBe(expired.key);
+  });
 });
 
 describe("the mint function is called only when a key is actually needed", () => {

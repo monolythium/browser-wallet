@@ -327,7 +327,7 @@ import {
   testnetReverseNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
-import { withSendBinding } from "./send-binding.js";
+import { SendBindingStaleError, withSendBinding } from "./send-binding.js";
 import { sendIntentDigest } from "../shared/send-intent-digest.js";
 import { hexToBytes, type NativeEvmTxFields } from "@monolythium/core-sdk/crypto";
 import { isFeatureEnabled } from "../shared/two-tier-features.js";
@@ -12242,6 +12242,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return {
           ok: false,
           reason,
+          ...(e instanceof SendBindingStaleError && { staleConfirmation: true }),
           ...(code !== undefined && { code }),
           ...(method !== undefined && { method }),
           ...(via !== undefined && { via }),

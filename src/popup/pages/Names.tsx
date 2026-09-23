@@ -30,6 +30,7 @@ import {
   nextSendKey,
   type SendKeyState,
 } from "../send-key";
+import { mintSendConfirmationKey } from "../../shared/send-confirmation-key";
 import {
   submitThrowFailure,
   verbatimFailure,
@@ -190,7 +191,7 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
         sendKey,
         retryArmed ? "retry" : "submit",
         nameRegisterKeyParams(canonical, chainIdHex),
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       const r = await bgWalletNameRegister(
@@ -434,7 +435,7 @@ function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
         sendKey,
         retryArmed ? "retry" : "submit",
         nameProposeKeyParams(canonical, resolvedAddr0x, chainIdHex),
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       const r = await bgWalletNamePropose(
@@ -620,7 +621,7 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
         sendKey,
         retryArmed ? "retry" : "submit",
         nameAcceptKeyParams(canonical, chainIdHex),
-        () => crypto.randomUUID(),
+        mintSendConfirmationKey,
       );
       setSendKey(keyDecision.next);
       const r = await bgWalletNameAccept(
