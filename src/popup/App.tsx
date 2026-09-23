@@ -34,6 +34,7 @@ import "./tokens.css";
 import "./themes.css";
 import "./glass.css";
 import "./ext.css";
+import { Icon } from "./Icon";
 import {
   Home, Networks,
   ReqConnect, ReqAuthenticate,
@@ -47,6 +48,7 @@ import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { Names } from "./pages/Names";
+import { Wallets } from "./pages/Wallets";
 import { Theme } from "./pages/Theme";
 import { DisplayPreferences } from "./pages/DisplayPreferences";
 import { LanguageSettings } from "./pages/LanguageSettings";
@@ -54,6 +56,7 @@ import { DisplayCurrencySettings } from "./pages/DisplayCurrencySettings";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ChainHealthBanner } from "./components/ChainHealthBanner";
 import {
   DelegationRejectedBanner,
   type DelegationRejection,
@@ -69,6 +72,7 @@ import { Operators } from "./pages/Operators";
 import { OperatorDirectory } from "./pages/OperatorDirectory";
 import { EmergencyRecovery } from "./pages/EmergencyRecovery";
 import { Resources } from "./pages/Resources";
+import { Help } from "./pages/Help";
 import { WhyMonolythium } from "./pages/WhyMonolythium";
 import { NotificationSettings } from "./pages/NotificationSettings";
 import { About } from "./pages/About";
@@ -158,6 +162,7 @@ type Screen =
   | "operator-directory"
   | "emergency-recovery"
   | "resources"
+  | "help"
   | "why-monolythium"
   | "notification-settings"
   | "about"
@@ -184,6 +189,7 @@ type Screen =
   | "display-currency-settings"
   | "main-menu"
   | "contacts"
+  | "wallets"
   | "new-wallet-flow"
   | "notifications";
 
@@ -194,7 +200,7 @@ type Screen =
 // the same reason — a user mid-reset must not be redirected to Unlock.
 // reveal-phrase is intentionally NOT exempt: a lock signal mid-reveal
 // correctly forces re-auth before the seed can be re-displayed.
-const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
+export const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "approval",
   "loading",
   "welcome",
@@ -206,6 +212,38 @@ const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "forgot-password",
   "reset-wallet",
 ]);
+
+/** Whether `revealTarget` — "reveal THIS wallet rather than the active one" —
+ *  may outlive the current screen. It may not: the selector is scoped to the
+ *  reveal screen, so leaving that screen by any route drops it.
+ *
+ *  This is the counterpart to reveal-phrase's deliberate absence from
+ *  LOCK_SIGNAL_EXEMPT above. A lock signal mid-reveal routes the user to
+ *  Unlock, which is intended; the defect was that the target stayed behind, so
+ *  a later Settings entry — which means "the active wallet" and passes no
+ *  target — inherited the previous one and would have shown a different
+ *  wallet's phrase after a fresh, correct re-auth.
+ *
+ *  Exported for the test: App cannot be mounted without a DOM. */
+export function revealTargetSurvives(screen: Screen): boolean {
+  return screen === "reveal-phrase";
+}
+
+/** Whether `helpTarget` — "open Help on THIS connection state" — may outlive the
+ *  current screen. It may not, for the same reason `revealTarget` may not: the
+ *  target is scoped to the screen that consumes it, so leaving Help by any route
+ *  drops it.
+ *
+ *  This is the guard against the failure `revealTarget` documents above. Without
+ *  it, a user who tapped the banner, read the answer and left would leave the
+ *  target behind — and a later visit to Help from the Info menu, which means
+ *  "open collapsed" and passes no target, would inherit the stale one and open
+ *  on a state the user never asked about.
+ *
+ *  Exported for the test: App cannot be mounted without a DOM. */
+export function helpTargetSurvives(screen: Screen): boolean {
+  return screen === "help";
+}
 
 interface UiApproval {
   approval: PendingApproval;
@@ -343,6 +381,15 @@ export default function App() {
   // of the state isn't referenced directly (peek happens inside the
   // setStack callback in navigateBack); useRef would also work but
   // useState keeps the same hook shape for future inspection.
+  // Which wallet the reveal screen should target, set when the Wallets page
+  // routes into it. Null means "the active wallet" (the Settings entry point).
+  const [revealTarget, setRevealTarget] = useState<
+    { vaultId: string; label: string } | null
+  >(null);
+  // Which connection state Help should open on, set when the degraded-network
+  // banner routes into it. Null means "an ordinary visit" — Help opens with
+  // everything collapsed. Cleared by the effect below on any screen change.
+  const [helpTarget, setHelpTarget] = useState<ChainHealthKind | null>(null);
   const [, setScreenStack] = useState<Screen[]>([]);
   const navigateTo = useCallback((target: Screen) => {
     setScreenStack((prev) => {
@@ -816,6 +863,28 @@ export default function App() {
       cancelled = true;
     };
   }, [refreshKeystoreStatus]);
+
+  // Drop the reveal target the moment the reveal screen is left, by ANY route.
+  // Clearing it in RevealPhrase's `onBack` handled only the two deliberate
+  // exits (Back / Done, and auto-hide expiry, which calls onBack); it did not
+  // cover the SW lock signal below, which routes reveal-phrase to "locked"
+  // precisely because that screen is not exempt. Keying on `screen` instead of
+  // on a handler covers every exit that exists and every one added later.
+  //
+  // Ordering is safe: the Wallets entry point sets the target and the screen in
+  // one handler, so React renders them together and this never sees the target
+  // set with the screen still on "wallets".
+  useEffect(() => {
+    if (revealTargetSurvives(screen)) return;
+    setRevealTarget(null);
+  }, [screen]);
+
+  // Same shape, same reason: a deep-link target must not outlive the screen
+  // that consumes it, or a later ordinary visit to Help inherits it.
+  useEffect(() => {
+    if (helpTargetSurvives(screen)) return;
+    setHelpTarget(null);
+  }, [screen]);
 
   // SW-pushed lock/unlock signal — chrome.storage.session.walletLocked is
   // the authoritative cross-context flag. The SW writes `true` when it
@@ -1316,6 +1385,7 @@ export default function App() {
     // continuous when the user navigates between menu sub-pages.
     screen === "main-menu" ||
     screen === "contacts" ||
+    screen === "wallets" ||
     screen === "multisig-list";
 
   // Fullscreen brand wordmark. Read once at render
@@ -1331,7 +1401,16 @@ export default function App() {
     <ErrorBoundary>
     {isFullscreen && (
       <div className="ext-fullscreen-brand">
-        <span className="accent">◇</span>Monolythium Browser Wallet
+        {/* The Monolythium "M", the same inline mark the monolythium.com link
+            row uses on Resources / About / Help (Icon "mono-mark", the brand's
+            folded-ribbon glyph). It fills with `currentColor`, so the `.accent`
+            rule's var(--gold) keeps the header's existing tint and the mark
+            follows every theme. size 22 matches the wordmark's own font-size,
+            so the glyph box equals the text's em box. */}
+        <span className="accent">
+          <Icon name="mono-mark" size={22} />
+        </span>
+        Monolythium Browser Wallet
       </div>
     )}
     <div className="ext" data-denom={acc.denom}>
@@ -1373,6 +1452,20 @@ export default function App() {
                 onMenu: () => navigateTo("main-menu"),
               }
             : {})}
+        />
+      )}
+
+      {/* Degraded-network notice, directly UNDER the status chip strip so it
+         explains the chip rather than displacing it. Pushes content down
+         (in flow) rather than overlaying: in exactly these states the balance
+         is already suppressed to "—", and the user is scanning for why. */}
+      {showBannerStrip && (
+        <ChainHealthBanner
+          kind={chainHealthKind}
+          onExplain={(kind: ChainHealthKind) => {
+            setHelpTarget(kind);
+            navigateTo("help");
+          }}
         />
       )}
 
@@ -1529,6 +1622,7 @@ export default function App() {
         <UnlockScreen
           address={keystore?.address ?? null}
           legacyRestoreRequired={keystore?.legacyRestoreRequired ?? false}
+          legacyAddresses={keystore?.legacyAddresses ?? []}
           onUnlocked={() => {
             // Route to Home synchronously on a successful unlock instead of
             // depending SOLELY on the cross-context walletLocked=false storage
@@ -1586,6 +1680,10 @@ export default function App() {
           // shows the new vault's name immediately, instead of waiting
           // for a lock/unlock or reopen to remount the tree.
           onVaultComplete={() => void refreshKeystoreStatus()}
+          // The dropdown's "Manage wallets" entry. navigateTo pushes "home"
+          // onto the stack, so the Wallets page's back button returns here.
+          // The page gates itself on entry — this link does not pre-satisfy it.
+          onManageWallets={() => navigateTo("wallets")}
           topSlot={
             activeVaultSummary ? (
               <>
@@ -1744,6 +1842,20 @@ export default function App() {
         <Names chainIdHex={activeChain.chainId} onBack={navigateBack} />
       )}
 
+      {/* Wallets — see and manage every wallet. Password-gated on entry (the
+         gate lives inside the page, matching RevealPhrase / ResetWallet; this
+         codebase has no route-guard mechanism). */}
+      {screen === "wallets" && (
+        <Wallets
+          chainIdHex={activeChain.chainId}
+          onBack={navigateBack}
+          onRevealPhrase={(vaultId, label) => {
+            setRevealTarget({ vaultId, label });
+            setScreen("reveal-phrase");
+          }}
+        />
+      )}
+
       {/* Theme page. Reached from the Display & Preferences hub via navigateTo,
          so onBack (navigateBack) returns to the hub. */}
       {screen === "theme" && <Theme onBack={navigateBack} />}
@@ -1791,6 +1903,13 @@ export default function App() {
       )}
 
       {screen === "resources" && <Resources onBack={navigateBack} />}
+
+      {screen === "help" && (
+        <Help
+          onBack={navigateBack}
+          {...(helpTarget !== null ? { focusState: helpTarget } : {})}
+        />
+      )}
 
       {screen === "why-monolythium" && (
         <WhyMonolythium onBack={navigateBack} />
@@ -1923,16 +2042,22 @@ export default function App() {
           onNetworks={() => navigateTo("networks")}
           onOperators={() => navigateTo("operator-directory")}
           onMultisig={() => navigateTo("multisig-list")}
-          {...(agentCommerceEnabled
+          /* AGENT_COMMERCE *and* DEVELOPER_MODE: the destination page is itself
+             dev-gated (AgentPolicy renders a "Developer mode required" stub
+             without it), so an entry gated on AGENT_COMMERCE alone sent
+             agent-commerce users with developer mode off to a dead end. */
+          {...(agentCommerceEnabled && developerMode
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
           {...(registryEnabled ? { onOpenNames: () => navigateTo("names") } : {})}
+          onOpenWallets={() => navigateTo("wallets")}
           onSettings={() => navigateTo("settings")}
           // Display & Preferences — the same hub the Settings page routes to.
           // navigateTo pushes "main-menu" so back returns here.
           onDisplayPreferences={() => navigateTo("display-preferences")}
           onAbout={() => navigateTo("about")}
           onResources={() => navigateTo("resources")}
+          onHelp={() => navigateTo("help")}
           onWhyMonolythium={() => navigateTo("why-monolythium")}
           {...(activeVaultSummary
             ? {
@@ -1941,7 +2066,13 @@ export default function App() {
               }
             : {})}
           onOpenFeatures={() => navigateTo("features")}
-          onOpenRiscv={() => navigateTo("mrv-native")}
+          /* DEVELOPER_MODE: MrvNative renders a "Developer mode required" stub
+             without it, and this entry carried no condition at all — so any
+             user, with no flags on, could tap through to a dead end. The
+             Settings entry into the same page was already dev-gated. */
+          {...(developerMode
+            ? { onOpenRiscv: () => navigateTo("mrv-native") }
+            : {})}
           onLockWallet={() => {
             void bgKeystoreLock();
             // Optimistically reflect the lock in popup STATE, not just the
@@ -2046,8 +2177,21 @@ export default function App() {
         />
       )}
 
+      {/* Reveal. Reached from Settings (active wallet, no target) or from the
+         Wallets page (a specific wallet). onBack clears the target here so it
+         can also decide where to return; the screen-keyed effect above is what
+         guarantees the target is gone on EVERY exit, including a lock. */}
       {screen === "reveal-phrase" && (
-        <RevealPhrase onBack={() => setScreen("settings")} />
+        <RevealPhrase
+          onBack={() => {
+            const target = revealTarget;
+            setRevealTarget(null);
+            setScreen(target ? "wallets" : "settings");
+          }}
+          {...(revealTarget
+            ? { vaultId: revealTarget.vaultId, vaultLabel: revealTarget.label }
+            : {})}
+        />
       )}
 
       {/* Back from Connected Sites was hardcoded to

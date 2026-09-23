@@ -146,9 +146,17 @@ html[data-mode="fullscreen"] .ext-fullscreen-brand {
   color: var(--fg-100);
   margin: 0 0 20px;
 }
+/* Holds the Monolythium "M" (Icon "mono-mark"). `color` drives the mark's
+   fill="currentColor", so it tracks the theme's accent exactly as the glyph it
+   replaced did. inline-flex + vertical-align centre the SVG on the text's
+   optical middle — an inline <svg> otherwise sits on the baseline and hangs low
+   beside 22px text. Colour and spacing are unchanged from the glyph. */
 html[data-mode="fullscreen"] .ext-fullscreen-brand .accent {
   color: var(--gold);
   margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
 }
 html[data-mode="fullscreen"] .ext {
   width: 100%;

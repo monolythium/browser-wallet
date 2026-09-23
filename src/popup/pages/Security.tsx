@@ -532,17 +532,17 @@ const errBox: CSSProperties = {
   fontSize: 11,
   color: "var(--err)",
   padding: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
   borderRadius: 8,
-  background: "rgba(220,80,80,0.08)",
+  background: "rgba(var(--err-glow), 0.08)",
   marginTop: 8,
 };
 
 const removeBtn: CSSProperties = {
   padding: "5px 10px",
   borderRadius: 6,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.08)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.08)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 10.5,

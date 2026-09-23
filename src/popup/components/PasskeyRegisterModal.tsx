@@ -372,9 +372,9 @@ export function PasskeyRegisterModal({
               color: "var(--err)",
               lineHeight: 1.5,
               padding: 8,
-              border: "1px solid rgba(220,80,80,0.4)",
+              border: "1px solid rgba(var(--err-glow), 0.4)",
               borderRadius: 8,
-              background: "rgba(220,80,80,0.08)",
+              background: "rgba(var(--err-glow), 0.08)",
             }}
           >
             {screen.message}

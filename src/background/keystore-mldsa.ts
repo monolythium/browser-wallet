@@ -109,6 +109,7 @@ import {
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
 } from "../shared/constants.js";
+import { withKeyLock } from "./storage-lock.js";
 
 const ARGON2_M_KIB = 64 * 1024; // 64 MiB
 const ARGON2_T = 3;
@@ -788,6 +789,127 @@ export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
   return typeof ver === "number" && ver < SCHEMA_VERSION;
 }
 
+/** Read-only: the addresses recorded in a stored container, in on-disk order.
+ *
+ *  Pairs with {@link storedContainerNeedsRestoreV4}. That container cannot be
+ *  opened, so `loadVaultsContainerV4` returns null for it and `listVaultsV4`
+ *  reports nothing — yet the unlock screen still needs the addresses, because
+ *  restoring from a recovery phrase does NOT always reproduce them: a vault
+ *  written before the BIP-39 derivation change derives a DIFFERENT address, and
+ *  the version field cannot tell the two populations apart. Showing what was
+ *  recorded is what lets an affected user notice.
+ *
+ *  NEVER DECRYPTS. `addr` is stored in cleartext beside the sealed blob
+ *  (see `VaultRecordV4.addr` — "cached for locked-state display"), so this
+ *  needs no key, no password and no unlock. Anything malformed is skipped
+ *  rather than thrown on: a partially-corrupt container must still render the
+ *  restore screen. */
+export async function storedContainerAddressesV4(): Promise<string[]> {
+  const raw = await new Promise<unknown>((resolve) => {
+    chrome.storage.local.get([VAULTS_CONTAINER_KEY_V4], (res) => {
+      resolve(res?.[VAULTS_CONTAINER_KEY_V4] ?? null);
+    });
+  });
+  if (!raw || typeof raw !== "object") return [];
+  const vaults = (raw as { vaults?: unknown }).vaults;
+  if (!Array.isArray(vaults)) return [];
+  const out: string[] = [];
+  for (const v of vaults) {
+    if (!v || typeof v !== "object") continue;
+    const addr = (v as { addr?: unknown }).addr;
+    if (typeof addr === "string" && addr.length > 0) out.push(addr);
+  }
+  return out;
+}
+
+/**
+ * The container-write invariant (H1).
+ *
+ * THE MECHANISM: every mutation of the vaults container goes through one of two
+ * primitives in this module, and each owns the lock, the read and the write.
+ *
+ *   - `mutateContainer` takes `withKeyLock(VAULTS_CONTAINER_KEY_V4, …)`, reads
+ *     the container with `loadVaultsContainerV4()` inside that lock, hands the
+ *     callback the object it read, and persists THAT object. No parameter exists
+ *     through which a different one could be supplied, and the return type
+ *     refuses a callback that tries to hand one back.
+ *   - `createContainer` is onboarding only. It asserts inside the lock that no
+ *     container exists, and only then writes the fresh one its callback builds.
+ *
+ * All fifteen writers in this module route through those two, and this function
+ * is called from nowhere else in the module.
+ *
+ * WHAT KEEPS IT THAT WAY: `src/buildtime/container-write-invariant.ts` inspects
+ * this file's source text and reports every direct call to this function that is
+ * not inside one of the two primitives; the suite asserts it finds none. So a
+ * sixteenth writer that calls this function directly fails the test run rather
+ * than passing review. That is a source check, not a runtime one — see the limits
+ * at the foot of this note.
+ *
+ * WHY THAT SHAPE: the container is persisted as ONE blob, so a writer acting on
+ * a snapshot taken before it acquired the lock overwrites whatever landed in
+ * between. When both writers touch the vault ARRAY — `removeVaultV4` and
+ * `appendVaultRecord` — what is overwritten is a vault record, destroying its
+ * wrapped VEK and sealed seed envelope for an address that stays funded
+ * on-chain. Owning the read is what removes the opportunity to hold such a
+ * snapshot; a rule that merely said "take the lock" left it available.
+ *
+ * WHY THE LOCK IS AROUND THE STORAGE ROUND TRIPS, not around the KDF: the
+ * exposure is the genuine macrotask yields — the `chrome.storage.local` get and
+ * set, and a vault-backend load. It is NOT the Argon2id derivation, which
+ * yields only to microtasks (`@noble/hashes` `nextTick` is an empty async
+ * function) and so never returns control to the host. A lock scoped to the
+ * derivation would be scoped to the wrong thing.
+ *
+ * WHY DERIVING OUTSIDE THE LOCK IS SAFE: `removeVaultV4` and
+ * `commitVaultFromSeed` derive before acquiring. That is licensed by
+ * `masterKdf` being immutable — it is written once, into the fresh-container
+ * literal in `commitVaultFromSeed`, and no writer mutates it thereafter. Holding
+ * the lock across a ~1 s derivation would queue every other container op behind
+ * it. Nothing else read before the lock may be acted upon.
+ *
+ * THE ACKNOWLEDGED EXCEPTION — the wipe. `wipeAllLocalWalletState` in the
+ * service worker removes the container by `mono.`-prefix scan rather than
+ * through either primitive, so it is NOT routed. It is serialised instead: it
+ * takes the same lock via `vaultContainerLockKey()`, so it cannot delete the
+ * container out from under an in-flight writer, nor be overwritten by one. It
+ * stays outside deliberately. Routing it would mean exporting a write capability
+ * across a module boundary — recreating exactly the hatch this design avoids —
+ * to gain nothing the shared lock does not already give.
+ *
+ * THE LIMITS — read this before adding a sixteenth writer.
+ *
+ *   1. INDIRECTION DEFEATS THE CHECK. It matches a direct call in source text,
+ *      so aliasing this function to another name, reaching it by dynamic
+ *      dispatch, or importing it from another module through the
+ *      `__internalV4Multi` re-export all pass unreported. The check narrows the
+ *      gap to indirection; it does not close it.
+ *
+ *   2. THE RE-EXPORT STAYS. This function is not private to the module: it is
+ *      re-exported on `__internalV4Multi` at the foot of this file, so another
+ *      module could import it and write the container unlocked. Today only
+ *      `keystore-mldsa.test.ts` does, and that is what blocks removing it —
+ *      three tests in the guard suite call it directly (the two DA-002 cases
+ *      pinning its rejection and its success, and the two-vault schema fixture
+ *      that seeds a container with it), and a guard test is not edited to
+ *      accommodate a refactor. The same collision rules out the runtime version
+ *      of this check: making this function refuse unless the lock is held would
+ *      fail both DA-002 cases, which call it lock-free and expect a storage-quota
+ *      rejection and a plain success, not a lock error. The capability is
+ *      reachable for testing or sealed against callers, not both. The source
+ *      check sits outside that dilemma — it has no opinion about how a test calls
+ *      this function at runtime.
+ *
+ *   3. AND A RUNTIME CHECK WOULD STILL NOT BE COMPLETE, if the collision above
+ *      were ever resolved: a module-level "the lock is held" marker records that
+ *      SOMEONE holds it, not that YOU do. `withKeyLock` chains promises, so a
+ *      write issued from inside a concurrent holder's continuation would find the
+ *      marker set and pass.
+ *
+ * This note claims routing, serialisation, and a source check that keeps direct
+ * calls out. It does not claim that the container cannot be written by other
+ * means.
+ */
 async function saveVaultsContainerV4(
   container: VaultsContainerV4,
 ): Promise<void> {
@@ -807,11 +929,209 @@ async function saveVaultsContainerV4(
         : v,
     ),
   };
-  return new Promise((resolve) => {
+  // DA-002 — `chrome.storage.local.set` reports failure (quota exhaustion, I/O,
+  // a corrupt profile) by setting `chrome.runtime.lastError` INSIDE the
+  // callback: it does not throw and it does not reject. Resolving
+  // unconditionally therefore reported every failed container write as a
+  // success, which made each caller's "the write landed" reasoning vacuous —
+  // including `removeVaultV4`'s rollback, whose catch could never fire.
+  // Reject instead, so those paths become live.
+  //
+  // `chrome.runtime` is always present in an MV3 service worker; the optional
+  // read only keeps this callable from a test stub that installs `storage`
+  // alone. An absent `runtime` is treated as "no error", which matches the
+  // real platform where its absence is impossible.
+  return new Promise((resolve, reject) => {
     chrome.storage.local.set(
       { [VAULTS_CONTAINER_KEY_V4]: persistable },
-      () => resolve(),
+      () => {
+        const err = (
+          chrome.runtime as { lastError?: { message?: string } } | undefined
+        )?.lastError;
+        if (err) {
+          reject(
+            new Error(
+              `failed to persist the vault container: ${err.message ?? "unknown storage error"}`,
+            ),
+          );
+          return;
+        }
+        resolve();
+      },
     );
+  });
+}
+
+/**
+ * Rejects a callback that hands the container back.
+ *
+ * `mutateContainer` PERSISTS THE CONTAINER IT READ — never a value the callback
+ * returns. So returning it is already pointless; the reason to make it a type
+ * error is what it would mean if it were ever honoured. A primitive that saved
+ * what it was given would accept a snapshot read BEFORE the lock, which is
+ * exactly the clobber this arrangement exists to prevent. Keeping that API shape
+ * unreachable stops it being reintroduced as a "simplification".
+ *
+ * The error surfaces where the result is USED; the branded name is the
+ * explanation a future reader gets.
+ */
+type ContainerMutationResult<T> = T extends VaultsContainerV4
+  ? {
+      readonly __invalid: "a mutateContainer callback must not return the container; the primitive persists the one it read";
+    }
+  : T;
+
+/**
+ * Read-modify-write the vaults container under its lock.
+ *
+ * OWNS the lock, the read, the not-found refusal, and the write. The callback
+ * receives a container read INSIDE the lock and mutates it in place; whatever it
+ * returns becomes the caller's result and is never persisted.
+ *
+ * A caller may still read the container before the lock — `removeVaultV4` and
+ * `updatePasskeyCredentialSignCountV4` both do, as optimisations — and that stays
+ * safe, because a pre-lock copy has no route to storage: this writes the object
+ * it read, and there is no parameter through which another could be supplied.
+ *
+ * ALWAYS WRITES. A callback that decides there is nothing to do still causes a
+ * write of the unchanged container, and the popup watches this key
+ * (`App.tsx`'s container-change listener refreshes keystore state). A mutator
+ * whose common case is "no change" must therefore pre-check BEFORE calling this,
+ * not return early from inside it.
+ *
+ * ── The two hooks ──────────────────────────────────────────────────────────
+ *
+ * Several mutators build a decrypted ML-DSA-65 backend that becomes the session
+ * ONLY if the write lands. Inside the lock they do two things this owns:
+ *
+ *   - on FAILURE, dispose the speculative backend, so no live secret is left
+ *     for a `lockV4` that only disposes `unlocked` to miss;
+ *   - on SUCCESS, install the session — capture `prev`, assign the new state,
+ *     dispose `prev`.
+ *
+ * The callback can observe neither, because this owns the write. Both are
+ * therefore REGISTERED and run here, in the same order and the same place they
+ * ran inline: the failure cleanup in the save's catch, the success work
+ * immediately after the save, both still holding the lock.
+ *
+ * WHY BOTH, NOT JUST THE FAILURE ONE. A failure-only hook forces the install
+ * into the callback, i.e. BEFORE the write. Then a failed write disposes the
+ * backend `unlocked` already points at, with the predecessor already disposed —
+ * a live session holding a dead backend and no way back. The invariant that
+ * breaks is: ON WRITE FAILURE THE LIVE SESSION MUST BE EXACTLY WHAT IT WAS
+ * BEFORE — same backend, same active vault id, predecessor NOT disposed. Running
+ * the install after the save keeps it true by construction.
+ *
+ * Neither hook is an escape hatch:
+ *   - both take `() => void` and nothing else, so neither can supply a container
+ *     nor make the write conditional;
+ *   - registration alone changes nothing — which one runs is decided here, by
+ *     whether the write threw;
+ *   - the error ALWAYS propagates as an error. A failure cleanup may
+ *     RE-CLASSIFY it (`removeVaultV4` must, so an infrastructure write failure
+ *     is not charged to the brute-force counter — C9) by returning a
+ *     replacement, but returning nothing keeps the original and there is no way
+ *     to return "success".
+ *
+ * Failure cleanups do NOT run when the CALLBACK throws — the inline blocks they
+ * replace wrapped only the save, so a pre-write throw disposed nothing.
+ * A throw from a SUCCESS hook propagates to the caller with the write already
+ * landed, exactly as the inline code did.
+ */
+async function mutateContainer<T>(
+  fn: (
+    container: VaultsContainerV4,
+    hooks: {
+      /** Run inside the lock if the write REJECTS. Return a replacement error to
+       *  re-classify; return nothing to keep the original. Cannot suppress. */
+      onWriteFailure: (cleanup: (err: unknown) => unknown | void) => void;
+      /** Run inside the lock immediately after the write SUCCEEDS. */
+      onWriteSuccess: (commit: () => void) => void;
+    },
+  ) => T | Promise<T>,
+): Promise<ContainerMutationResult<T>> {
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    const container = await loadVaultsContainerV4();
+    if (!container) throw new Error("no v4 vaults container");
+    const onFailure: Array<(err: unknown) => unknown | void> = [];
+    const onSuccess: Array<() => void> = [];
+    const result = await fn(container, {
+      onWriteFailure: (cleanup) => {
+        onFailure.push(cleanup);
+      },
+      onWriteSuccess: (commit) => {
+        onSuccess.push(commit);
+      },
+    });
+    try {
+      // The container THIS call read. Not an argument, not a return value.
+      await saveVaultsContainerV4(container);
+    } catch (e) {
+      let toThrow = e;
+      for (const cleanup of onFailure) {
+        try {
+          const replacement = cleanup(toThrow);
+          // Re-classification only: a cleanup that returns nothing leaves the
+          // original error in place, and there is no return value that means
+          // "succeed" — this always ends in a throw.
+          if (replacement !== undefined) toThrow = replacement;
+        } catch {
+          // A failing cleanup must never mask the write error below.
+        }
+      }
+      throw toThrow;
+    }
+    // Still inside the lock: no other container op can interleave between the
+    // write landing and the session being installed.
+    for (const commit of onSuccess) commit();
+    return result as ContainerMutationResult<T>;
+  });
+}
+
+/**
+ * The FIRST container write — onboarding only.
+ *
+ * `mutateContainer` cannot express this. It reads the container and throws
+ * "no v4 vaults container" when there is none, which is exactly the state this
+ * runs in. So this is the one writer whose container comes from its CALLBACK
+ * rather than from storage — the shape `mutateContainer` deliberately forbids.
+ *
+ * WHAT MAKES THAT SAFE IS THE ABSENCE ASSERTION, AND IT IS MADE INSIDE THE
+ * LOCK. `build` is reached only when storage holds no container, so this cannot
+ * overwrite one, and it cannot be repurposed as a general writer: every call
+ * after the first refuses. The stale-snapshot hazard `mutateContainer` exists to
+ * prevent needs a prior container to clobber, and this runs only when there is
+ * none.
+ *
+ * H1 — the assertion is AUTHORITATIVE here, not an optimisation. Callers check
+ * `hasContainerV4()` too, but that check is separated from this write by
+ * `getAddress` and a ~1 s derivation, so on its own it is a check-then-act: two
+ * concurrent onboarding commits could both pass it and both write, and because
+ * this persists a FRESH single-vault container the second would obliterate the
+ * first.
+ *
+ * `onWritten` runs after the write and still inside the lock. Unlike
+ * `mutateContainer`'s success hook it is AWAITED, because unlock-on-create ends
+ * in `persistMekToSessionV4` and that must complete before the lock is released.
+ *
+ * NO failure hook, deliberately. The create path's cleanup is its own outer
+ * catch, which covers more than the write — the address derive and the KDF too —
+ * and runs after the lock is released. That is safe HERE and only here: on
+ * failure there is no live session to corrupt, because nothing was installed,
+ * and a concurrent caller finds no container and throws. The writers that DO
+ * need the cleanup inside the lock are the ones with a session to preserve.
+ */
+async function createContainer<T>(
+  build: () => VaultsContainerV4,
+  onWritten: (container: VaultsContainerV4) => T | Promise<T>,
+): Promise<T> {
+  return withKeyLock(VAULTS_CONTAINER_KEY_V4, async () => {
+    if (await hasContainerV4()) {
+      throw new Error("v4 vault already exists; cannot overwrite");
+    }
+    const container = build();
+    await saveVaultsContainerV4(container);
+    return await onWritten(container);
   });
 }
 
@@ -848,6 +1168,24 @@ export interface VaultSummaryV4 {
 
 export async function hasContainerV4(): Promise<boolean> {
   return (await loadVaultsContainerV4()) !== null;
+}
+
+/**
+ * The `withKeyLock` key that serialises every vault-container mutation.
+ *
+ * Exported ONLY so the wallet-state wipe can take the same lock. That wipe
+ * removes the container by scanning for the `mono.` prefix rather than going
+ * through `saveVaultsContainerV4`, so it is the one container mutation the
+ * "route every write through the locked helper" invariant cannot catch on its
+ * own — without this it could delete the container out from under an in-flight
+ * writer, or be overwritten by one.
+ *
+ * Deliberately a key accessor and NOT a setter: callers can serialise against
+ * the container, but cannot write it. The only way to change the container's
+ * contents remains the locked writers in this module.
+ */
+export function vaultContainerLockKey(): string {
+  return VAULTS_CONTAINER_KEY_V4;
 }
 
 /** Internal: unwrap a vault's VEK, open its envelope, build the
@@ -939,25 +1277,51 @@ export async function selectActiveVaultV4(
   vaultId: string,
 ): Promise<{ address: string }> {
   if (!mekCache) throw new Error("container is locked");
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const target = container.vaults.find((v) => v.id === vaultId);
-  if (!target) throw new Error("unknown vault id");
-  // No-op fast path: already the active vault.
+  const mek = mekCache;
+  // No-op fast path, hoisted BEFORE the lock. Uniquely cheap among these
+  // pre-checks: it reads only module state, so it needs no container round-trip
+  // at all. Re-selecting the already-active wallet is an ordinary thing to do
+  // from the picker, and `mutateContainer` always writes — without this, every
+  // such click would rewrite the container unchanged and make the popup refresh
+  // its keystore state.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. The same check is repeated inside.
   if (vaultId === activeContainerVaultId && unlocked) {
     return { address: unlocked.address };
   }
-  const state = await loadVaultBackend(mekCache, target);
+  return mutateContainer(async (container, { onWriteFailure, onWriteSuccess }) => {
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
+  // Authoritative no-op check. Reachable only if the active vault changed
+  // between the pre-check and the lock, in which case the write below is
+  // redundant but harmless.
+  if (vaultId === activeContainerVaultId && unlocked) {
+    return { address: unlocked.address };
+  }
+  const state = await loadVaultBackend(mek, target);
   container.activeVaultId = vaultId;
-  await saveVaultsContainerV4(container);
+  // DA-002 made this path reachable. The incoming backend never becomes the
+  // session, so dispose its decrypted ML-DSA-65 secret rather than leaving it
+  // for GC — the same discipline removeVaultV4 applies to its speculative
+  // successor. `unlocked` is untouched, so the outgoing vault stays live.
+  onWriteFailure(() => {
+    state.backend.dispose();
+  });
   // S1-01: deterministically wipe the OUTGOING vault's ML-DSA-65 secret once
   // the new backend is installed, instead of leaving it for GC. `prev` is the
   // abandoned instance; `state.backend` (now `unlocked`) is never the target.
-  const prev = unlocked;
-  unlocked = state;
-  activeContainerVaultId = vaultId;
-  prev?.backend.dispose();
+  //
+  // Registered so it runs AFTER the write and still inside the lock. Inline here
+  // it would run BEFORE the write, and a failed write would then dispose the
+  // backend `unlocked` had just been pointed at with `prev` already gone.
+  onWriteSuccess(() => {
+    const prev = unlocked;
+    unlocked = state;
+    activeContainerVaultId = vaultId;
+    prev?.backend.dispose();
+  });
   return { address: state.address };
+  });
 }
 
 /** Read-only list of vault summaries. No unlock required — labels and
@@ -1007,12 +1371,205 @@ export async function renameVaultV4(
   const trimmed = newLabel.trim();
   if (trimmed.length === 0) throw new Error("label must be non-empty");
   if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const target = container.vaults.find((v) => v.id === vaultId);
-  if (!target) throw new Error("unknown vault id");
-  target.label = trimmed;
-  await saveVaultsContainerV4(container);
+  return mutateContainer((container) => {
+    const target = container.vaults.find((v) => v.id === vaultId);
+    if (!target) throw new Error("unknown vault id");
+    target.label = trimmed;
+  });
+}
+
+/** Outcome of a successful {@link removeVaultV4}. */
+export interface RemoveVaultResultV4 {
+  removedId: string;
+  /** The elected successor when the removed vault was active; otherwise the
+   *  unchanged active id. */
+  newActiveVaultId: string;
+  newActiveAddress: string;
+  /** Labels of multisig vaults whose signer roster referenced the removed
+   *  vault. Removing it does not corrupt their meta, but it destroys the key
+   *  those wallets need to approve — callers surface this so the user is told
+   *  which wallets lose a signer. */
+  affectedMultisigLabels: string[];
+}
+
+/** Successor rule: the survivor with the lowest `createdAt`. Ties are broken
+ *  by container order, taking the earlier record — `<=` keeps the accumulator,
+ *  which is the earlier element. Deterministic, so the same removal always
+ *  elects the same wallet. Callers guarantee a non-empty list. */
+function electSuccessorV4(survivors: VaultRecordV4[]): VaultRecordV4 {
+  return survivors.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+}
+
+/** Labels of multisig vaults referencing `target` in their signer roster.
+ *  Matched on the self-signer's `vaultId` where present and on the address
+ *  otherwise, so external entries that name the same address are caught too. */
+function multisigVaultsReferencingV4(
+  vaults: VaultRecordV4[],
+  target: VaultRecordV4,
+): string[] {
+  const addr = target.addr.toLowerCase();
+  return vaults
+    .filter(
+      (v) =>
+        v.id !== target.id &&
+        v.kind === "multisig" &&
+        (v.multisig?.signers ?? []).some(
+          (s) => s.vaultId === target.id || s.address.toLowerCase() === addr,
+        ),
+    )
+    .map((v) => v.label);
+}
+
+/**
+ * Permanently remove ONE vault from the container after re-verifying the
+ * master password.
+ *
+ * Verification is a fresh Argon2id derivation plus an authenticated decrypt of
+ * the TARGET vault's envelope. A wrong password yields a wrong MEK, which fails
+ * the Poly1305 tag — and that happens before anything is written. The cached
+ * MEK proves only that a session is open; it is never accepted in place of the
+ * password. No plaintext password is stored, compared, or logged, and the
+ * derived MEK is zeroed on every exit path.
+ *
+ * Fails CLOSED, in this order, with nothing persisted unless every check passes:
+ *   - locked container;
+ *   - unknown vault id;
+ *   - the LAST remaining vault. Removing it would leave `activeVaultId`
+ *     dangling, and `unlockContainerV4` would then throw "container is missing
+ *     its active vault" — a bricked wallet. Callers route the user to Reset
+ *     wallet, which wipes cleanly, instead.
+ *
+ * Atomicity: the new container is persisted BEFORE any in-memory state moves.
+ * If the write fails, the on-disk container is untouched, the held backend is
+ * still the original, and any successor backend opened in advance is disposed
+ * rather than abandoned. A half-applied removal is not reachable. That ordering
+ * is not open-coded here: the session install is registered with
+ * `mutateContainer`'s success hook, which runs only after the write lands, so
+ * the failure path cannot reach it.
+ *
+ * Scope: this removes the vault RECORD only — its wrapped key, its sealed
+ * seed + mnemonic envelope, its cached address, and any per-vault passkey,
+ * SLH-DSA backup, and multisig meta. Address-keyed state that lives outside the
+ * container (contacts, connected-site grants, activity caches) is deliberately
+ * left alone; a targeted purge is a separate concern.
+ */
+export async function removeVaultV4(
+  password: string,
+  vaultId: string,
+): Promise<RemoveVaultResultV4> {
+  if (!mekCache) throw new Error("container is locked");
+  // H1/D2 — the KDF runs OUTSIDE the container lock, deliberately.
+  //
+  // `masterKdf` is the one part of the container that cannot go stale: it is
+  // written exactly once, in `commitVaultFromSeed`'s fresh-container literal,
+  // and no writer mutates it thereafter. Reading it from a pre-lock snapshot is
+  // therefore safe, and it keeps a ~1 s Argon2id derivation out of the critical
+  // section — holding the lock across it would queue every other container op
+  // behind this one and make the UI look hung.
+  //
+  // Everything that CAN go stale — the vault list, the active id, the target
+  // record — is re-read INSIDE the lock below: `mutateContainer` does that read
+  // itself, so the `container` its callback receives is NOT this snapshot.
+  // Acting on this pre-lock snapshot would be the original bug with extra steps.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) throw new Error("no v4 vaults container");
+  // D4 — cheap structural pre-check on the pre-lock snapshot, so a bogus vault
+  // id or a single-vault container is refused BEFORE spending a ~2.76 s
+  // Argon2id derivation. Hoisting the KDF above the lock (D2) put these checks
+  // behind it; this puts a copy back in front.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. This snapshot is taken outside the
+  // container lock and can be stale, so it may let a request through that the
+  // authoritative checks inside the lock then refuse. That direction is safe;
+  // the reverse is not, which is why these checks are duplicated rather than
+  // moved. Both messages are structural refusals, so neither costs the user a
+  // brute-force attempt.
+  if (!pre.vaults.some((v) => v.id === vaultId)) {
+    throw new Error("unknown vault id");
+  }
+  if (pre.vaults.length <= 1) {
+    throw new Error("cannot remove the last vault — use Reset wallet instead");
+  }
+  const mek = await deriveMekV4(password, pre.masterKdf);
+  try {
+    return await mutateContainer(async (
+      container,
+      { onWriteFailure, onWriteSuccess },
+    ) => {
+      const target = container.vaults.find((v) => v.id === vaultId);
+      if (!target) throw new Error("unknown vault id");
+      if (container.vaults.length <= 1) {
+        throw new Error(
+          "cannot remove the last vault — use Reset wallet instead",
+        );
+      }
+
+      const survivors = container.vaults.filter((v) => v.id !== vaultId);
+      const wasActive = container.activeVaultId === vaultId;
+      const successorId = wasActive
+        ? electSuccessorV4(survivors).id
+        : container.activeVaultId;
+
+      // Prove password knowledge, and (only if needed) open the successor.
+      // Both happen before any mutation.
+      let nextState: UnlockedState | null = null;
+      const vek = unwrapVekV4(mek, target.wrappedKey, target.id);
+      try {
+        const opened = openVaultEnvelopeV4(vek, target.envelope, target.id);
+        opened.seed.fill(0);
+      } finally {
+        vek.fill(0);
+      }
+      if (wasActive) {
+        nextState = await loadVaultBackend(mek, electSuccessorV4(survivors));
+      }
+
+      const affectedMultisigLabels = multisigVaultsReferencingV4(
+        container.vaults,
+        target,
+      );
+
+      container.vaults = survivors;
+      container.activeVaultId = successorId;
+
+      onWriteFailure((e) => {
+        // Nothing on disk changed and no in-memory state has moved yet. Dispose
+        // the successor we opened speculatively so its decrypted secret doesn't
+        // linger.
+        nextState?.backend.dispose();
+        // C9 — the AEAD above already passed, so the password was CORRECT. A
+        // write failure here is infrastructure, not a guess: it must not be
+        // charged to the brute-force counter or reported as a wrong password.
+        // Returning it RE-CLASSIFIES the failure; it still propagates as one.
+        return markPostVerificationFailure(e);
+      });
+      // REGISTERED, NOT INLINE: this must run AFTER the write, still inside the
+      // lock. Inline it would run BEFORE, so a failed write would leave the
+      // session pointing at a backend the cleanup above then disposes, with the
+      // predecessor already gone.
+      onWriteSuccess(() => {
+        if (nextState) {
+          // S1-01: wipe the removed vault's ML-DSA-65 secret once the successor
+          // is installed, rather than leaving it for GC — same discipline as
+          // selectActiveVaultV4.
+          const prev = unlocked;
+          unlocked = nextState;
+          activeContainerVaultId = successorId;
+          prev?.backend.dispose();
+        }
+      });
+
+      return {
+        removedId: vaultId,
+        newActiveVaultId: successorId,
+        newActiveAddress: nextState?.address ?? unlocked?.address ?? "",
+        affectedMultisigLabels,
+      };
+    });
+  } finally {
+    // Covers every exit, including a rejection while WAITING for the lock.
+    mek.fill(0);
+  }
 }
 
 /** Generate a fresh recovery phrase and add a new vault to the
@@ -1211,17 +1768,16 @@ export async function writeMultisigMetaV4(
   vaultId: string,
   meta: MultisigVaultMeta,
 ): Promise<void> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  if (v.kind !== "multisig") {
-    throw new Error("target vault is not a multisig vault");
-  }
-  validateThreshold(meta.threshold, meta.signers.length);
-  assertSignerSetUnique(meta.signers);
-  v.multisig = cloneMultisigMeta(meta);
-  await saveVaultsContainerV4(container);
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    if (v.kind !== "multisig") {
+      throw new Error("target vault is not a multisig vault");
+    }
+    validateThreshold(meta.threshold, meta.signers.length);
+    assertSignerSetUnique(meta.signers);
+    v.multisig = cloneMultisigMeta(meta);
+  });
 }
 
 function cloneMultisigMeta(meta: MultisigVaultMeta): MultisigVaultMeta {
@@ -1284,15 +1840,14 @@ export async function addPasskeyCredentialV4(
   vaultId: string,
   cred: PasskeyCredential,
 ): Promise<VaultPasskeyState> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  const current = v.passkey ?? emptyVaultPasskeyState();
-  const next = appendCredential(current, cred);
-  v.passkey = clonePasskeyState(next);
-  await saveVaultsContainerV4(container);
-  return clonePasskeyState(next);
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    const current = v.passkey ?? emptyVaultPasskeyState();
+    const next = appendCredential(current, cred);
+    v.passkey = clonePasskeyState(next);
+    return clonePasskeyState(next);
+  });
 }
 
 /** Remove a credential by id. No-op if absent. Auto-disables the
@@ -1302,15 +1857,14 @@ export async function removePasskeyCredentialV4(
   vaultId: string,
   credentialId: string,
 ): Promise<VaultPasskeyState> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  const current = v.passkey ?? emptyVaultPasskeyState();
-  const next = removePasskeyCredential(current, credentialId);
-  v.passkey = clonePasskeyState(next);
-  await saveVaultsContainerV4(container);
-  return clonePasskeyState(next);
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    const current = v.passkey ?? emptyVaultPasskeyState();
+    const next = removePasskeyCredential(current, credentialId);
+    v.passkey = clonePasskeyState(next);
+    return clonePasskeyState(next);
+  });
 }
 
 /** Advance a credential's stored signature counter after a verified WebAuthn
@@ -1324,18 +1878,51 @@ export async function updatePasskeyCredentialSignCountV4(
   credentialId: string,
   newSignCount: number,
 ): Promise<void> {
-  const container = await loadVaultsContainerV4();
-  if (!container) return;
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v || !v.passkey) return;
-  const next = clonePasskeyState(v.passkey);
-  const idx = next.credentials.findIndex((c) => c.credentialId === credentialId);
-  if (idx < 0) return;
-  const cur = next.credentials[idx]!;
-  if (typeof cur.signCount === "number" && newSignCount <= cur.signCount) return;
-  next.credentials[idx] = { ...cur, signCount: newSignCount };
-  v.passkey = next;
-  await saveVaultsContainerV4(container);
+  // Cheap no-op check on a PRE-LOCK snapshot, mirroring `removeVaultV4`'s.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. This snapshot is taken outside the
+  // container lock and can be stale, so it may let a call through that the
+  // authoritative checks inside then find nothing to do. That direction is
+  // harmless; the reverse would be, which is why every check below is repeated
+  // inside rather than moved.
+  //
+  // It exists because `mutateContainer` ALWAYS writes, and this function's
+  // COMMON case is the no-op: it runs once per verified passkey assertion, on
+  // the send path. Entering the primitive to change nothing would write the
+  // container back unchanged, and `App.tsx` refreshes keystore state on every
+  // write to that key — a popup round-trip per assertion. Exiting here also
+  // preserves the pre-existing silent return when no container exists, which the
+  // primitive would otherwise turn into a throw.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) return;
+  const preVault = pre.vaults.find((rec) => rec.id === vaultId);
+  if (!preVault?.passkey) return;
+  const preCred = preVault.passkey.credentials.find(
+    (c) => c.credentialId === credentialId,
+  );
+  if (!preCred) return;
+  if (
+    typeof preCred.signCount === "number" &&
+    newSignCount <= preCred.signCount
+  ) {
+    return;
+  }
+
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v || !v.passkey) return;
+    const next = clonePasskeyState(v.passkey);
+    const idx = next.credentials.findIndex(
+      (c) => c.credentialId === credentialId,
+    );
+    if (idx < 0) return;
+    const cur = next.credentials[idx]!;
+    if (typeof cur.signCount === "number" && newSignCount <= cur.signCount) {
+      return;
+    }
+    next.credentials[idx] = { ...cur, signCount: newSignCount };
+    v.passkey = next;
+  });
 }
 
 /** Replace the policy. Validation runs inside `setPolicy` — bad input
@@ -1344,15 +1931,14 @@ export async function setPasskeyPolicyV4(
   vaultId: string,
   policy: PasskeyPolicy,
 ): Promise<VaultPasskeyState> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  const current = v.passkey ?? emptyVaultPasskeyState();
-  const next = setPasskeyPolicy(current, policy);
-  v.passkey = clonePasskeyState(next);
-  await saveVaultsContainerV4(container);
-  return clonePasskeyState(next);
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    const current = v.passkey ?? emptyVaultPasskeyState();
+    const next = setPasskeyPolicy(current, policy);
+    v.passkey = clonePasskeyState(next);
+    return clonePasskeyState(next);
+  });
 }
 
 // ---- SLH-DSA backup CRUD ----
@@ -1390,16 +1976,15 @@ export async function writeSlhDsaBackupV4(
   vaultId: string,
   backup: SlhDsaBackup,
 ): Promise<SlhDsaBackup> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  v.slhDsaBackup = cloneBackupForWrite(backup);
-  await saveVaultsContainerV4(container);
-  // Return through the read clone so the caller always gets a
-  // fresh object (defensive against future mutation by callers
-  // that capture the reference).
-  return cloneBackupForRead(v.slhDsaBackup) ?? backup;
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    v.slhDsaBackup = cloneBackupForWrite(backup);
+    // Return through the read clone so the caller always gets a
+    // fresh object (defensive against future mutation by callers
+    // that capture the reference).
+    return cloneBackupForRead(v.slhDsaBackup) ?? backup;
+  });
 }
 
 /** Drop the SLH-DSA backup record entirely. Used by the Settings →
@@ -1413,13 +1998,29 @@ export async function writeSlhDsaBackupV4(
 export async function clearSlhDsaBackupV4(
   vaultId: string,
 ): Promise<boolean> {
-  const container = await loadVaultsContainerV4();
-  if (!container) return false;
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v || !v.slhDsaBackup) return false;
-  delete v.slhDsaBackup;
-  await saveVaultsContainerV4(container);
-  return true;
+  // Cheap "nothing to clear" check on a PRE-LOCK snapshot.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. Stale by construction, so it may let a
+  // call through that the authoritative check inside then finds nothing to do;
+  // that direction is harmless and the check is repeated below rather than moved.
+  //
+  // Needed because this function reports "nothing to clear" by RETURNING `false`,
+  // and `mutateContainer` would turn the absent-container case into a throw and
+  // would write the container back unchanged on the absent-record case. Exiting
+  // here preserves both: `false` stays `false`, and no write happens.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) return false;
+  const preVault = pre.vaults.find((rec) => rec.id === vaultId);
+  if (!preVault?.slhDsaBackup) return false;
+
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    // Authoritative. Reachable only if the record vanished between the snapshot
+    // and the lock, in which case the write below is redundant but harmless.
+    if (!v || !v.slhDsaBackup) return false;
+    delete v.slhDsaBackup;
+    return true;
+  });
 }
 
 /** Generate a fresh SLH-DSA backup keypair for the target vault,
@@ -1448,32 +2049,32 @@ export async function generateSlhDsaBackupV4(
   if (mekCache === null) {
     throw new Error("keystore locked");
   }
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v) throw new Error("unknown vault id");
-  if (v.slhDsaBackup && v.slhDsaBackup.publicKey.length > 0) {
-    throw new Error(
-      "backup already exists — clear it first or use the re-export flow",
-    );
-  }
+  const mek = mekCache;
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    if (!v) throw new Error("unknown vault id");
+    if (v.slhDsaBackup && v.slhDsaBackup.publicKey.length > 0) {
+      throw new Error(
+        "backup already exists — clear it first or use the re-export flow",
+      );
+    }
 
-  // Unwrap the VEK locally, run keygen, zero the VEK before return.
-  // The VEK never escapes this function's stack — the keygen module
-  // gets it by-reference and zeroes its working secret too.
-  const vek = unwrapVekV4(mekCache, v.wrappedKey, v.id);
-  let prepared: { mnemonic: string; backup: SlhDsaBackup };
-  try {
-    prepared = prepareSlhDsaBackup({ vek });
-  } finally {
-    vek.fill(0);
-  }
+    // Unwrap the VEK locally, run keygen, zero the VEK before return.
+    // The VEK never escapes this function's stack — the keygen module
+    // gets it by-reference and zeroes its working secret too.
+    const vek = unwrapVekV4(mek, v.wrappedKey, v.id);
+    let prepared: { mnemonic: string; backup: SlhDsaBackup };
+    try {
+      prepared = prepareSlhDsaBackup({ vek });
+    } finally {
+      vek.fill(0);
+    }
 
-  v.slhDsaBackup = cloneBackupForWrite(prepared.backup);
-  await saveVaultsContainerV4(container);
-  // Return the in-memory record (with mnemonic) — the caller
-  // forwards mnemonic to the popup and lets it fall out of scope.
-  return prepared;
+    v.slhDsaBackup = cloneBackupForWrite(prepared.backup);
+    // Return the in-memory record (with mnemonic) — the caller
+    // forwards mnemonic to the popup and lets it fall out of scope.
+    return prepared;
+  });
 }
 
 /** Re-derive the 24-word mnemonic from a previously-generated
@@ -1510,18 +2111,37 @@ export async function recoverSlhDsaMnemonicV4(
 export async function confirmSlhDsaColdStorageV4(
   vaultId: string,
 ): Promise<SlhDsaBackup | null> {
-  const container = await loadVaultsContainerV4();
-  if (!container) return null;
-  const v = container.vaults.find((rec) => rec.id === vaultId);
-  if (!v || !v.slhDsaBackup) return null;
-  if (!v.slhDsaBackup.coldStorageConfirmed) {
-    v.slhDsaBackup = cloneBackupForWrite({
-      ...v.slhDsaBackup,
-      coldStorageConfirmed: true,
-    });
-    await saveVaultsContainerV4(container);
-  }
-  return cloneBackupForRead(v.slhDsaBackup);
+  // Cheap "no such record" check on a PRE-LOCK snapshot.
+  //
+  // OPTIMISATION ONLY — NOT THE BOUNDARY. Stale by construction; both checks are
+  // repeated inside rather than moved.
+  //
+  // It covers only the two `null` exits, which are the ones `mutateContainer`
+  // would turn into a throw. The already-confirmed exit is deliberately NOT
+  // pre-checked: that path RETURNS THE RECORD, and answering it from a pre-lock
+  // snapshot would hand the caller a record that a concurrent
+  // `setSlhDsaRegistrationStatusV4` may already have moved on from. Re-confirming
+  // an already-confirmed backup therefore now costs one redundant write of the
+  // unchanged container — a rare, explicitly user-driven path — which is the
+  // cheaper trade than returning stale key-backup state.
+  const pre = await loadVaultsContainerV4();
+  if (!pre) return null;
+  const preVault = pre.vaults.find((rec) => rec.id === vaultId);
+  if (!preVault?.slhDsaBackup) return null;
+
+  return mutateContainer((container) => {
+    const v = container.vaults.find((rec) => rec.id === vaultId);
+    // Authoritative; reachable only if the record vanished between the snapshot
+    // and the lock.
+    if (!v || !v.slhDsaBackup) return null;
+    if (!v.slhDsaBackup.coldStorageConfirmed) {
+      v.slhDsaBackup = cloneBackupForWrite({
+        ...v.slhDsaBackup,
+        coldStorageConfirmed: true,
+      });
+    }
+    return cloneBackupForRead(v.slhDsaBackup);
+  });
 }
 
 /** Update a backup record's chain-registration status atomically.
@@ -1554,8 +2174,7 @@ export async function setSlhDsaRegistrationStatusV4(
     error?: string | null;
   },
 ): Promise<SlhDsaBackup> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
+  return mutateContainer((container) => {
   const v = container.vaults.find((rec) => rec.id === vaultId);
   if (!v) throw new Error("unknown vault id");
   if (!v.slhDsaBackup) {
@@ -1603,8 +2222,8 @@ export async function setSlhDsaRegistrationStatusV4(
   }
 
   v.slhDsaBackup = cloneBackupForWrite(next);
-  await saveVaultsContainerV4(container);
   return cloneBackupForRead(v.slhDsaBackup) ?? next;
+  });
 }
 
 /** Defensive copy so callers can't mutate stored state by holding a
@@ -1747,8 +2366,14 @@ async function appendVaultRecord(
   requestedLabel?: string,
   extra?: { kind: "single" | "multisig"; multisig?: MultisigVaultMeta },
 ): Promise<{ vaultId: string; mnemonic: string; address: string }> {
-  const container = await loadVaultsContainerV4();
-  if (!container) throw new Error("no v4 vaults container");
+  // H1 — the ENTIRE read-modify-write runs under the container lock. This is
+  // the append half of the fund-loss pair: without it, a concurrent writer that
+  // read the container before this append's write would persist a vault array
+  // lacking the record below, erasing a wrapped VEK and a sealed seed envelope
+  // for an address that stays funded on-chain. No KDF runs here (the caller
+  // supplies the cached MEK), so the lock is held only for the storage
+  // round trips plus a backend construction.
+  return mutateContainer(async (container, { onWriteFailure, onWriteSuccess }) => {
   // NOTE: this backend is RETAINED as the held session backend below
   // (`unlocked = { backend, address }` — adding a fresh vault makes it active),
   // so it must NOT be disposed here — lockV4() wipes it (S1-01) on lock.
@@ -1813,16 +2438,30 @@ async function appendVaultRecord(
   // broadcast `accountsChanged` after this returns so dApps + popup
   // refresh.
   container.activeVaultId = record.id;
-  await saveVaultsContainerV4(container);
+  // DA-002 made this path reachable. The new vault was never persisted, so it
+  // never becomes the session — dispose the backend built for it instead of
+  // leaking a decrypted secret that `lockV4` (which only disposes `unlocked`)
+  // would never reach. The previously active vault stays live and undisposed.
+  onWriteFailure(() => {
+    backend.dispose();
+  });
   // S1-01: dispose the PREVIOUSLY-active vault's backend (the outgoing session
   // secret) now that the just-added vault becomes active. The new `backend` is
   // deliberately NOT disposed here (see its construction note above — lockV4
   // owns it); only the outgoing `prev` instance is wiped.
-  const prev = unlocked;
-  unlocked = { backend, address };
-  activeContainerVaultId = record.id;
-  prev?.backend.dispose();
+  //
+  // REGISTERED, NOT INLINE, and that is the whole point: this must run AFTER the
+  // write, still inside the lock. Doing it here in the callback would put it
+  // BEFORE the write, so a failed write would dispose the backend `unlocked` had
+  // just been pointed at while `prev` was already gone.
+  onWriteSuccess(() => {
+    const prev = unlocked;
+    unlocked = { backend, address };
+    activeContainerVaultId = record.id;
+    prev?.backend.dispose();
+  });
   return { vaultId: record.id, mnemonic, address };
+  });
 }
 
 // ---- public API ----
@@ -1854,20 +2493,84 @@ export function getActiveVaultIdV4(): string | null {
  *  popup-asserted flag (which the already-unlocked local actor this gate
  *  targets could forge). Returns false (never throws) on any failure and
  *  zeroes all derived secret material. */
+/**
+ * Why a container-password verification did not succeed.
+ *
+ * `structural: true` means the attempt **never evaluated the password** — the
+ * container was absent, or present but with a dangling `activeVaultId`. No MEK
+ * was tested against any ciphertext, so the outcome is identical for every
+ * password, including the correct one. Callers use this to decide whether the
+ * attempt counts against the brute-force budget: a structural refusal must NOT,
+ * because charging it throttles a user whose password was right all along.
+ *
+ * `structural: false` is a genuine password verdict — the Poly1305 tag was
+ * checked and it failed. That one always counts.
+ */
+/**
+ * Mark an error as having been raised AFTER the password was proven correct.
+ *
+ * The brute-force counter exists to charge password GUESSES. Once the AEAD tag
+ * has been checked and passed, the password is known-good, so anything that
+ * fails downstream — a storage write rejecting, infrastructure erroring — is
+ * not a guess and must not spend one of the user's attempts, nor be reported to
+ * them as "wrong password".
+ *
+ * This is a POSITIVE signal tied to the verification event, deliberately not a
+ * string in `isStructuralVaultRefusal`. That list is matched by message and
+ * shared across every op, so it can only express properties of WHAT an error
+ * says. This class is safe because of WHERE it is raised — downstream of the
+ * AEAD — which a message match cannot capture: the moment any op wrote before
+ * verifying, a message entry would silently hand out free guesses. Marking at
+ * the raise site keeps the property attached to the thing that makes it true.
+ */
+export function markPostVerificationFailure(err: unknown): unknown {
+  if (err && typeof err === "object") {
+    (err as { postVerification?: boolean }).postVerification = true;
+  }
+  return err;
+}
+
+/** True when `err` was raised downstream of a successful password check. */
+export function isPostVerificationFailure(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as { postVerification?: boolean }).postVerification === true
+  );
+}
+
+export type VerifyPasswordOutcomeV4 =
+  | { verified: true }
+  | {
+      verified: false;
+      structural: true;
+      reason: "no-container" | "missing-active-vault";
+    }
+  | { verified: false; structural: false };
+
 export async function verifyContainerPasswordV4(
   password: string,
-): Promise<boolean> {
+): Promise<VerifyPasswordOutcomeV4> {
   const container = await loadVaultsContainerV4();
-  if (!container) return false;
+  if (!container) {
+    return { verified: false, structural: true, reason: "no-container" };
+  }
   const active = container.vaults.find((v) => v.id === container.activeVaultId);
-  if (!active) return false;
+  if (!active) {
+    return {
+      verified: false,
+      structural: true,
+      reason: "missing-active-vault",
+    };
+  }
   const mek = await deriveMekV4(password, container.masterKdf);
   try {
     const vek = unwrapVekV4(mek, active.wrappedKey, active.id);
     vek.fill(0);
-    return true;
+    return { verified: true };
   } catch {
-    return false;
+    // The AEAD tag was checked and failed — a real wrong-password verdict.
+    return { verified: false, structural: false };
   } finally {
     mek.fill(0);
   }
@@ -1983,48 +2686,60 @@ async function commitVaultFromSeed(
     // single-vault `mono.vault.v4` write — create commits straight into
     // the `mono.vaults.v4` container shape.
     const masterKdf = generateMasterKdfParamsV4();
+    // D2 — derive BEFORE taking the container lock. These params are freshly
+    // generated rather than read from storage, so there is nothing here that
+    // could go stale while we wait.
     mek = await deriveMekV4(password, masterKdf);
-    // V5 (P1-003): id generated before the seal so it binds into the AAD.
-    const vaultId = crypto.randomUUID();
-    const vek = generateVekV4();
-    let wrappedKey: WrappedVekV4;
-    let envelope: SealedSeedRecordV4;
-    try {
-      wrappedKey = wrapVekV4(mek, vek, vaultId);
-      envelope = sealVaultEnvelopeV4(vek, seed, mnemonic, vaultId);
-    } finally {
-      vek.fill(0);
-    }
-    const record: VaultRecordV4 = {
-      id: vaultId,
-      label: "Wallet 1",
-      createdAt: Date.now(),
-      wrappedKey,
-      envelope,
-      addr: address,
-    };
-    const container: VaultsContainerV4 = {
-      version: SCHEMA_VERSION,
-      algo: ALGO_ID,
-      kdf: KDF_ID,
-      aead: AEAD_ID,
-      masterKdf,
-      vaults: [record],
-      activeVaultId: record.id,
-    };
-    await saveVaultsContainerV4(container);
-
-    // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
-    // `mek` — ownership transfers to mekCache). This reproduces the exact
-    // end state the d67de85 follow-up unlockContainerV4 call established,
-    // inline, so no single-vault write + re-unlock round-trip is needed.
-    if (mekCache) mekCache.fill(0);
-    mekCache = mek;
-    unlocked = { backend, address };
-    activeContainerVaultId = record.id;
-    committed = true; // ownership of mek + backend now held by the session
-    await persistMekToSessionV4(mek);
-    return address;
+    const mekOwned = mek;
+    // The absence guard that used to sit inline here is now the first thing
+    // `createContainer` does, still inside the lock and still authoritative.
+    return await createContainer(
+      () => {
+        // V5 (P1-003): id generated before the seal so it binds into the AAD.
+        const vaultId = crypto.randomUUID();
+        const vek = generateVekV4();
+        let wrappedKey: WrappedVekV4;
+        let envelope: SealedSeedRecordV4;
+        try {
+          wrappedKey = wrapVekV4(mekOwned, vek, vaultId);
+          envelope = sealVaultEnvelopeV4(vek, seed, mnemonic, vaultId);
+        } finally {
+          vek.fill(0);
+        }
+        const record: VaultRecordV4 = {
+          id: vaultId,
+          label: "Wallet 1",
+          createdAt: Date.now(),
+          wrappedKey,
+          envelope,
+          addr: address,
+        };
+        return {
+          version: SCHEMA_VERSION,
+          algo: ALGO_ID,
+          kdf: KDF_ID,
+          aead: AEAD_ID,
+          masterKdf,
+          vaults: [record],
+          activeVaultId: record.id,
+        };
+      },
+      // Runs after the write, still inside the lock — and awaited, which is why
+      // this is a parameter rather than one of `mutateContainer`'s hooks.
+      async (container) => {
+        // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
+        // `mek` — ownership transfers to mekCache). This reproduces the exact
+        // end state the d67de85 follow-up unlockContainerV4 call established,
+        // inline, so no single-vault write + re-unlock round-trip is needed.
+        if (mekCache) mekCache.fill(0);
+        mekCache = mekOwned;
+        unlocked = { backend, address };
+        activeContainerVaultId = container.activeVaultId;
+        committed = true; // ownership of mek + backend now held by the session
+        await persistMekToSessionV4(mekOwned);
+        return address;
+      },
+    );
   } catch (e) {
     if (!committed) {
       if (mek) mek.fill(0);
@@ -2052,14 +2767,48 @@ export async function exportMnemonicV4(
   if (!container) throw new Error("no v4 vault — run onboarding first");
   const active = container.vaults.find((v) => v.id === container.activeVaultId);
   if (!active) throw new Error("container is missing its active vault");
+  return exportMnemonicForVaultV4(password, active.id);
+}
+
+/**
+ * Re-derive the MEK from `password` and decrypt a SPECIFIC vault's stored
+ * mnemonic. Same pipeline as {@link exportMnemonicV4} — which now delegates
+ * here — but targeted by id, so a wallet list can reveal a non-active wallet
+ * without switching the active vault first.
+ *
+ * Does NOT cache the MEK: this is a read, not an unlock, and the derived key is
+ * zeroed on every exit path. Nothing is persisted or logged; the phrase exists
+ * only in the returned value.
+ *
+ * `vaultId` is a TRUSTED SELECTOR, not a check. It picks which record to open,
+ * and a valid id returns that wallet's 24 words — which is the whole point of
+ * the per-wallet reveal. Nothing here re-authorises the choice, and nothing
+ * needs to: the caller has already proven the master password, which unlocks
+ * every vault in the container. What that means for callers is that the
+ * PROVENANCE of the id is theirs to guarantee — a stale or swapped id shows a
+ * different wallet's phrase, silently and successfully.
+ *
+ * What the AEAD binding does do: `buildVaultAadV4(vaultId)` is threaded into
+ * the wrapped VEK and both envelope halves, so a record's ciphertext only opens
+ * under its OWN id. That stops a transplant — moving one vault's envelope into
+ * another's slot in the container — not a caller naming a different vault.
+ */
+export async function exportMnemonicForVaultV4(
+  password: string,
+  vaultId: string,
+): Promise<{ mnemonic: string }> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vault — run onboarding first");
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
   const mek = await deriveMekV4(password, container.masterKdf);
   try {
     // Wrong password → MEK mismatch → AEAD failure here (unwrap or open),
     // which throws — the handler maps any throw to wrong-password.
-    const vek = unwrapVekV4(mek, active.wrappedKey, active.id);
+    const vek = unwrapVekV4(mek, target.wrappedKey, target.id);
     let opened: { seed: Uint8Array; mnemonic: string };
     try {
-      opened = openVaultEnvelopeV4(vek, active.envelope, active.id);
+      opened = openVaultEnvelopeV4(vek, target.envelope, target.id);
     } finally {
       vek.fill(0);
     }

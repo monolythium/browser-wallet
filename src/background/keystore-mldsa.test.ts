@@ -12,7 +12,7 @@
 // dominates the per-test runtime (~1-2 s on a 2020-era laptop), so
 // every test carries a generous timeout.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 function bytesToHexLower(b: Uint8Array): string {
   let s = "";
@@ -539,19 +539,22 @@ describe("keystore-mldsa v4-multi state machine", () => {
 
       // Correct password verifies true. Verification is side-effect free —
       // it does NOT change the unlocked/active state in either direction.
-      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect((await ks.verifyContainerPasswordV4(password)).verified).toBe(true);
       expect(ks.isUnlockedV4()).toBe(true);
       expect(ks.getActiveVaultIdV4()).not.toBeNull();
 
-      // Wrong password verifies false (AEAD fails closed), never throws.
-      expect(await ks.verifyContainerPasswordV4("wrong-password")).toBe(false);
+      // Wrong password verifies false (AEAD fails closed), never throws — and
+      // reports it as a REAL password verdict, not a structural refusal.
+      const wrong = await ks.verifyContainerPasswordV4("wrong-password");
+      expect(wrong.verified).toBe(false);
+      expect(wrong.verified === false && wrong.structural).toBe(false);
 
       // Works while LOCKED too (re-derives the MEK from disk) and does not
       // unlock the wallet as a side effect.
       ks.lockV4();
       expect(ks.isUnlockedV4()).toBe(false);
       expect(ks.getActiveVaultIdV4()).toBeNull();
-      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect((await ks.verifyContainerPasswordV4(password)).verified).toBe(true);
       expect(ks.isUnlockedV4()).toBe(false);
       expect(ks.getUnlockedAddressV4()).toBeNull();
     },
@@ -2261,4 +2264,808 @@ describe("sent-address integrity HMAC (P5-007)", () => {
     },
     60_000,
   );
+});
+
+// ---------------------------------------------------------------------------
+// removeVaultV4 — password-verified single-vault removal.
+//
+// Argon2id cost: this describe deliberately does NOT reset modules between
+// tests. The container is built once in beforeAll (one real derivation) and the
+// module instance is kept alive so the cached MEK stays warm; each test restores
+// a deep-cloned storage snapshot instead of rebuilding. The only derivation a
+// test pays is the one removeVaultV4 itself performs, which is the thing under
+// test. Cheapening the KDF is not an option — isVaultsContainerV4 floors the
+// params at m >= 64 MiB / t >= 2 and rejects anything weaker.
+// ---------------------------------------------------------------------------
+describe("removeVaultV4 — password-verified single-vault removal", () => {
+  const PASSWORD = "correct-horse-battery-staple";
+  type Ks = typeof import("./keystore-mldsa.js");
+
+  interface TestVault {
+    id: string;
+    label: string;
+    addr: string;
+    createdAt: number;
+    envelope: unknown;
+    wrappedKey: unknown;
+    kind?: string;
+    multisig?: unknown;
+  }
+  interface TestContainer {
+    vaults: TestVault[];
+    activeVaultId: string;
+  }
+
+  let storage: StorageMap;
+  let ks: Ks;
+  let KEY: string;
+  let snapshot: string;
+  let idA: string;
+  let idB: string;
+  let idC: string;
+
+  const container = (): TestContainer =>
+    JSON.parse(JSON.stringify(storage[KEY])) as TestContainer;
+
+  const writeContainer = (c: TestContainer) => {
+    storage[KEY] = JSON.parse(JSON.stringify(c));
+  };
+
+  beforeAll(async () => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+
+    await ks.createVaultFromNewMnemonic(PASSWORD);
+    await ks.addVaultFreshV4("Wallet 2");
+    await ks.addVaultFreshV4("Wallet 3");
+
+    const c = container();
+    // Deterministic ordering for the successor-election tests: once A (active)
+    // is gone, B is the oldest survivor.
+    c.vaults[0]!.createdAt = 3_000;
+    c.vaults[1]!.createdAt = 1_000;
+    c.vaults[2]!.createdAt = 2_000;
+    c.activeVaultId = c.vaults[0]!.id;
+    writeContainer(c);
+
+    idA = c.vaults[0]!.id;
+    idB = c.vaults[1]!.id;
+    idC = c.vaults[2]!.id;
+    snapshot = JSON.stringify(storage[KEY]);
+
+    // Make in-memory state coherent with the container: addVaultFreshV4 leaves
+    // the newest vault's backend held even though activeVaultId is unchanged.
+    await ks.selectActiveVaultV4(idA);
+  }, 120_000);
+
+  beforeEach(async () => {
+    storage[KEY] = JSON.parse(snapshot);
+    // A previous test may have locked or switched the active vault. Re-unlock
+    // only when actually locked, so the common path costs no derivation.
+    if (!ks.isUnlockedV4()) await ks.unlockContainerV4(PASSWORD);
+    await ks.selectActiveVaultV4(idA);
+  }, 60_000);
+
+  it(
+    "removes exactly the target vault and leaves every survivor byte-identical",
+    async () => {
+      const survivorsBefore = container().vaults.filter((v) => v.id !== idC);
+
+      await ks.removeVaultV4(PASSWORD, idC);
+
+      const after = container();
+      expect(after.vaults.map((v) => v.id)).toEqual([idA, idB]);
+      // Ciphertext, label, address, timestamps — nothing about the survivors
+      // may shift when a neighbour is removed.
+      expect(after.vaults).toEqual(survivorsBefore);
+    },
+    60_000,
+  );
+
+  it(
+    "reports the removed id and leaves the active id alone for a non-active vault",
+    async () => {
+      const r = await ks.removeVaultV4(PASSWORD, idC);
+      expect(r.removedId).toBe(idC);
+      expect(r.newActiveVaultId).toBe(idA);
+      expect(container().activeVaultId).toBe(idA);
+    },
+    60_000,
+  );
+
+  it(
+    "removes nothing when the password is wrong",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+
+      await expect(ks.removeVaultV4("not-the-password", idC)).rejects.toThrow();
+
+      // Byte-identical: a failed attempt must not rewrite the container at all.
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+      expect(container().vaults).toHaveLength(3);
+    },
+    60_000,
+  );
+
+  it(
+    "removes nothing when the vault id is unknown",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      await expect(
+        ks.removeVaultV4(PASSWORD, "00000000-0000-0000-0000-000000000000"),
+      ).rejects.toThrow(/unknown vault id/);
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+    },
+    60_000,
+  );
+
+  it(
+    "removes nothing when the vault id is malformed",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      await expect(ks.removeVaultV4(PASSWORD, "")).rejects.toThrow(
+        /unknown vault id/,
+      );
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+    },
+    60_000,
+  );
+
+  it(
+    "refuses to remove the last remaining vault, with a distinct catchable error",
+    async () => {
+      const c = container();
+      c.vaults = [c.vaults[0]!];
+      c.activeVaultId = c.vaults[0]!.id;
+      writeContainer(c);
+      const before = JSON.stringify(storage[KEY]);
+
+      // Distinct from "wrong password" and from "unknown vault id" so the UI
+      // can route the user to Reset wallet instead of blaming their typing.
+      await expect(ks.removeVaultV4(PASSWORD, idA)).rejects.toThrow(
+        /cannot remove the last vault/,
+      );
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+    },
+    60_000,
+  );
+
+  it(
+    "elects the survivor with the lowest createdAt when the active vault is removed",
+    async () => {
+      // A is active (createdAt 3000); survivors are B (1000) and C (2000).
+      const r = await ks.removeVaultV4(PASSWORD, idA);
+      expect(r.newActiveVaultId).toBe(idB);
+      expect(container().activeVaultId).toBe(idB);
+      expect(r.newActiveAddress).toMatch(/^0x[0-9a-f]{40}$/);
+    },
+    60_000,
+  );
+
+  it(
+    "breaks a createdAt tie by container order, taking the earlier record",
+    async () => {
+      const c = container();
+      // B and C both at 1000; B sits first in the array.
+      c.vaults[2]!.createdAt = 1_000;
+      writeContainer(c);
+
+      const r = await ks.removeVaultV4(PASSWORD, idA);
+      expect(r.newActiveVaultId).toBe(idB);
+    },
+    60_000,
+  );
+
+  it(
+    "disposes the outgoing backend so the removed vault's secret is zeroized",
+    async () => {
+      const outgoing = ks.getUnlockedBackendV4();
+      expect(outgoing).not.toBeNull();
+      const disposeSpy = vi.spyOn(outgoing!, "dispose");
+
+      await ks.removeVaultV4(PASSWORD, idA);
+
+      expect(disposeSpy).toHaveBeenCalled();
+      // And the held backend is genuinely the successor's, not the dead one.
+      expect(ks.getUnlockedBackendV4()).not.toBe(outgoing);
+    },
+    60_000,
+  );
+
+  it(
+    "leaves the container intact and usable when the persist fails",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      const held = ks.getUnlockedBackendV4();
+      const realSet = chrome.storage.local.set;
+      (chrome.storage.local as unknown as { set: unknown }).set = () => {
+        throw new Error("disk full");
+      };
+
+      try {
+        await expect(ks.removeVaultV4(PASSWORD, idC)).rejects.toThrow(
+          /disk full/,
+        );
+      } finally {
+        (chrome.storage.local as unknown as { set: unknown }).set = realSet;
+      }
+
+      // A half-applied removal must be impossible: the on-disk container is
+      // untouched AND the in-memory session still holds the same live backend.
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+      expect(container().vaults).toHaveLength(3);
+      expect(ks.getUnlockedBackendV4()).toBe(held);
+      expect(ks.isUnlockedV4()).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
+    "names the multisig wallets that listed the removed vault as a signer",
+    async () => {
+      const c = container();
+      const target = c.vaults.find((v) => v.id === idC)!;
+      c.vaults[1]!.kind = "multisig";
+      c.vaults[1]!.label = "Treasury";
+      c.vaults[1]!.multisig = {
+        signers: [
+          {
+            id: "s1",
+            label: "C",
+            address: target.addr,
+            pubkey: "0x00",
+            role: "self",
+            vaultId: idC,
+          },
+        ],
+        threshold: 1,
+        proposals: [],
+        governance: [],
+      };
+      writeContainer(c);
+
+      const r = await ks.removeVaultV4(PASSWORD, idC);
+      expect(r.affectedMultisigLabels).toEqual(["Treasury"]);
+    },
+    60_000,
+  );
+
+  it(
+    "returns an empty affected-multisig list when nothing referenced the vault",
+    async () => {
+      const r = await ks.removeVaultV4(PASSWORD, idC);
+      expect(r.affectedMultisigLabels).toEqual([]);
+    },
+    60_000,
+  );
+
+  // LAST: this test clears the cached MEK. beforeEach re-unlocks when needed,
+  // but keeping it last means no other test pays for that extra derivation.
+  it(
+    "removes nothing when the container is locked",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      ks.lockV4();
+      expect(ks.isUnlockedV4()).toBe(false);
+
+      await expect(ks.removeVaultV4(PASSWORD, idC)).rejects.toThrow(
+        /container is locked/,
+      );
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+    },
+    60_000,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// exportMnemonicForVaultV4 — per-vault recovery-phrase export.
+//
+// Same argon2 discipline as the removeVaultV4 block above: one container built
+// in beforeAll, module instance kept warm, snapshot restored per test.
+// ---------------------------------------------------------------------------
+describe("exportMnemonicForVaultV4 — per-vault recovery-phrase export", () => {
+  const PASSWORD = "correct-horse-battery-staple";
+  type Ks = typeof import("./keystore-mldsa.js");
+
+  interface TestVault {
+    id: string;
+    label: string;
+    addr: string;
+    envelope: unknown;
+    wrappedKey: unknown;
+  }
+  interface TestContainer {
+    vaults: TestVault[];
+    activeVaultId: string;
+  }
+
+  let storage: StorageMap;
+  let ks: Ks;
+  let KEY: string;
+  let snapshot: string;
+  let idActive: string;
+  let idOther: string;
+  let mnemonicActive: string;
+  let mnemonicOther: string;
+
+  const container = (): TestContainer =>
+    JSON.parse(JSON.stringify(storage[KEY])) as TestContainer;
+
+  beforeAll(async () => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+
+    const first = await ks.createVaultFromNewMnemonic(PASSWORD);
+    mnemonicActive = first.mnemonic;
+    const second = await ks.addVaultFreshV4("Wallet 2");
+    mnemonicOther = second.mnemonic;
+
+    const c = container();
+    idActive = c.vaults[0]!.id;
+    idOther = c.vaults[1]!.id;
+    // addVaultFreshV4 does not change activeVaultId, but it does leave the new
+    // vault's backend held; resync so "active" means the same thing on disk and
+    // in memory.
+    await ks.selectActiveVaultV4(idActive);
+    snapshot = JSON.stringify(storage[KEY]);
+  }, 120_000);
+
+  beforeEach(() => {
+    storage[KEY] = JSON.parse(snapshot);
+  });
+
+  it(
+    "returns the NON-active vault's own phrase, not the active one's",
+    async () => {
+      const r = await ks.exportMnemonicForVaultV4(PASSWORD, idOther);
+      expect(r.mnemonic).toBe(mnemonicOther);
+      expect(r.mnemonic).not.toBe(mnemonicActive);
+      expect(r.mnemonic.split(/\s+/)).toHaveLength(24);
+    },
+    60_000,
+  );
+
+  it(
+    "agrees with exportMnemonicV4 for the active vault",
+    async () => {
+      const viaId = await ks.exportMnemonicForVaultV4(PASSWORD, idActive);
+      const viaActive = await ks.exportMnemonicV4(PASSWORD);
+      expect(viaId.mnemonic).toBe(mnemonicActive);
+      expect(viaActive.mnemonic).toBe(viaId.mnemonic);
+    },
+    60_000,
+  );
+
+  it(
+    "fails with no mnemonic when the password is wrong",
+    async () => {
+      await expect(
+        ks.exportMnemonicForVaultV4("not-the-password", idOther),
+      ).rejects.toThrow();
+    },
+    60_000,
+  );
+
+  it(
+    "rejects an unknown vault id before deriving anything",
+    async () => {
+      await expect(
+        ks.exportMnemonicForVaultV4(PASSWORD, "no-such-vault"),
+      ).rejects.toThrow(/unknown vault id/);
+    },
+    60_000,
+  );
+
+  it("binds every envelope to its own vaultId at the AEAD tag", async () => {
+    // The load-bearing property for per-wallet reveal: a ciphertext cannot be
+    // opened under a different vault's id. Exercised at the primitive level so
+    // it costs no derivation.
+    const { generateVekV4, sealVaultEnvelopeV4, openVaultEnvelopeV4 } =
+      ks.__internalV4Multi;
+    const vek = generateVekV4();
+    const seed = new Uint8Array(32).fill(9);
+    const sealed = sealVaultEnvelopeV4(vek, seed, "phrase for vault A", "vault-A");
+
+    // Same id round-trips.
+    expect(openVaultEnvelopeV4(vek, sealed, "vault-A").mnemonic).toBe(
+      "phrase for vault A",
+    );
+    // A different id fails the tag rather than yielding the phrase.
+    expect(() => openVaultEnvelopeV4(vek, sealed, "vault-B")).toThrow();
+  });
+
+  it(
+    "refuses a lifted envelope rather than surfacing a neighbour's phrase",
+    async () => {
+      // End-to-end version of the same property: tamper the container so the
+      // OTHER vault's record carries the ACTIVE vault's envelope. If the AAD
+      // binding were absent this would hand back the active vault's phrase
+      // under the other vault's id.
+      const c = container();
+      const activeRec = c.vaults.find((v) => v.id === idActive)!;
+      const otherRec = c.vaults.find((v) => v.id === idOther)!;
+      otherRec.envelope = activeRec.envelope;
+      storage[KEY] = JSON.parse(JSON.stringify(c));
+
+      await expect(
+        ks.exportMnemonicForVaultV4(PASSWORD, idOther),
+      ).rejects.toThrow();
+    },
+    60_000,
+  );
+
+  it(
+    "writes nothing and logs nothing while exporting",
+    async () => {
+      const before = JSON.stringify(storage[KEY]);
+      const spies = (["log", "warn", "error", "debug", "info"] as const).map(
+        (m) => vi.spyOn(console, m).mockImplementation(() => {}),
+      );
+
+      let mnemonic: string;
+      try {
+        mnemonic = (await ks.exportMnemonicForVaultV4(PASSWORD, idOther))
+          .mnemonic;
+        const logged = spies
+          .flatMap((s) => s.mock.calls)
+          .flat()
+          .map((a) => String(a))
+          .join(" ");
+        // Not just "the phrase is absent" — no word of it may appear.
+        expect(logged).not.toContain(mnemonic);
+        for (const word of mnemonic.split(/\s+/)) {
+          expect(logged).not.toContain(word);
+        }
+      } finally {
+        for (const s of spies) s.mockRestore();
+      }
+
+      // A read must not mutate the container, and must not stash the phrase
+      // anywhere in storage.
+      expect(JSON.stringify(storage[KEY])).toBe(before);
+      expect(JSON.stringify(storage)).not.toContain(mnemonic);
+    },
+    60_000,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// DA-002 — a container write that fails must not report success.
+//
+// `chrome.storage.local.set` signals failure by setting `chrome.runtime.lastError`
+// INSIDE the callback; it neither throws nor rejects. Swallowing that made every
+// "did the write land" guarantee above it vacuous — a failed wallet removal or
+// wallet creation was reported to the user as success.
+// ---------------------------------------------------------------------------
+
+/** A container that satisfies `isVaultsContainerV4` without any crypto, so these
+ *  tests cost zero Argon2id derivations. */
+function fixtureContainer(vaults: Array<{ id: string; label: string }>) {
+  return {
+    version: 5,
+    algo: "ml-dsa-65",
+    kdf: "argon2id",
+    aead: "xchacha20-poly1305",
+    masterKdf: { kdf: "argon2id", m: 65536, t: 3, p: 1, salt: "c2FsdA==" },
+    vaults: vaults.map((v) => ({ ...v, createdAt: 1_000, addr: "0x" + "11".repeat(20) })),
+    activeVaultId: vaults[0]?.id ?? "",
+  };
+}
+
+/** Chrome stub whose `set` can be made to fail the way the real API does. */
+function installFailableChromeStub(): {
+  storage: StorageMap;
+  failNextSet: (message: string | null) => void;
+} {
+  const storage: StorageMap = {};
+  let setFailure: string | null = null;
+  const runtime: { lastError?: { message: string } } = {};
+  (globalThis as { chrome?: unknown }).chrome = {
+    runtime,
+    storage: {
+      local: {
+        // Real `chrome.storage.local` structured-clones across the boundary, so
+        // a reader NEVER shares an object reference with the store. Cloning here
+        // is not politeness — without it an in-memory mutation would write
+        // through to "disk" with no `set` at all, which would make a failed-write
+        // assertion pass for the wrong reason and make an interleaving test
+        // prove nothing.
+        get: (keys: string[], cb: (res: Record<string, unknown>) => void) => {
+          const out: Record<string, unknown> = {};
+          for (const k of keys) {
+            if (k in storage) out[k] = JSON.parse(JSON.stringify(storage[k]));
+          }
+          queueMicrotask(() => cb(out));
+        },
+        set: (entries: Record<string, unknown>, cb: () => void) => {
+          if (setFailure !== null) {
+            const msg = setFailure;
+            queueMicrotask(() => {
+              runtime.lastError = { message: msg };
+              cb();
+              delete runtime.lastError;
+            });
+            return;
+          }
+          for (const [k, v] of Object.entries(entries)) {
+            storage[k] = JSON.parse(JSON.stringify(v));
+          }
+          queueMicrotask(() => cb());
+        },
+        remove: (keys: string[] | string, cb?: () => void) => {
+          const arr = Array.isArray(keys) ? keys : [keys];
+          for (const k of arr) delete storage[k];
+          if (cb) queueMicrotask(() => cb());
+        },
+      },
+    },
+  };
+  return {
+    storage,
+    failNextSet: (message: string | null) => {
+      setFailure = message;
+    },
+  };
+}
+
+describe("container write failure (DA-002)", () => {
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+  let failNextSet: (m: string | null) => void;
+  let KEY: string;
+
+  beforeEach(async () => {
+    ({ storage, failNextSet } = installFailableChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    storage[KEY] = fixtureContainer([
+      { id: "v-1", label: "Wallet 1" },
+      { id: "v-2", label: "Wallet 2" },
+    ]);
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("rejects when chrome.runtime.lastError is set on the write", async () => {
+    failNextSet("QUOTA_BYTES quota exceeded");
+    await expect(
+      ks.__internalV4Multi.saveVaultsContainerV4(
+        fixtureContainer([{ id: "v-1", label: "Wallet 1" }]) as never,
+      ),
+    ).rejects.toThrow(/QUOTA_BYTES quota exceeded/);
+  });
+
+  it("still resolves when the write succeeds", async () => {
+    await expect(
+      ks.__internalV4Multi.saveVaultsContainerV4(
+        fixtureContainer([{ id: "v-1", label: "Renamed" }]) as never,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("a caller does NOT report success when the write failed", async () => {
+    failNextSet("I/O error");
+    await expect(ks.renameVaultV4("v-1", "New Label")).rejects.toThrow(
+      /I\/O error/,
+    );
+    // And the on-disk container is unchanged — the failed write persisted nothing.
+    const onDisk = storage[KEY] as { vaults: Array<{ label: string }> };
+    expect(onDisk.vaults[0]!.label).toBe("Wallet 1");
+  });
+});
+
+describe("container write failure leaves the session intact (DA-002)", () => {
+  // Costs ONE real Argon2id derivation, shared across the block via beforeAll.
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+  let failNextSet: (m: string | null) => void;
+  let KEY: string;
+  let addrBefore: string | null;
+
+  beforeAll(async () => {
+    ({ storage, failNextSet } = installFailableChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    await ks.createVaultFromNewMnemonic("correct horse battery staple 42");
+    addrBefore = ks.getUnlockedAddressV4();
+  }, 60_000);
+
+  afterAll(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("a failed vault-add leaves the wallet unlocked on the SAME address", async () => {
+    const before = JSON.stringify(storage[KEY]);
+    failNextSet("QUOTA_BYTES quota exceeded");
+    await expect(ks.addVaultFreshV4("Wallet 2")).rejects.toThrow(
+      /QUOTA_BYTES/,
+    );
+    failNextSet(null);
+    // The session did not move to the half-created vault...
+    expect(ks.isUnlockedV4()).toBe(true);
+    expect(ks.getUnlockedAddressV4()).toBe(addrBefore);
+    // ...and nothing was persisted.
+    expect(JSON.stringify(storage[KEY])).toBe(before);
+  });
+
+  it("a failed vault-select leaves the previously active vault active", async () => {
+    await ks.addVaultFreshV4("Wallet 2");
+    const activeBefore = ks.getUnlockedAddressV4();
+    const vaults = await ks.listVaultsV4();
+    const other = vaults!.find((v) => !v.isActive)!;
+    failNextSet("I/O error");
+    await expect(ks.selectActiveVaultV4(other.id)).rejects.toThrow(/I\/O error/);
+    failNextSet(null);
+    expect(ks.getUnlockedAddressV4()).toBe(activeBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H1 — two concurrent container read-modify-writes must BOTH land.
+//
+// The container is one storage blob and every mutator does load → mutate →
+// write-the-whole-blob. Without serialisation two writers both read the same
+// prior value and the second clobbers the first. When both writers are
+// APPENDING a vault, what is clobbered is a vault record — its wrapped VEK and
+// its sealed seed envelope — while its address stays funded on-chain. That is
+// the fund-loss pair from the plan, and it is what this block pins.
+//
+// Modelled on storage-lock.test.ts's "two concurrent writers both land".
+// ---------------------------------------------------------------------------
+
+/** Chrome stub that can hold the NEXT `get` open until released, so an
+ *  interleaving is deterministic rather than timing-dependent. */
+function installGatedChromeStub(): {
+  storage: StorageMap;
+  gateNextGet: () => { release: () => void };
+} {
+  const storage: StorageMap = {};
+  let gate: Promise<void> | null = null;
+  (globalThis as { chrome?: unknown }).chrome = {
+    runtime: {},
+    storage: {
+      local: {
+        get: (keys: string[], cb: (res: Record<string, unknown>) => void) => {
+          const held = gate;
+          gate = null;
+          // Snapshot NOW, deliver later. The real API services the read when it
+          // is issued and hands that value to the callback even if a `set`
+          // lands in between — which is exactly the stale-snapshot condition
+          // under test. Re-reading at delivery time would hand the suspended
+          // caller fresh data and the race would silently disappear.
+          const out: Record<string, unknown> = {};
+          for (const k of keys) {
+            if (k in storage) out[k] = JSON.parse(JSON.stringify(storage[k]));
+          }
+          const deliver = () => cb(out);
+          if (held) void held.then(deliver);
+          else queueMicrotask(deliver);
+        },
+        set: (entries: Record<string, unknown>, cb: () => void) => {
+          for (const [k, v] of Object.entries(entries)) {
+            storage[k] = JSON.parse(JSON.stringify(v));
+          }
+          queueMicrotask(() => cb());
+        },
+        remove: (keys: string[] | string, cb?: () => void) => {
+          const arr = Array.isArray(keys) ? keys : [keys];
+          for (const k of arr) delete storage[k];
+          if (cb) queueMicrotask(() => cb());
+        },
+      },
+    },
+  };
+  return {
+    storage,
+    gateNextGet: () => {
+      let release!: () => void;
+      gate = new Promise<void>((r) => {
+        release = r;
+      });
+      return { release };
+    },
+  };
+}
+
+describe("concurrent container writers both land (H1)", () => {
+  // ONE real Argon2id derivation for the whole block: both writers under test
+  // use the cached MEK, so the race itself costs no derivations.
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+  let gateNextGet: () => { release: () => void };
+  let KEY: string;
+
+  beforeAll(async () => {
+    ({ storage, gateNextGet } = installGatedChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+    KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    await ks.createVaultFromNewMnemonic("correct horse battery staple 42");
+  }, 60_000);
+
+  afterAll(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("two interleaved vault-adds both survive — neither record is clobbered", async () => {
+    const startCount = (storage[KEY] as { vaults: unknown[] }).vaults.length;
+
+    // Hold the FIRST add's container read open, then start the second and give
+    // it a full macrotask turn to get as far as it can while the first is
+    // suspended.
+    //
+    // Deliberately NOT `await second` before releasing: once the writers are
+    // serialised the second CANNOT complete while the first holds the lock, so
+    // awaiting it first would deadlock the test rather than assert anything.
+    // Unserialised, the second runs start-to-finish in that turn and its write
+    // lands before the first resumes — which is precisely the losing
+    // interleaving this test must reproduce.
+    const gate = gateNextGet();
+    const first = ks.addVaultFreshV4("Concurrent A");
+    const second = ks.addVaultFreshV4("Concurrent B");
+    await new Promise((r) => setTimeout(r, 0));
+    gate.release();
+    await Promise.all([first, second]);
+
+    const labels = (storage[KEY] as { vaults: Array<{ label: string }> }).vaults.map(
+      (v) => v.label,
+    );
+    expect(labels).toContain("Concurrent B");
+    expect(labels).toContain("Concurrent A");
+    expect(labels.length).toBe(startCount + 2);
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// D1 — password verification must report WHY it failed.
+//
+// A bare boolean folded three different outcomes into one `false`: "there is no
+// container", "the container has no active vault", and a genuine AEAD failure.
+// Callers charge a brute-force attempt on `false`, so the two structural cases
+// burned the user's attempts for conditions that never evaluated the password.
+// Costs no Argon2id: both structural cases return before the derivation.
+// ---------------------------------------------------------------------------
+describe("verifyContainerPasswordV4 reports why it failed (D1)", () => {
+  let ks: typeof import("./keystore-mldsa.js");
+  let storage: StorageMap;
+
+  beforeEach(async () => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+    ks = await import("./keystore-mldsa.js");
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("reports a MISSING CONTAINER as structural, not as a wrong password", async () => {
+    const r = await ks.verifyContainerPasswordV4("any-password-at-all");
+    expect(r.verified).toBe(false);
+    expect(r.verified === false && r.structural).toBe(true);
+  });
+
+  it("reports a container with a DANGLING activeVaultId as structural", async () => {
+    const KEY = ks.__internalV4Multi.VAULTS_CONTAINER_KEY_V4;
+    storage[KEY] = {
+      version: 5,
+      algo: "ml-dsa-65",
+      kdf: "argon2id",
+      aead: "xchacha20-poly1305",
+      masterKdf: { kdf: "argon2id", m: 65536, t: 3, p: 1, salt: "c2FsdA==" },
+      vaults: [],
+      activeVaultId: "does-not-exist",
+    };
+    const r = await ks.verifyContainerPasswordV4("any-password-at-all");
+    expect(r.verified).toBe(false);
+    expect(r.verified === false && r.structural).toBe(true);
+  });
 });

@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../Icon";
 import { MnemonicGrid } from "../components/MnemonicGrid";
 import { WalletLockLogo } from "../components/WalletLockLogo";
-import { bgKeystoreExportSeed } from "../bg";
+import { bgKeystoreExportSeed, bgVaultExportSeed } from "../bg";
 import {
   clearClipboardNow,
   copyWithAutoClear,
@@ -11,17 +11,49 @@ import {
 } from "../../lib/clipboard-with-clear";
 
 interface RevealPhraseProps {
-  /** Returns to Settings. Called on Cancel, on auto-hide expiry, and after
-   *  the user closes the reveal screen. */
+  /** Returns to wherever the caller came from. Called on Cancel, on auto-hide
+   *  expiry, and after the user closes the reveal screen. */
   onBack: () => void;
+  /** Reveal THIS vault's phrase instead of the active one. Omit for the
+   *  Settings entry, which is fixed to the active wallet.
+   *
+   *  A trusted selector, NOT a check — a valid id shows that wallet's 24 words,
+   *  and the keystore does not second-guess it (see `exportMnemonicForVaultV4`).
+   *  So the caller owns the id's provenance: App clears `revealTarget` on every
+   *  exit from this screen — `revealTargetSurvives` — so a lock, a navigation
+   *  or an auto-hide cannot leave a stale id for the next entry to inherit. */
+  vaultId?: string;
+  /** Rendered in the header whenever `vaultId` is set. Not cosmetic: the user
+   *  has just picked from a list of N wallets, and an unattributed phrase on
+   *  screen is a real mis-transcription hazard. */
+  vaultLabel?: string;
 }
 
-type Step = "reauth" | "warning" | "reveal";
+export type Step = "reauth" | "warning" | "reveal";
 
 const AUTO_HIDE_SECONDS = 30;
 const CLIPBOARD_CLEAR_MS = 30_000;
 
-export function RevealPhrase({ onBack }: RevealPhraseProps) {
+/** Whether the 30 s auto-hide countdown should be running.
+ *
+ *  The condition is "the phrase is on screen" — the reveal step, holding a
+ *  decrypted mnemonic — and deliberately NOT "the user tapped to unblur".
+ *  Arming on the tap left the chip advertising `Hides in 30s` while no timer
+ *  ran, and let a decrypted phrase sit in component state for as long as the
+ *  screen stayed open. Note the absence of a tap/`revealed` parameter: the
+ *  blur is a shoulder-surfing control, not a lifetime control, so it must not
+ *  be able to gate the countdown.
+ *
+ *  Exported for the test — this file cannot be exercised through a DOM. */
+export function autoHideArmed(step: Step, mnemonic: string | null): boolean {
+  return step === "reveal" && mnemonic !== null;
+}
+
+export function RevealPhrase({
+  onBack,
+  vaultId,
+  vaultLabel,
+}: RevealPhraseProps) {
   const [step, setStep] = useState<Step>("reauth");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -29,14 +61,13 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
   const [submitting, setSubmitting] = useState(false);
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [autoHideRemaining, setAutoHideRemaining] = useState(AUTO_HIDE_SECONDS);
-  const [autoHideStarted, setAutoHideStarted] = useState(false);
   const [copied, setCopied] = useState(false);
   const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
     "idle",
   );
   // Tap-to-reveal toggle. `revealed` flips on click anywhere on the
-  // grid/overlay click target; first transition to `true` arms the
-  // sticky `autoHideStarted` flag below.
+  // grid/overlay click target. Purely a shoulder-surfing blur — it does not
+  // affect the auto-hide countdown in either direction.
   const [revealed, setRevealed] = useState(false);
 
   // Lockout countdown — mirrors UnlockScreen.
@@ -55,59 +86,83 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     return () => clearInterval(t);
   }, [secondsRemaining]);
 
-  // Auto-hide countdown — starts on the FIRST successful hold-to-reveal
-  // (autoHideStarted flag, set inside startHold) and ticks continuously
-  // regardless of subsequent press/release cycles. Expiry routes back to
-  // Settings via onBack.
+  // `onBack` is constructed inline by the parent, so it is a NEW function on
+  // every App render. Held in a ref, and read through the ref at expiry, so the
+  // countdown effect below can depend only on the two values that actually arm
+  // it. Updated on every render, so the interval always calls the current
+  // `onBack` — no stale closure.
+  //
+  // Why it matters: with `onBack` in the dependency list, every App render tore
+  // the interval down and built a new one. The DISPLAYED count did not restart
+  // (it lives in state), but each rebuild restarted the 1000 ms window — so a
+  // sustained sub-second render cadence meant the tick never fired and the
+  // countdown STALLED, leaving a decrypted phrase in state past its bound.
+  const onBackRef = useRef(onBack);
   useEffect(() => {
-    if (!autoHideStarted) return;
+    onBackRef.current = onBack;
+  });
+
+  // Auto-hide countdown — runs whenever `autoHideArmed` holds, i.e. from the
+  // moment the reveal step renders with a decrypted phrase. It is reset to
+  // AUTO_HIDE_SECONDS once, on the warning step's "Reveal phrase" button, and
+  // nothing else resets it: tap-to-reveal and tap-to-hide do not touch it, and
+  // neither does copying. Expiry routes back via onBack, which unmounts this
+  // screen and drops the mnemonic with it.
+  //
+  // Created ONCE per reveal: the deps are the arming conditions themselves, so
+  // the interval lives from the moment the phrase is on screen until the step
+  // or the phrase changes — not until the next render.
+  useEffect(() => {
+    if (!autoHideArmed(step, mnemonic)) return;
     const t = setInterval(() => {
       setAutoHideRemaining((s) => {
         const next = s - 1;
         if (next <= 0) {
           // Defer the parent nav so we don't setState mid-render.
-          setTimeout(() => onBack(), 0);
+          setTimeout(() => onBackRef.current(), 0);
           return 0;
         }
         return next;
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [autoHideStarted, onBack]);
+  }, [step, mnemonic]);
 
-  // Cleanup on unmount: drop the mnemonic from React state and FLUSH the
-  // shared clipboard auto-clear (best-effort wipe NOW). This screen
-  // auto-hides after 30 s — which unmounts it — so a self-managed timer
-  // would have been cancelled and left the copied phrase on the OS
-  // clipboard; the flush wipes it on the way out instead. The mnemonic
-  // string itself can't be deterministically zeroed in JS, but releasing
-  // the reference is what we can do.
+  // Unmount cleanup, and it is LOAD-BEARING — do not remove this effect. The
+  // clipboard FLUSH is why: this screen auto-hides after 30 s, which unmounts
+  // it, so the shared auto-clear timer would otherwise be torn down with the
+  // phrase still on the OS clipboard. The flush wipes it on the way out.
+  //
+  // A `setMnemonic(null)` used to sit beside it and did nothing — a state update
+  // dispatched from an unmount cleanup is discarded, the unmount itself releases
+  // the reference, and JS cannot deterministically zero the string in any case.
+  // It was removed; the flush was not. What bounds how long the phrase stays
+  // decrypted is the auto-hide countdown above (`autoHideArmed`), which unmounts
+  // this screen.
   useEffect(() => {
     return () => {
-      setMnemonic(null);
       void flushClipboardAutoClear();
     };
   }, []);
 
-  // Tap-to-reveal toggle. The first transition to revealed=true arms
-  // the sticky 30s auto-hide (subsequent reveal/hide cycles don't reset
-  // it — same semantics as the previous hold-to-reveal implementation).
-  const toggleReveal = () => {
-    setRevealed((r) => {
-      if (!r) setAutoHideStarted(true);
-      return !r;
-    });
-  };
+  // Tap-to-reveal toggle — unblurs the grid and nothing else. It no longer
+  // arms the auto-hide: the countdown is already running by the time this can
+  // be tapped (see `autoHideArmed`), so blurring the words cannot extend how
+  // long they stay decrypted.
+  const toggleReveal = () => setRevealed((r) => !r);
 
   const handleAuthSubmit = async () => {
     if (submitting || secondsRemaining > 0) return;
     setSubmitting(true);
     setError(null);
     try {
-      const r = await bgKeystoreExportSeed(password);
+      // Same shape either way; only the targeting differs. Both share the
+      // brute-force lockout counters at the service worker.
+      const r = vaultId
+        ? await bgVaultExportSeed(password, vaultId)
+        : await bgKeystoreExportSeed(password);
       if (r.ok) {
         setMnemonic(r.mnemonic);
-        setPassword("");
         setStep("warning");
         return;
       }
@@ -129,6 +184,13 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     } catch (e) {
       setError((e as Error).message ?? "Could not reveal phrase.");
     } finally {
+      // Cleared on EVERY exit — success, wrong password, rate limit, and a
+      // thrown transport error alike. Previously this ran only in the success
+      // branch, so a failed attempt left the plaintext resident in component
+      // state for as long as the screen stayed open. Same discipline as
+      // PasswordGate and the wallet-removal flow: a submit that does not
+      // return must not be the reason a password survives.
+      setPassword("");
       setSubmitting(false);
     }
   };
@@ -366,10 +428,25 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
           <Icon name="back" size={15} />
         </button>
-        <div
-          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
-        >
-          Recovery phrase
+        <div style={{ flex: 1, textAlign: "center", minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Recovery phrase</div>
+          {/* Which wallet this belongs to. Only shown when a specific vault was
+             targeted; the Settings entry is always the active wallet. */}
+          {vaultLabel && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-400)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={vaultLabel}
+            >
+              {vaultLabel}
+            </div>
+          )}
         </div>
         <div style={{ width: 36 }} />
       </div>

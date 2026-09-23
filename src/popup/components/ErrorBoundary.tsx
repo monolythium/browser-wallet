@@ -174,8 +174,8 @@ const cardStyle: CSSProperties = {
   margin: 16,
   padding: 16,
   borderRadius: 12,
-  background: "rgba(220,80,80,0.06)",
-  border: "1px solid rgba(220,80,80,0.4)",
+  background: "rgba(var(--err-glow), 0.06)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
 };
 
 const primaryBtn: CSSProperties = {

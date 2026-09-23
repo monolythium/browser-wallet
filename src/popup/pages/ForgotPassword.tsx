@@ -75,6 +75,13 @@ export function ForgotPassword({
 
       <div style={{ padding: "32px 22px 8px", textAlign: "center" }}>
         <WalletLockLogo badge="key" />
+        {/* `--fs-15` is UNDEFINED and always has been — it was never in the type
+            scale, so unlike its siblings there is nothing to restore. The
+            declaration is therefore invalid and dropped, and this <h2> takes the
+            UA default (1.5em ≈ 24px) rather than any chosen size. Left as-is on
+            purpose: the sibling heading on UnlockScreen is 18px and the scale's
+            neighbours are 15px and 16px, so choosing between them is a design
+            call to make with the screen in front of you, not a repair. */}
         <h2
           style={{
             margin: 0,

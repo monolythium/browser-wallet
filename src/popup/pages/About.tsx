@@ -8,6 +8,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon, type IconName } from "../Icon";
 import { Section } from "./OperatorDirectory";
+import { DevBadge } from "../components/DevBadge";
 import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
 import { useFeature } from "../hooks/useFeature";
 import {
@@ -56,6 +57,8 @@ import {
   type OperatorRiskBadge,
 } from "../../shared/operator-risk";
 import { CHAIN_RETURNS_LEGACY_WEI } from "../../shared/chain-units";
+import { displayableRegion } from "../../shared/operators";
+import { operatorDisplayName } from "../../shared/operator-display";
 
 interface AboutProps {
   onBack: () => void;
@@ -369,7 +372,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               },
               ...(devMode
                 ? [{
-                k: "SDK",
+                k: (
+                  <>
+                    SDK
+                    <DevBadge />
+                  </>
+                ),
                 v: (() => {
                   const installed = `v${SDK_PACKAGE_VERSION}`;
                   if (latestSdk === null) {
@@ -667,7 +675,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 activeBackup.chainRegistrationTxHash !== undefined
                   ? [
                       {
-                        k: "Tx",
+                        k: (
+                          <>
+                            Tx
+                            <DevBadge />
+                          </>
+                        ),
                         v: `${activeBackup.chainRegistrationTxHash.slice(0, 10)}…${activeBackup.chainRegistrationTxHash.slice(-8)}`,
                       },
                     ]
@@ -677,7 +690,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 activeBackup.chainRegistrationBlock !== undefined
                   ? [
                       {
-                        k: "Block",
+                        k: (
+                          <>
+                            Block
+                            <DevBadge />
+                          </>
+                        ),
                         v: activeBackup.chainRegistrationBlock.toString(),
                       },
                     ]
@@ -759,7 +777,10 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
         {/* Chain card */}
         <div className="ext-card">
           <div className="ext-card__head">
+            {/* Marker rides the SAME `devMode` const the body below is gated
+                on, so it can never render while the body is hidden. */}
             <h3>Monolythium Testnet</h3>
+            {devMode && <DevBadge />}
           </div>
           {/* All chain-identity rows are developer-only — the network name
               (card title) is the only user-relevant signal here. */}
@@ -859,6 +880,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <div className="ext-card">
             <div className="ext-card__head">
               <h3>Runtime</h3>
+              <DevBadge />
               <div className="spacer" />
               <span
                 style={{
@@ -971,6 +993,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                     marginTop: 4,
                   }}
                 >
+                  <DevBadge />
                   {probeError}
                 </div>
               )}
@@ -1139,7 +1162,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface KvRow {
-  k: string;
+  k: ReactNode;
   v: ReactNode;
   title?: string;
 }
@@ -1153,9 +1176,12 @@ function KvList({ rows }: { rows: ReadonlyArray<KvRow> }) {
         gap: 6,
       }}
     >
-      {rows.map((row) => (
+      {/* Positional key: `k` is ReactNode and can no longer key a list. Safe
+          here because every conditional row is appended last, so a fixed row's
+          index never shifts, and no row holds focus or input state. */}
+      {rows.map((row, i) => (
         <div
-          key={row.k}
+          key={i}
           style={{
             display: "flex",
             alignItems: "center",
@@ -1195,6 +1221,8 @@ function Mono({ children }: { children: ReactNode }) {
 
 function OperatorRow({ row }: { row: OperatorHealthRow }) {
   const devMode = useFeature("DEVELOPER_MODE");
+  // Absent/placeholder region → the tag is omitted entirely, not blanked.
+  const region = displayableRegion(row.region);
   const ok = row.ok;
   const trusted = row.trustedGenesis;
   // Untrusted (forked) operators are RPC-skipped regardless of liveness,
@@ -1227,7 +1255,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
         borderRadius: 8,
         background: "rgba(255,255,255,0.03)",
         border: dangerBorder
-          ? "1px solid rgba(220,80,80,0.3)"
+          ? "1px solid rgba(var(--err-glow), 0.3)"
           : "1px solid var(--fg-700)",
       }}
     >
@@ -1251,17 +1279,19 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
             gap: 6,
           }}
         >
-          <span>{row.name}</span>
-          <span
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 10,
-              color: "var(--fg-500)",
-              letterSpacing: "0.04em",
-            }}
-          >
-            {row.region}
-          </span>
+          <span>{operatorDisplayName(row.name, row.rpc)}</span>
+          {region !== null && (
+            <span
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-500)",
+                letterSpacing: "0.04em",
+              }}
+            >
+              {region}
+            </span>
+          )}
           {!trusted && (
             <span
               style={{
@@ -1271,10 +1301,10 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
                 letterSpacing: "0.1em",
                 textTransform: "uppercase",
                 color: "var(--err)",
-                background: "rgba(220,80,80,0.12)",
+                background: "rgba(var(--err-glow), 0.12)",
                 padding: "1px 5px",
                 borderRadius: 3,
-                border: "1px solid rgba(220,80,80,0.4)",
+                border: "1px solid rgba(var(--err-glow), 0.4)",
               }}
               title={
                 devMode
@@ -1425,13 +1455,13 @@ function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
         : "var(--fg-300)";
   const bg =
     badge.severity === "err"
-      ? "rgba(220,80,80,0.12)"
+      ? "rgba(var(--err-glow), 0.12)"
       : badge.severity === "warn"
         ? "rgba(220,180,80,0.12)"
         : "rgba(120,160,220,0.08)";
   const borderColour =
     badge.severity === "err"
-      ? "rgba(220,80,80,0.4)"
+      ? "rgba(var(--err-glow), 0.4)"
       : badge.severity === "warn"
         ? "rgba(220,180,80,0.4)"
         : "rgba(120,160,220,0.3)";
@@ -1464,7 +1494,7 @@ function AboutSection({
   meta,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   meta?: string | undefined;
   children: ReactNode;
 }) {
@@ -1520,7 +1550,8 @@ function OperatorRiskLegendCard({
       >
         Each chip on an operator row decodes a signal the wallet collected
         from its probe round-trip. Most are advisory — the wallet's RPC
-        dispatcher already routes around offline / untrusted operators.
+        dispatcher skips offline / untrusted operators when another is
+        available.
       </div>
       <div
         style={{
@@ -1566,8 +1597,8 @@ function OperatorRiskLegendCard({
                     <span
                       title={`${affected} operator${affected === 1 ? "" : "s"} currently affected`}
                       style={{
-                        background: "rgba(220,80,80,0.12)",
-                        border: "1px solid rgba(220,80,80,0.4)",
+                        background: "rgba(var(--err-glow), 0.12)",
+                        border: "1px solid rgba(var(--err-glow), 0.4)",
                         borderRadius: 4,
                         padding: "1px 6px",
                         color: "var(--err)",

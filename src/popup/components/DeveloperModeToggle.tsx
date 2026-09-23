@@ -239,7 +239,7 @@ const errorStyle: CSSProperties = {
   padding: "8px 10px",
   borderRadius: 8,
   border: "1px solid var(--err)",
-  background: "rgba(220,80,80,0.10)",
+  background: "rgba(var(--err-glow), 0.10)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 11,

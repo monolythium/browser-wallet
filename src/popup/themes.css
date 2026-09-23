@@ -33,6 +33,7 @@ html[data-theme="default"] {
   --warn:  #e8b96a;
   --warn-glow: 232, 185, 106;
   --err:   #e88a7a;
+  --err-glow:   232, 138, 122;
   --info:  #8ab4d6;
 
   --denom-private-fg: #d7d3cb;
@@ -68,6 +69,7 @@ html[data-theme="monolythium"] {
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
   --err:   #ff8a9a;
+  --err-glow:   255, 138, 154;
   --info:  #8B5CF6;
 
   --denom-private-fg: #c9ccd8;
@@ -103,6 +105,7 @@ html[data-theme="monolabs"] {
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
   --err:   #f08a8a;
+  --err-glow:   240, 138, 138;
   --info:  #3bd0c4;
 
   --denom-private-fg: #c5d6d2;
@@ -138,6 +141,7 @@ html[data-theme="monoplay"] {
   --warn:  #e8b96a;
   --warn-glow: 232, 185, 106;
   --err:   #ff8a6b;
+  --err-glow:   255, 138, 107;
   --info:  #d88a95;
 
   --denom-private-fg: #d6c9c9;
@@ -172,6 +176,7 @@ html[data-theme="mono"] {
   --warn:  #e8b96a;
   --warn-glow: 232, 185, 106;
   --err:   #e88a7a;
+  --err-glow:   232, 138, 122;
   --info:  #8ab4d6;
 
   --denom-private-fg: #c8c3b5;
@@ -225,6 +230,7 @@ html[data-theme="glass"] {
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
   --err:   #ff8fb8;
+  --err-glow:   255, 143, 184;
   --info:  #7fb2ff;
 
   --denom-private-fg: #cdd2e3;
@@ -317,6 +323,7 @@ html[data-theme="aurora"] {
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
   --err:   #ff89b0;
+  --err-glow:   255, 137, 176;
   --info:  #6c9dff;
 
   --denom-private-fg: #d4c8ec;
@@ -359,6 +366,7 @@ html[data-theme="crimson"] {
   --warn:  #f0b86a;
   --warn-glow: 240, 184, 106;
   --err:   #ffa07a;
+  --err-glow:   255, 160, 122;
   --info:  #e29090;
 
   --denom-private-fg: #dac6c0;
@@ -394,6 +402,7 @@ html[data-theme="neon"] {
   --warn:  #ffd54a;
   --warn-glow: 255, 213, 74;
   --err:   #ff4f8a;
+  --err-glow:   255, 79, 138;
   --info:  #4ab8ff;
 
   --denom-private-fg: #a8d4d0;
@@ -430,6 +439,7 @@ html[data-theme="midnight"] {
   --warn:  #f0c870;
   --warn-glow: 240, 200, 112;
   --err:   #ff8ca8;
+  --err-glow:   255, 140, 168;
   --info:  #9d7cff;
 
   --denom-private-fg: #c4bae1;
@@ -465,6 +475,7 @@ html[data-theme="retro"] {
   --warn:  #ffc87a;
   --warn-glow: 255, 200, 122;
   --err:   #ff8a5a;
+  --err-glow:   255, 138, 90;
   --info:  #e4a864;
 
   --denom-private-fg: #d8c49a;
@@ -514,6 +525,7 @@ html[data-theme="light"] {
   --warn:  #c88b1a;
   --warn-glow: 200, 139, 26;
   --err:   #b54a3a;
+  --err-glow:   181, 74, 58;
   --info:  #3b6a8a;
 
   --denom-private-fg: #3f3d36;
@@ -658,6 +670,7 @@ html body[data-denom="private"] {
   --warn:  #d4b06b;
   --warn-glow: 212, 176, 107;
   --err:   #c87a9a;
+  --err-glow:   200, 122, 154;
   --info:  #8fb3ff;
 
   /* Glass tokens — near-flat, hairline borders */

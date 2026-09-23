@@ -22,6 +22,8 @@ import type { IconName } from "./Icon";
 import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
+import { parseBlockHeight } from "../shared/block-height";
+import { DevBadge } from "./components/DevBadge";
 import { ExternalLink } from "./components/ExternalLink";
 import { type DelegationsView, type PendingRewardsView } from "../shared/staking";
 import {
@@ -205,17 +207,104 @@ export function chainHealthStallVerdict(
   return nowMs - lastAdvancedAtMs >= thresholdMs;
 }
 
+/** What one polled head means relative to the highest height seen so far. */
+export type HeadReading =
+  | { kind: "unparsable" }
+  | { kind: "advanced"; height: bigint }
+  | { kind: "unchanged"; height: bigint }
+  | { kind: "decreased"; height: bigint };
+
+/**
+ * W-1: classify a polled head against the session's high-water mark.
+ *
+ * The liveness test used to be `r.blockHex !== lastBlockHex` — a STRING
+ * inequality with no ordering — so every change scored as progress. The public
+ * gateway load-balances per request between backends at different heights, so
+ * the reported head alternates; each flip reset the stall clock and the chip
+ * read LIVE against a chain that had not produced a block in days.
+ *
+ * Only a STRICTLY HIGHER head is progress. A decrease is reported so the caller
+ * can count it, but it is otherwise IGNORED rather than flagged: the wallet
+ * reads one URL and cannot tell a lagging backend from a resync from a shallow
+ * reorg — and none of those means the chain advanced, which is the only thing
+ * the LIVE chip claims.
+ *
+ * A null mark means no reading yet: the first head is adopted as the baseline
+ * whatever it is, because on first contact the wallet has nothing to compare
+ * against. Pure + exported so the poll and the tested contract can't drift.
+ */
+export function classifyHeadReading(
+  hex: unknown,
+  mark: bigint | null,
+): HeadReading {
+  const height = parseBlockHeight(hex);
+  if (height === null) return { kind: "unparsable" };
+  if (mark === null || height > mark) return { kind: "advanced", height };
+  if (height === mark) return { kind: "unchanged", height };
+  return { kind: "decreased", height };
+}
+
+/**
+ * Developer-mode readout: how many polled heads came back BELOW the highest
+ * seen this session. Null outside developer mode, and null at zero — a healthy
+ * chain has nothing to report and shouldn't carry an empty diagnostic.
+ *
+ * Worth surfacing because a regression is the ONE signal that distinguishes "the
+ * chain is frozen" from "one server behind this endpoint is behind the others",
+ * and the poll otherwise discards it silently — which is why diagnosing it took
+ * out-of-band sampling of the gateway rather than anything the wallet showed.
+ *
+ * Deliberately does NOT assert which cause it is. From a single RPC URL the
+ * wallet cannot tell a lagging backend from a shallow reorg, so the note names
+ * both. Pure + exported.
+ */
+export function headRegressionNote(
+  count: number,
+  devMode: boolean,
+): string | null {
+  if (!devMode || count <= 0) return null;
+  return `${count} reading${count === 1 ? "" : "s"} below the highest seen — a lagging backend, or a reorg.`;
+}
+
 /**
  * B2: fold the persisted block-advance store (`BLOCK_ADVANCE_KEY`) into the first
  * confirmed head of a fresh mount, so the stall window survives a remount / popup
  * reopen instead of restarting from zero.
- * - Same head as the persisted session (`stored.hex === currentHex`): carry its
- *   `advancedAtMs` forward → verdict STALLED if it's been unchanged past the
- *   threshold (an already-stalled chain flips immediately on reopen).
- * - Head advanced while closed (different hex), or no/malformed store: a FRESH
- *   baseline at `nowMs`, never stalled (no false positive — the chain moved, or we
- *   simply don't know yet; falls back to the current first-tick-LIVE behavior).
+ * - Current head NOT HIGHER than the persisted one (equal, or LOWER): nothing
+ *   advanced while we were closed, so carry `advancedAtMs` forward → verdict
+ *   STALLED if it's been that way past the threshold (an already-stalled chain
+ *   flips immediately on reopen), and keep the HIGHER head as the baseline.
+ * - Head genuinely advanced while closed (strictly higher), or no/malformed
+ *   store: a FRESH baseline at `nowMs`, never stalled (no false positive — the
+ *   chain moved, or we simply don't know yet).
+ *
+ * W-1: this used to compare hexes for EQUALITY, which the load-balanced gateway
+ * defeated about half the time — a reopen landing on the lower backend saw a
+ * "different" head, took a fresh baseline and restarted the 15s window, so an
+ * already-stalled chain went back to LIVE. Ordering is what makes it hold.
  * Pure + exported.
+ *
+ * KNOWN GAP — a stored head is trusted on its own word. Nothing anywhere bounds
+ * the MAGNITUDE of a head reading: the transport checks only `typeof === string`
+ * and `isWellFormedBlockNumberHex` accepts the whole u64 range. So one
+ * spuriously-high reading becomes the stored baseline, sits above every real
+ * reading forever, and pins the chip to STALLED. It survives popup close, SW
+ * hibernation and lock; a wallet wipe now clears it, and otherwise only a
+ * browser restart does. The trigger is UNOBSERVED — the gateway's known
+ * pathology is a backend stuck LOW, which the ordering above absorbs correctly.
+ *
+ * TWO TRAPS for whoever closes it, both of which re-open the W-1 defect:
+ *  1. Seeding the high-water mark from the CURRENT reading instead of the
+ *     stored head. A reopen landing on the lagging backend would then treat the
+ *     next good read as an advance and flip a dead chain to LIVE — exactly what
+ *     W-1 fixed.
+ *  2. Rejecting a stored head because it sits far above the current reading.
+ *     A legitimately lagging backend is arbitrarily far below (one observed
+ *     serving height 0 against a head of 218234), so gap magnitude cannot
+ *     separate "stale store" from "lagging backend".
+ * The discriminator that does work is corroboration over time — a genuine stall
+ * has readings EQUAL to the stored head, a wedge has them strictly below,
+ * forever. See `_dev-notes/browser-wallet/2026-08-02_stall-baseline-wedge.md`.
  */
 export function seedStallBaseline(
   stored: unknown,
@@ -226,16 +315,20 @@ export function seedStallBaseline(
   if (typeof stored === "object" && stored !== null) {
     const hex = (stored as { hex?: unknown }).hex;
     const advancedAtMs = (stored as { advancedAtMs?: unknown }).advancedAtMs;
+    const storedHeight = parseBlockHeight(hex);
+    const currentHeight = parseBlockHeight(currentHex);
     if (
-      typeof hex === "string" &&
-      /^0x[0-9a-fA-F]+$/.test(hex) &&
+      storedHeight !== null &&
+      currentHeight !== null &&
       typeof advancedAtMs === "number" &&
       Number.isFinite(advancedAtMs) &&
       advancedAtMs <= nowMs && // guard a future/garbage timestamp
-      hex === currentHex
+      currentHeight <= storedHeight
     ) {
       return {
-        lastBlockHex: currentHex,
+        // Keep the higher head — reporting this tick's lower one would show a
+        // block number the chain has already passed.
+        lastBlockHex: hex as string,
         lastBlockObservedAt: advancedAtMs,
         stalled: chainHealthStallVerdict(nowMs, advancedAtMs, thresholdMs),
       };
@@ -245,16 +338,32 @@ export function seedStallBaseline(
 }
 
 /**
- * Banner label + dot/text color + hover tooltip + tap-through flag per health
+ * Banner label + dot/text color + state explanation + tap affordance per health
  * kind. Pure + exported so the rendered banner and the tested contract can't
  * drift. Untrusted is amber (the STALLED token), distinct from red OFFLINE.
  * `tappable` is true for the not-online states (stalled / untrusted / offline)
  * so the label routes to Operators; the callsite still gates on onOpenOperators.
+ *
+ * WHY `explanation` AND `action` ARE SEPARATE FIELDS. They were one string,
+ * `tooltip`, doing two jobs: explaining the state AND telling the user to tap.
+ * That string is rendered in three places — the hover title, the visible inline
+ * hint, and (via the hint) the pre-unlock banner — but the chip is tappable on
+ * exactly ONE of its nine mount sites. So eight screens, the unlock screen
+ * among them, instructed the user to tap something inert. Splitting the fields
+ * lets the explanation go everywhere while the instruction renders only where
+ * it is true.
  */
 export function chainHealthPresentation(kind: ChainHealth["kind"]): {
   label: string;
   color: string;
-  tooltip: string;
+  /** What the state MEANS. Never an instruction — this renders on all nine
+   *  banner instances, including the pre-unlock screen, where nothing is
+   *  tappable and the user has no action available. */
+  explanation: string;
+  /** What TAPPING does, or null when there is nothing to tap. Rendered ONLY
+   *  where `tappable` holds and the callsite passed `onOpenOperators` — the
+   *  main popup shell alone. */
+  action: string | null;
   tappable: boolean;
 } {
   switch (kind) {
@@ -262,15 +371,18 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
       return {
         label: "LIVE",
         color: "var(--ok)",
-        tooltip: "Connected — an operator is serving your pinned chain.",
+        explanation:
+          "Connected — an operator is serving your pinned chain, and the block height is rising.",
+        action: null,
         tappable: false,
       };
     case "stalled":
       return {
         label: "STALLED",
         color: "var(--warn)",
-        tooltip:
-          "The chain hasn't advanced for a while. Tap to review your operators.",
+        explanation:
+          "The block height hasn't risen for a while, so the wallet can't confirm your balance is current.",
+        action: "See operator status.",
         tappable: true,
       };
     case "untrusted":
@@ -279,8 +391,14 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // Red (same hard-trust token as ALL OPERATORS UNTRUSTED / OFFLINE) — the
         // operator is on a different chain than the wallet expects.
         color: "var(--err)",
-        tooltip:
-          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network. Click to see operators.",
+        // The cause is a CHAIN-ID mismatch, not a genesis one: classifyNoOperatorReason
+        // returns "untrusted" only for an operator in `operatorWrongChainId`
+        // (networks.ts — set when net_version disagrees with the pin), and returns
+        // "regenesis" for a genesis-hash mismatch before it can ever reach here.
+        // The old wording described the genesis case, i.e. the OTHER state.
+        explanation:
+          "This operator is serving a different network — it answered with a chain id your wallet doesn't expect.",
+        action: "See operator status.",
         tappable: true,
       };
     case "regenesis":
@@ -290,8 +408,9 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // operator is on a different chain than the wallet expects, so on-chain
         // actions stay paused. Scrolls as a marquee (the long label).
         color: "var(--err)",
-        tooltip:
-          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. Click to see operators.",
+        explanation:
+          "All operators report a different genesis hash than your wallet expects. This usually means the test network was restarted.",
+        action: "See operator status.",
         tappable: true,
       };
     case "quarantined":
@@ -302,16 +421,17 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // Scrolls as a marquee (the long label). Balance is NOT paused: the
         // value stays knowable once an operator recovers / via Monoscan.
         color: "var(--err)",
-        tooltip:
-          "Every operator self-quarantined (a checkpoint state-root mismatch) and won't serve RPC — they're on your chain but temporarily can't be trusted. The wallet reconnects automatically once one recovers. Click to see operators.",
+        explanation:
+          "Every operator self-quarantined after a checkpoint state-root mismatch and won't serve requests. They're on your chain and recover on their own.",
+        action: "See operator status.",
         tappable: true,
       };
     case "offline":
       return {
         label: "OFFLINE",
         color: "var(--err)",
-        tooltip:
-          "Can't reach any operator right now. Tap to review your operators.",
+        explanation: "Can't reach any operator right now.",
+        action: "See operator status.",
         tappable: true,
       };
     case "reconnecting":
@@ -323,8 +443,9 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // action implied while we re-establish the read).
         label: "RECONNECTING…",
         color: "var(--warn)",
-        tooltip:
+        explanation:
           "Showing the last block seen — reconnecting to an operator to confirm.",
+        action: null,
         tappable: false,
       };
     case "loading":
@@ -332,24 +453,29 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
       return {
         label: "CONNECTING…",
         color: "var(--fg-500)",
-        tooltip: "Connecting to an operator…",
+        explanation: "Connecting to an operator…",
+        action: null,
         tappable: false,
       };
   }
 }
 
 /**
- * A (R1): the VISIBLE inline explanation for a chain-health state — the very same
- * text as the hover `tooltip`, surfaced as a non-loud muted line so a degraded
+ * A (R1): the VISIBLE inline explanation for a chain-health state — the same
+ * text as the hover title, surfaced as a non-loud muted line so a degraded
  * chain explains itself without a hover. Returns null for the healthy LIVE state
  * (no hint needed) and a non-empty string for every NON-live state (stalled /
  * untrusted / regenesis / quarantined / offline / reconnecting / connecting).
  * Pure + exported so the rendered hint and the tested contract can't drift from
  * `chainHealthPresentation`.
+ *
+ * Returns `explanation` ONLY. The tap instruction is `action`, which the banner
+ * renders separately and only where the chip is genuinely tappable — this hint
+ * reaches all nine banner instances, eight of which are not.
  */
 export function chainHealthInlineHint(kind: ChainHealth["kind"]): string | null {
   if (kind === "live") return null;
-  return chainHealthPresentation(kind).tooltip;
+  return chainHealthPresentation(kind).explanation;
 }
 
 /**
@@ -562,6 +688,10 @@ export function ChainStatusBanner({
     () => lastKnownHealth ?? { kind: "loading" },
   );
   const [operator, setOperator] = useState<string | null>(null);
+  // W-1 diagnostic: polled heads that came back below the highest seen this
+  // mount. Developer-mode only; see `headRegressionNote`.
+  const [headRegressions, setHeadRegressions] = useState(0);
+  const bannerDevMode = useFeature("DEVELOPER_MODE");
 
   // Persist every health change to the module-scoped snapshot so the next
   // in-session remount seeds from it (above) rather than re-showing CONNECTING,
@@ -583,6 +713,14 @@ export function ChainStatusBanner({
     let cancelled = false;
     let lastBlockHex: string | null = null;
     let lastBlockObservedAt = Date.now();
+    // W-1: the HIGHEST height seen this mount. The advance test compares against
+    // this, not against the previous reading — the gateway alternates between
+    // backends at different heights, and comparing to the previous reading made
+    // every flip look like progress. Mount-scoped and in-memory ON PURPOSE: a
+    // reopen re-seeds it so it cannot wedge, and no new persisted key is
+    // introduced (`mono.ws.*` is written to storage.session, which the regenesis
+    // migration's local-prefix wipe does not actually clear).
+    let highWater: bigint | null = null;
     // The genesis-gated HTTP poll is the source of truth for whether the chain
     // is serviceable. The WS `newHeads` push is only a faster freshness signal
     // and must NOT independently flip the banner to LIVE when the poll says the
@@ -644,20 +782,29 @@ export function ChainStatusBanner({
           );
           lastBlockHex = base.lastBlockHex;
           lastBlockObservedAt = base.lastBlockObservedAt;
+          // Seed the high-water mark from the head the seed settled on — which
+          // is the HIGHER of {persisted, this tick} — so a first tick that lands
+          // on a lagging backend can't lower the bar for the rest of the mount.
+          highWater = parseBlockHeight(base.lastBlockHex);
           // Keep both persisted keys fresh + hex-synced (advancedAt is the carried
           // time when the head matched, else `now` for the head seen while closed).
           void chrome.storage.session
-            .set({ [WS_BLOCK_KEY]: r.blockHex })
+            .set({ [WS_BLOCK_KEY]: base.lastBlockHex })
             .catch(() => {});
-          persistBlockAdvance(r.blockHex, lastBlockObservedAt);
+          persistBlockAdvance(base.lastBlockHex, lastBlockObservedAt);
           setHealth(
             base.stalled
-              ? { kind: "stalled", blockHex: r.blockHex }
-              : { kind: "live", blockHex: r.blockHex },
+              ? { kind: "stalled", blockHex: base.lastBlockHex }
+              : { kind: "live", blockHex: base.lastBlockHex },
           );
           return;
         }
-        if (lastBlockHex === null || r.blockHex !== lastBlockHex) {
+        // W-1: only a STRICTLY HIGHER head is progress. See classifyHeadReading.
+        const reading = classifyHeadReading(r.blockHex, highWater);
+        if (reading.kind === "unparsable") return; // no reading: touch nothing
+        if (reading.kind === "decreased") setHeadRegressions((n) => n + 1);
+        if (reading.kind === "advanced") {
+          highWater = reading.height;
           lastBlockHex = r.blockHex;
           lastBlockObservedAt = now;
           setHealth({ kind: "live", blockHex: r.blockHex });
@@ -670,14 +817,16 @@ export function ChainStatusBanner({
             .set({ [WS_BLOCK_KEY]: r.blockHex })
             .catch(() => {});
           // B2: the head advanced → record WHEN, so a later reopen can time the
-          // stall from here (written only on this genuine hex change).
+          // stall from here (written only on a genuine advance).
           persistBlockAdvance(r.blockHex, now);
         } else if (
           chainHealthStallVerdict(now, lastBlockObservedAt, STALL_THRESHOLD_MS)
         ) {
-          setHealth({ kind: "stalled", blockHex: r.blockHex });
+          // Report the HIGHEST head seen, not this tick's possibly-lower one —
+          // showing a block the chain has already passed would be its own lie.
+          setHealth({ kind: "stalled", blockHex: lastBlockHex ?? r.blockHex });
         }
-        // else: same block but within fresh window — keep current state
+        // else: no advance but within the fresh window — keep current state
       } catch (e) {
         if (cancelled) return;
         pollResolvedThisMount = true;
@@ -715,13 +864,13 @@ export function ChainStatusBanner({
     // subscribe to `newHeads`; when chain pushes a new head, the SW
     // writes the block hex to chrome.storage.session under the key
     // below. We watch that key here and update the banner without
-    // waiting for the next 8 s poll. The 8 s poll stays running as
+    // waiting for the next HEALTH_TICK_MS poll. That poll stays running as
     // a safety net so a WS drop doesn't strand the user on stale
     // data — if WS is healthy, the poll's tick just reaffirms what
     // the WS already wrote.
     void bgWsSubscribeNewHeads().catch(() => {
       // ws-subscribe-new-heads is best-effort; failure means the
-      // 8 s poll covers us alone (the existing behaviour).
+      // HEALTH_TICK_MS poll covers us alone (the existing behaviour).
     });
     const wsListener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
       changes,
@@ -741,7 +890,12 @@ export function ChainStatusBanner({
       if (!change || typeof change.newValue !== "string") return;
       const blockHex = change.newValue;
       const now = Date.now();
-      if (lastBlockHex === null || blockHex !== lastBlockHex) {
+      // W-1: the WS lane takes the SAME strictly-higher rule as the poll, so no
+      // lane can manufacture a LIVE the other would refuse.
+      const reading = classifyHeadReading(blockHex, highWater);
+      if (reading.kind === "decreased") setHeadRegressions((n) => n + 1);
+      if (reading.kind === "advanced") {
+        highWater = reading.height;
         lastBlockHex = blockHex;
         lastBlockObservedAt = now;
         setHealth({ kind: "live", blockHex });
@@ -874,7 +1028,7 @@ export function ChainStatusBanner({
       <span
         className="ext-banner-marquee"
         {...tapProps}
-        title={pres.tooltip}
+        title={pres.explanation}
         style={{
           color: pres.color,
           fontWeight: 500,
@@ -889,7 +1043,7 @@ export function ChainStatusBanner({
     ) : (
       <span
         {...tapProps}
-        title={pres.tooltip}
+        title={pres.explanation}
         style={{
           color: pres.color,
           fontWeight: 500,
@@ -912,6 +1066,11 @@ export function ChainStatusBanner({
   // A (R1): the explanation that was previously hover-only (title=) now renders
   // as a visible muted line beneath the indicator row for every non-live state.
   const inlineHint = chainHealthInlineHint(health.kind);
+  // The tap instruction, rendered ONLY where the chip really is tappable —
+  // `tappable` already folds in onOpenOperators, which only the main popup
+  // shell passes. The other eight banner instances (the approval sheets and the
+  // pre-unlock screen) get the explanation and no instruction.
+  const actionHint = tappable ? pres.action : null;
   // B (R1): a "View on Monoscan" link on the tappable degraded states — built
   // from the user's OWN address over the trusted wallet constant (never
   // operator-echoed). No-mock: null when the address is absent/invalid (e.g. the
@@ -979,9 +1138,10 @@ export function ChainStatusBanner({
         </>
       )}
     </div>
-    {(inlineHint || monoscanLink) && (
+    {(inlineHint || actionHint || monoscanLink) && (
       <div className="ext-chain-health-hint">
         {inlineHint && <span>{inlineHint}</span>}
+        {actionHint && <span>{actionHint}</span>}
         {monoscanLink && (
           <a
             href={monoscanLink}
@@ -992,6 +1152,13 @@ export function ChainStatusBanner({
             <Icon name="globe" size={12} /> View on Monoscan
           </a>
         )}
+      </div>
+    )}
+    {headRegressionNote(headRegressions, bannerDevMode) !== null && (
+      <div className="ext-chain-health-hint">
+        <span>
+          <DevBadge /> {headRegressionNote(headRegressions, bannerDevMode)}
+        </span>
       </div>
     )}
     </div>
@@ -1090,6 +1257,9 @@ interface TopProps {
    *  refreshKeystoreStatus and the chip shows the new vault's name
    *  immediately (no need to lock/unlock or reopen). */
   onVaultComplete?: () => void;
+  /** VaultPicker's "Manage wallets" entry — routes to the Wallets page.
+   *  Threaded through Home for App-level routing, same as onNewWalletFlow. */
+  onManageWallets?: () => void;
 }
 
 // Chip replaced with <VaultPicker /> (multi-vault
@@ -1107,7 +1277,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (earlier design).
-export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete }: TopProps) {
+export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete, onManageWallets }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       {/* The ML-DSA-65 algo label moved INTO the picker pill (its left column)
@@ -1118,6 +1288,7 @@ export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplet
         {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
+        {...(onManageWallets ? { onManageWallets } : {})}
       />
     </div>
   );
@@ -1858,10 +2029,10 @@ function WarningRow({
         marginBottom: 6,
         borderRadius: 10,
         background: isDanger
-          ? "rgba(220,80,80,0.10)"
+          ? "rgba(var(--err-glow), 0.10)"
           : "rgba(244,201,122,0.08)",
         border: isDanger
-          ? "1px solid rgba(220,80,80,0.4)"
+          ? "1px solid rgba(var(--err-glow), 0.4)"
           : "1px solid rgba(244,201,122,0.4)",
       }}
     >
@@ -2146,9 +2317,12 @@ interface HomeProps {
    *  completion (import or multisig) can re-run App's hydration and the
    *  chip shows the new vault's name without lock/unlock or reopen. */
   onVaultComplete?: () => void;
+  /** Threaded through Top → VaultPicker so the dropdown's "Manage wallets"
+   *  entry routes to App's Wallets screen. */
+  onManageWallets?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, topSlot, onNewWalletFlow, onVaultComplete, onManageWallets }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2273,6 +2447,7 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
         {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
+        {...(onManageWallets ? { onManageWallets } : {})}
       />
       <div className="ext-body">
         {topSlot}
@@ -2362,13 +2537,17 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
                   marginTop: 1,
                 }}
               >
+                {/* No "switch operators" remedy: the registry ships one host and
+                    the RPC-override editor is developer-gated, so the shipped
+                    build cannot perform it. The untrusted line describes a CHAIN
+                    ID mismatch — the genesis-hash case is `regenesis` below. */}
                 {balanceCause === "quarantined"
-                  ? "Every operator self-quarantined (a checkpoint state-root mismatch) and isn't serving requests right now. They're on your chain — the app reconnects automatically once one recovers, or switch to another operator. Your funds are safe."
+                  ? "Every operator self-quarantined (a checkpoint state-root mismatch) and isn't serving requests right now. They're on your chain and recover on their own. Your funds are safe."
                   : balanceCause === "unreachable"
-                    ? "No operator is responding right now, so the wallet can't confirm your live balance. Your funds are safe and nothing changed — the app reconnects automatically once an operator is back, or switch to another operator on your wallet's network."
+                    ? "No operator is responding right now, so the wallet can't confirm your live balance. Your funds are safe and nothing changed — the wallet reconnects automatically once an operator is back."
                     : balanceCause === "untrusted"
-                      ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
-                      : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
+                      ? "This operator is serving a different network — it answered with a chain id your wallet doesn't expect. The wallet reconnects once it matches again."
+                      : "All operators report a different genesis hash than your wallet expects — they may be on a different chain. The wallet reconnects automatically once the operators are back on your wallet's network."}
               </div>
               {pausedMonoscanUrl && (
                 <div style={{ marginTop: 3, letterSpacing: 0 }}>
@@ -2875,7 +3054,7 @@ export function ReqConnect({
             borderRadius: 10,
             background: "rgba(0,0,0,0.3)",
             border: hasDanger
-              ? "1px solid rgba(220,80,80,0.4)"
+              ? "1px solid rgba(var(--err-glow), 0.4)"
               : "1px solid rgba(255,255,255,0.05)",
             fontFamily: "var(--f-mono)",
             fontSize: 11.5,
@@ -4181,6 +4360,7 @@ export function ReqSendTx({
         <div className="req-section">
           <div className="req-section__h">
             <span>Simulation</span>
+            <DevBadge />
             <button onClick={() => setShowSim((v) => !v)}>{showSim ? "hide" : "show"} ↓</button>
           </div>
           {showSim && view.simulation == null && (
@@ -4218,9 +4398,13 @@ export function ReqSendTx({
       <div className="req-section">
         <div className="req-section__h">
           <span>Network fee</span>
+          {/* "Network fee" itself is NOT dev-only (every user sees Max fee),
+              so the marker goes on the dev-only control, not the section
+              title — marking the title would claim the whole section. */}
           {devMode && (
             <button onClick={() => setShowFeeDetails((v) => !v)}>
               {showFeeDetails ? "hide" : "details"} ↓
+              <DevBadge />
             </button>
           )}
         </div>
@@ -4277,6 +4461,7 @@ export function ReqSendTx({
         <div className="req-section">
           <div className="req-section__h">
             <span>{decodedSurfaceTitle(decoded)}</span>
+            <DevBadge />
             <button onClick={() => setShowDecoded((v) => !v)}>
               {showDecoded ? "hide" : "show"} ↓
             </button>
@@ -4322,6 +4507,7 @@ export function ReqSendTx({
         <div className="req-section" style={{ paddingBottom: 16 }}>
           <div className="req-section__h">
             <span>Raw calldata</span>
+            <DevBadge />
             <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
           </div>
           {showRaw && (

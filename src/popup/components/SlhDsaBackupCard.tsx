@@ -25,6 +25,16 @@ import {
   bgSlhDsaBackupSetRegistrationStatus,
   bgSlhDsaBackupSubmitRegistration,
 } from "../bg";
+import {
+  emergencyKeyParams,
+  nextSendKey,
+  type SendKeyState,
+} from "../send-key";
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
 import { ExternalLink } from "./ExternalLink";
 import { SlhDsaBackupRevealModal } from "./SlhDsaBackupRevealModal";
 import { SlhDsaRotationRehearsal } from "./SlhDsaRotationRehearsal";
@@ -59,7 +69,11 @@ export function SlhDsaBackupCard({
   const [backup, setBackup] = useState<SlhDsaBackup | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [submitErr, setSubmitErr] = useState<string | null>(null);
+  const [submitErr, setSubmitErr] = useState<SubmitFailure | null>(null);
+  // Key for the registration confirmation in flight. Carried by Retry
+  // registration, released once the submit lands. A popup restart loses it and
+  // `nextSendKey` mints fresh — the known row-7 residual, unchanged here.
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
   const [revealOpen, setRevealOpen] = useState<
     "generate" | "re-export" | null
   >(null);
@@ -150,18 +164,71 @@ export function SlhDsaBackupCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaultId, backup?.chainRegistrationStatus, backup?.chainRegistrationTxHash]);
 
-  const handleRegisterOnChain = async () => {
+  // `opts.retry` is a parameter rather than state so the Retry-registration
+  // button can carry it without a setState round-trip.
+  const handleRegisterOnChain = async (opts?: { retry?: boolean }) => {
     if (!backup || backup.publicKey === "") return;
     setSubmitting(true);
     setSubmitErr(null);
-    const r = await bgSlhDsaBackupSubmitRegistration({
-      vaultId,
-      publicKeyHex: backup.publicKey,
-      chainIdHex,
-    });
-    if (!r.ok) setSubmitErr(r.reason);
-    setSubmitting(false);
-    await refresh();
+    try {
+      const keyParams = emergencyKeyParams(vaultId, backup.publicKey, chainIdHex);
+      const keyDecision = nextSendKey(
+        sendKey,
+        opts?.retry === true ? "retry" : "submit",
+        keyParams,
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
+      const r = await bgSlhDsaBackupSubmitRegistration({
+        vaultId,
+        publicKeyHex: backup.publicKey,
+        chainIdHex,
+        ...(keyDecision.use !== null ? { idempotencyKey: keyDecision.use } : {}),
+      });
+      if (!r.ok) {
+        setSubmitErr(verbatimFailure(r.reason, "Couldn't submit the registration."));
+      } else {
+        setSendKey(null); // released — the registration landed
+      }
+    } catch (e) {
+      // The submit THREW, so bgSlhDsaBackupSubmitRegistration never reached its
+      // own `registration-failed` write — the only durable record of the attempt,
+      // and the one the Security page reads back after a popup close. Take the
+      // same write here so the case that most needs a record stops being the one
+      // case without one.
+      //
+      // The record is DISTINGUISHABLE from an ok:false one by its text, and that
+      // matters: ok:false means the service worker reached a verdict, while a
+      // throw means the transaction may have been broadcast before the channel
+      // dropped. The stored copy says so rather than asserting a refusal.
+      const failure = submitThrowFailure(e);
+      setSubmitErr(failure);
+      try {
+        await bgSlhDsaBackupSetRegistrationStatus({
+          vaultId,
+          status: "registration-failed",
+          error: failure.body,
+        });
+      } catch {
+        // The channel that just dropped may still be down. The rendered error
+        // above does not depend on this write, so the user is told either way.
+      }
+    } finally {
+      // Previously outside any try: a throw skipped it and left the button
+      // permanently disabled on "Submitting…".
+      setSubmitting(false);
+      // `refresh` re-reads over the same channel that may have just dropped, so
+      // it can throw too. Unguarded it would replace a rendered failure with a
+      // console-only one — the exact defect this file is fixing, re-created in
+      // the recovery path. It was already unguarded on the reply paths; the
+      // guard sits here so all three exits are covered once.
+      try {
+        await refresh();
+      } catch {
+        // The card keeps the state it already had, and the error set above is
+        // still on screen. A stale read is not worth losing the message over.
+      }
+    }
   };
 
   const resetClearFlow = () => {
@@ -389,8 +456,15 @@ export function SlhDsaBackupCard({
 
               {backup.chainRegistrationStatus === "registration-failed" && (
                 <>
+                  {/* Lead deliberately says "didn't complete", not "failed".
+                      This record is also written when the submit THREW, where
+                      the transaction may have been broadcast before the channel
+                      dropped — asserting a refusal there would be false, and it
+                      is the assertion that would talk a user into retrying. */}
                   <div style={errBox}>
-                    Registration failed:{" "}
+                    <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                      Registration didn&apos;t complete
+                    </div>
                     {backup.chainRegistrationError ?? "Unknown error"}
                   </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
@@ -400,8 +474,15 @@ export function SlhDsaBackupCard({
                     >
                       Re-export
                     </button>
+                    {/* The affordance already existed; it now says so to the
+                        mechanism. Carrying `retry` makes this a re-broadcast of
+                        the bytes already signed rather than a second nonce —
+                        which matters most on the record written when the channel
+                        dropped, where the transaction may already be on chain.
+                        After a popup restart there is no key to carry and
+                        `nextSendKey` mints fresh, taking the normal path. */}
                     <button
-                      onClick={() => void handleRegisterOnChain()}
+                      onClick={() => void handleRegisterOnChain({ retry: true })}
                       disabled={submitting}
                       style={{
                         ...btnPrimaryFlex,
@@ -415,7 +496,14 @@ export function SlhDsaBackupCard({
               )}
 
               {submitErr && (
-                <div style={{ ...errBox, marginTop: 8 }}>{submitErr}</div>
+                <div style={{ ...errBox, marginTop: 8 }}>
+                  {submitErr.headline !== null && (
+                    <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                      {submitErr.headline}
+                    </div>
+                  )}
+                  {submitErr.body}
+                </div>
               )}
 
               {/* Destructive — abandon + regenerate. */}
@@ -592,7 +680,7 @@ function BackupStateRow({ backup }: { backup: SlhDsaBackup | null }) {
   const tone = complete
     ? { color: "var(--ok, #7ee3c1)", border: "rgba(126,227,193,0.4)" }
     : backup !== null && backup.chainRegistrationStatus === "registration-failed"
-      ? { color: "var(--err)", border: "rgba(220,80,80,0.4)" }
+      ? { color: "var(--err)", border: "rgba(var(--err-glow), 0.4)" }
       : { color: "var(--fg-100)", border: "var(--fg-700)" };
   return (
     <div
@@ -649,9 +737,9 @@ const errBox: CSSProperties = {
   fontSize: 11,
   color: "var(--err)",
   padding: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
   borderRadius: 8,
-  background: "rgba(220,80,80,0.08)",
+  background: "rgba(var(--err-glow), 0.08)",
   lineHeight: 1.5,
 };
 
@@ -742,8 +830,8 @@ const btnDangerGhost: CSSProperties = {
   width: "100%",
   padding: "8px 12px",
   borderRadius: 8,
-  border: "1px solid rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.06)",
+  border: "1px solid rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.06)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 11.5,
@@ -755,7 +843,7 @@ const btnDangerFlex: CSSProperties = {
   padding: "9px 10px",
   borderRadius: 8,
   border: "1px solid var(--err)",
-  background: "rgba(220,80,80,0.12)",
+  background: "rgba(var(--err-glow), 0.12)",
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 12,

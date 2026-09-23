@@ -63,6 +63,10 @@ export interface KeystoreStatus {
    *  cannot be opened — the locked screen shows "restore from your recovery
    *  phrase" instead of a password prompt. Absent/false in the normal case. */
   legacyRestoreRequired?: boolean;
+  /** Addresses recorded in that unopenable container, so the restore screen can
+   *  show what the user is about to leave behind. Only sent alongside
+   *  `legacyRestoreRequired`; `address` stays null in that state. */
+  legacyAddresses?: string[];
 }
 
 export interface SendTxView {
@@ -211,7 +215,7 @@ const SW_IDLE_ERROR_MARKERS = [
   "Could not establish connection",
 ];
 
-function isSwIdleError(message: string): boolean {
+export function isSwIdleError(message: string): boolean {
   return SW_IDLE_ERROR_MARKERS.some((m) => message.includes(m));
 }
 
@@ -248,6 +252,19 @@ const COALESCED_POPUP_OPS = new Set<string>([
   // #B3-2 indexer-off fallback: an idempotent read fired automatically by the
   // empty-state effect; coalesce so multiple mounts don't double-scan txFeed.
   "wallet-activity-txfeed",
+  // Every `useFeature` consumer reads this on mount, and one page mounts many:
+  // the gated surfaces themselves plus a `DevBadge` on each, so About and
+  // OperatorDirectory can reach ~9 apiece on top of App's 3. In MV3 each IPC can
+  // wake the service worker, so that was several wakes for one answer and badges
+  // resolving in sequence rather than together. They all mount in the same
+  // commit, so they are genuinely concurrent and collapse to ONE round-trip.
+  //
+  // Qualifies on both tests this allow-list applies: it is an idempotent READ
+  // (never a write), and it takes NO PAYLOAD — so the coalesce key is a constant
+  // and cannot embed a secret the way a password-taking op's would. Clearing on
+  // settle keeps a later mount a fresh read, and each consumer keeps its own
+  // storage listener, so live flag changes are unaffected.
+  "two-tier-get-state",
 ]);
 
 function send<T>(op: string, payload?: unknown): Promise<T> {
@@ -262,6 +279,104 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
   return p;
 }
 
+// DA-009: ops the transport must never resend. Same shape and same place as
+// COALESCED_POPUP_OPS above — one allowlist per policy, not a second mechanism.
+//
+// The retry below cannot tell "the SW never got it" from "the SW did it and
+// died before replying": both surface as the same idle/teardown error. For a
+// read that ambiguity is harmless — repeat it. For a destroy it means silently
+// issuing a second destroy request for work that may already be done, which is
+// not a decision a transport layer should be making on the user's behalf. The
+// user is on a confirm dialog for this op; a surfaced error they retry by hand
+// is the honest outcome — and for the destroy that has always held, because
+// `Wallets.tsx` `handleRemove` catches the throw and renders it. See the
+// per-op audit at the bottom of this block: "surfaced" is a property of the
+// CALL SITES, not of this list, and it has to be checked op by op.
+//
+// `wallet-send-tx` is the same defect on the money path, and worse, because a
+// resend is not a duplicate. `submitTrackedTx` picks the nonce with
+// `nextNonceHex` = max(committed, pending + 1) and records the used nonce on the
+// SUCCESS path only. So: sign N, broadcast, record N, worker dies before the
+// reply lands, the resend computes N+1 and broadcasts a SECOND VALID
+// transaction. Two nonces, two hashes — the chain cannot dedupe them, and the
+// funds move twice. Every ordinary value-moving popup flow rides this op (Send,
+// stake/unstake/redelegate, claim, auto-compound, agent funding), because they
+// all build calldata and submit through it.
+//
+// THIS IS A PARTIAL MITIGATION AND MUST NOT BE READ AS A FIX. It removes only
+// the AUTOMATIC, INVISIBLE resend. It does NOT close the path: the user now sees
+// a failure, presses send again, and the manual retry advances the nonce exactly
+// as the automatic one did. What is gained is the chance for a human to check
+// their activity before retrying — real, and partial.
+//
+// Closing it needs an idempotency token so a retry is recognisable as the same
+// logical send. That is planned separately; do not approximate it here.
+//
+// The same reasoning selects the other submit ops — but it SELECTS, it does not
+// sweep. The retry is the trigger; the pending-nonce tracker is the cause,
+// because it turns a retry from "same nonce, chain-rejected" into "next nonce,
+// accepted". An op therefore needs excluding only when BOTH hold: it rides this
+// retry, and it takes its nonce from `nextNonceHex`.
+//
+// Excluded on that test (all reach `nextNonceHex` through `submitTrackedTx`
+// with no `preferredNonceHex`):
+//   multisig-execute, wallet-name-register, wallet-name-propose,
+//   wallet-name-accept.
+//
+// DELIBERATELY LEFT ON THE RETRY, because a resend reuses the SAME nonce and the
+// chain rejects or dedupes it — for these two the retry is a real recovery and
+// removing it would trade a working one for a dropped submit:
+//   wallet-mrv-submit-plan — passes `preferredNonceHex` from the plan's
+//     build-time nonce, which the resend carries unchanged.
+//   native-multisig-send   — reads only the MONOM account's committed nonce and
+//     never routes through `submitTrackedTx`; its own comment records that a
+//     reused nonce is a chain-reject and therefore fail-safe.
+//
+// Same residual as the send op, for every entry here: this converts a silent
+// automatic double-submit into a visible failure the user can check before
+// retrying. It does NOT close the path — a manual retry advances the nonce
+// identically.
+//
+// "VISIBLE" IS A CLAIM ABOUT THE CALL SITES, AND IT WAS ONCE FALSE HERE.
+// Removing the auto-retry only converts an invisible resend into a visible
+// failure if the caller CATCHES the throw and RENDERS it. For a period the three
+// `wallet-name-*` ops did neither: their handlers had no try/catch, so the
+// rejection escaped to the console, and their in-flight state was read by no
+// render branch, so the confirm card silently reverted to a populated form. The
+// removal had traded a silent automatic double-submit for a silent nothing on
+// exactly the ops this comment named. Two of those three spend real LYTH.
+//
+// The mechanism that makes the claim true today — check it, do not assume it:
+// every popup call site of every op below wraps the await in try/catch and
+// renders the caught failure through `popup/submit-failure.ts`, which also keeps
+// an MV3 channel drop from being mis-reported as "nothing was sent" (the outcome
+// is genuinely unknown, and that is the one case where a retry can spend twice).
+//
+//   vault-remove             — Wallets.tsx        handleRemove
+//   wallet-send-tx           — Send.tsx           handleConfirm
+//                              Stake.tsx          delegate/undelegate/redelegate,
+//                                                 unstake-all, claim
+//                              Delegations.tsx    handleClaim
+//                              AutoCompoundSection.tsx confirm
+//                              AgentPolicy.tsx    handleRegister / handleRevoke
+//                              SlhDsaBackupCard.tsx handleRegisterOnChain
+//   multisig-execute         — Pending.tsx        handleAction
+//   wallet-name-register     — Names.tsx          doRegister
+//   wallet-name-propose      — Names.tsx          ProposeCard submit
+//   wallet-name-accept       — Names.tsx          AcceptCard submit
+//
+// ADDING AN OP HERE RE-OPENS THE DEFECT unless its call sites already do both.
+// Taking an op off the transport retry without a rendered failure does not make
+// the failure honest — it makes it invisible.
+const NO_RETRY_POPUP_OPS = new Set<string>([
+  "vault-remove",
+  "wallet-send-tx",
+  "multisig-execute",
+  "wallet-name-register",
+  "wallet-name-propose",
+  "wallet-name-accept",
+]);
+
 function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
   // Single retry against the MV3 idle/wake race. Pure transport-
   // level retry — application-level errors (`{ ok: false, ... }`
@@ -271,6 +386,9 @@ function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
     try {
       return (await rawSendMessage(envelope)) as T;
     } catch (e) {
+      // Checked inside the catch, so the success path is untouched: a call that
+      // does not throw never reaches this and behaves exactly as before.
+      if (NO_RETRY_POPUP_OPS.has(op)) throw e;
       const msg = (e as Error).message ?? "";
       if (!isSwIdleError(msg)) throw e;
       await new Promise((r) => setTimeout(r, 100));
@@ -689,10 +807,17 @@ export async function bgWalletNameQuote(
   return send("wallet-name-quote", { name, chainIdHex });
 }
 
+// The three name ops take an OPTIONAL `idempotencyKey`, identifying one user
+// confirmation so a retry re-broadcasts the bytes already signed instead of
+// deriving a second nonce. Each is spread in only when supplied — never as
+// `key: undefined` — so an unkeyed call puts the exact payload on the wire that
+// it always has. `bg.idempotency.test.ts` pins that shape.
+
 /** Register a Human/Agent `.mono` name — value == the exact U-curve cost. */
 export async function bgWalletNameRegister(
   name: string,
   chainIdHex: string,
+  idempotencyKey?: string,
 ): Promise<
   | {
       ok: true;
@@ -704,7 +829,11 @@ export async function bgWalletNameRegister(
     }
   | { ok: false; reason?: string; code?: number }
 > {
-  return send("wallet-name-register", { name, chainIdHex });
+  return send("wallet-name-register", {
+    name,
+    chainIdHex,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  });
 }
 
 /** Propose transferring an owned name to a recipient (free; opens a 24h window). */
@@ -712,22 +841,33 @@ export async function bgWalletNamePropose(
   name: string,
   recipientAddr0x: string,
   chainIdHex: string,
+  idempotencyKey?: string,
 ): Promise<
   | { ok: true; txHash: string; via?: string; canonical: string }
   | { ok: false; reason?: string; code?: number }
 > {
-  return send("wallet-name-propose", { name, recipientAddr0x, chainIdHex });
+  return send("wallet-name-propose", {
+    name,
+    recipientAddr0x,
+    chainIdHex,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  });
 }
 
 /** Accept a pending transfer — the recipient re-pays the full U-curve cost. */
 export async function bgWalletNameAccept(
   name: string,
   chainIdHex: string,
+  idempotencyKey?: string,
 ): Promise<
   | { ok: true; txHash: string; via?: string; canonical: string; costLythoshiHex: string }
   | { ok: false; reason?: string; code?: number }
 > {
-  return send("wallet-name-accept", { name, chainIdHex });
+  return send("wallet-name-accept", {
+    name,
+    chainIdHex,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  });
 }
 
 export interface OwnedNameRow {
@@ -1122,7 +1262,7 @@ export async function bgWsStatus(): Promise<
  *  After the first call, the SW writes the latest block hex to
  *  chrome.storage.session under `mono.ws.lastBlockHex` every time a
  *  head arrives. ChainStatusBanner watches that key for live updates
- *  without its 8 s polling fallback firing as often.
+ *  without its HEALTH_TICK_MS polling fallback firing as often.
  *
  *  Returns the WS-client status at the time of the call. The popup can
  *  use this as a hint whether to expect live updates or to keep its
@@ -1137,6 +1277,15 @@ export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
   chainIdHex: string;
+  /** Identifies one user CONFIRMATION, not one attempt — that distinction is
+   *  the whole mechanism. Retrying the same confirmation must carry the same
+   *  key so the SW re-broadcasts the bytes it already signed; going back to the
+   *  form and confirming again must mint a fresh one so a genuinely second send
+   *  takes the normal path and gets its own nonce.
+   *
+   *  Optional: omit it and the field never reaches the payload, so the SW sees
+   *  exactly the shape it always has. */
+  idempotencyKey?: string;
   /** Optional EVM calldata for contract calls; omit for native LYTH
    *  transfers. The SW forwards the bytes verbatim into the
    *  ML-DSA-65 envelope path; signing semantics are unchanged. */
@@ -1494,6 +1643,10 @@ export async function bgFocusApproval(id: string): Promise<{ focused: boolean }>
 }
 
 export interface ConnectedSiteRecord {
+  /** Popup-side mirror of the SW's record. See the note on
+   *  `background/connected-sites.ts`: this address is recorded only — no grant
+   *  check reads it, so a grant follows the connection rather than the account.
+   *  The Connected sites page sorts on `approvedAt` and ignores this field. */
   address: string;
   approvedAt: number;
 }
@@ -1931,6 +2084,111 @@ export async function bgVaultPubkey(
   return send("vault-pubkey", { vaultId });
 }
 
+// ---- Password-gated per-vault surface ----
+//
+// Both of these take the master password and are DELIBERATELY absent from
+// COALESCED_POPUP_OPS. Two independent reasons, either sufficient:
+//
+//   1. The coalesce key is `${op}|${JSON.stringify(payload)}`, so enrolling
+//      either op would place the PLAINTEXT PASSWORD into a Map key held in
+//      popup memory for the life of the request. No password-taking op is in
+//      that set today (keystore-unlock / -export-seed / -reset are all absent)
+//      and these two must not be the first.
+//   2. Coalescing is only ever sound for idempotent reads. `vault-remove` is a
+//      destructive write — two concurrent calls collapsing into one would
+//      return the first call's result to both callers, so a caller would
+//      believe it removed a wallet it did not. `vault-export-seed` returns a
+//      secret; sharing one in-flight promise between call sites widens where
+//      that secret lands for no benefit.
+
+/**
+ * Re-verify the master password without retrieving anything. Backs the Wallets
+ * page's entry gate.
+ *
+ * Deliberately NOT implemented as a seed export: using `bgVaultExportSeed` to
+ * answer "is this the right password" would pull a 24-word mnemonic into popup
+ * memory for a question that does not need it. The service worker re-derives
+ * the MEK and attempts the AEAD unwrap, then discards everything.
+ *
+ * Shares the lockout counters with every other password op, so the gate is not
+ * an unthrottled password oracle.
+ */
+export async function bgVaultVerifyPassword(
+  password: string,
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("vault-verify-password", { password });
+}
+
+/**
+ * Permanently remove one vault after re-verifying the master password.
+ * Wrong-password attempts share the SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL
+ * counters with `bgKeystoreUnlock`, so the brute-force lockout applies
+ * identically.
+ *
+ * Structural refusals — a locked container, an unknown id, and the last-vault
+ * guard — come back verbatim in `reason` rather than as `wrong_password`, and
+ * do NOT count against the lockout. `cannot remove the last vault …` is the
+ * one callers should special-case: route the user to Settings -> Reset wallet,
+ * which wipes cleanly, instead of leaving a dangling active vault.
+ *
+ * On success the SW broadcasts `accountsChanged` with the surviving active
+ * address.
+ */
+export async function bgVaultRemove(
+  password: string,
+  vaultId: string,
+): Promise<
+  | {
+      ok: true;
+      removedId: string;
+      newActiveVaultId: string;
+      newActiveAddress: string;
+      /** Labels of multisig wallets that listed the removed vault as a signer.
+       *  Those wallets keep their roster but lose the key that signs for it. */
+      affectedMultisigLabels: string[];
+    }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("vault-remove", { password, vaultId });
+}
+
+/**
+ * Re-auth and return a SPECIFIC vault's 24-word recovery phrase — the
+ * per-wallet counterpart to `bgKeystoreExportSeed`, which is fixed to the
+ * active vault. Same shared lockout counters.
+ *
+ * The returned phrase is not cached anywhere on this side of the boundary.
+ * Callers must hold it in component state only and drop it on unmount; it must
+ * never be persisted, logged, or written to storage.
+ */
+export async function bgVaultExportSeed(
+  password: string,
+  vaultId: string,
+): Promise<
+  | { ok: true; mnemonic: string }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("vault-export-seed", { password, vaultId });
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Proposal creation surface
 // ─────────────────────────────────────────────────────────────────────
@@ -2004,6 +2262,14 @@ export async function bgMultisigReject(args: {
 export async function bgMultisigExecute(args: {
   vaultId: string;
   proposalId: string;
+  /** Identifies one user CONFIRMATION of this execution, not one attempt.
+   *  Retrying the same confirmation must carry the same key so the SW
+   *  re-broadcasts the bytes it already signed instead of deriving a second
+   *  nonce; executing a different proposal mints a fresh one.
+   *
+   *  Optional: omit it and the field never reaches the payload, so the SW sees
+   *  exactly the shape it always has. */
+  idempotencyKey?: string;
 }): Promise<
   | { ok: true; txHash: string | null }
   | { ok: false; reason?: string }
@@ -2666,6 +2932,10 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
   vaultId: string;
   publicKeyHex: string;
   chainIdHex: string;
+  /** Identifies one user CONFIRMATION of this registration. Forwarded verbatim
+   *  to the send op so a retry re-broadcasts the bytes already signed instead of
+   *  deriving a second nonce. Omitted → the payload is byte-identical to before. */
+  idempotencyKey?: string;
 }): Promise<
   | { ok: true; txHash: string; backup: SlhDsaBackup | null }
   | { ok: false; reason: string }
@@ -2685,6 +2955,9 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
     chainIdHex: args.chainIdHex,
     executionUnitLimitHex: tx.executionUnitLimitHex,
     opKind: "emergency-key",
+    ...(args.idempotencyKey !== undefined
+      ? { idempotencyKey: args.idempotencyKey }
+      : {}),
   });
 
   if (!submit.ok) {

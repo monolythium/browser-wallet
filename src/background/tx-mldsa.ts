@@ -180,8 +180,9 @@ const SUBMIT_METHOD = "mesh_submitTx";
  *  admission decision about a tx (propagate — every operator answers the same). */
 const UPSTREAM_UNAVAILABLE_CODE = -32047;
 /** D1: cap read-failover attempts so one bad call doesn't walk the whole fleet
- *  (the v0.4.0 four-cluster DVT set; its exact size comes from the SDK registry
- *  and can change) — after this many failover-band errors, surface the last one. */
+ *  (the configured operator list — the SDK-published defaults, or the user's
+ *  override; its size can change) — after this many failover-band errors,
+ *  surface the last one. */
 const READ_FAILOVER_ATTEMPT_CAP = 4;
 /** D2: how long a read-failover-band error deprioritizes an operator (soft, in
  *  memory) so subsequent reads try healthier operators first. Never a hard
@@ -667,7 +668,14 @@ export interface NameResolveConsensusResult {
 /** Minimum genesis-trusted operators that must agree before a name resolution
  *  is trusted for a SIGNED recipient. ≥2 so no single operator is the sole
  *  authority: a lone roge is outvoted (→ disagreement → fail-closed), and a
- *  rogue that is the ONLY responder fails the quorum (→ insufficient). */
+ *  rogue that is the ONLY responder fails the quorum (→ insufficient).
+ *
+ *  DO NOT LOWER THIS TO 1. When the configured list holds a single operator the
+ *  quorum cannot be met and resolution returns `insufficient` — that is the
+ *  DESIGNED-SAFE outcome, not a bug to fix. At 1, one rogue or on-path operator
+ *  could return a false owner address and have it signed as the recipient,
+ *  which is precisely what this threshold exists to prevent. More operators,
+ *  not a lower threshold, is what makes name resolution succeed again. */
 const NAME_RESOLVE_QUORUM_MIN = 2;
 
 export async function testnetResolveNameConsensus(
@@ -976,6 +984,49 @@ function stampSubmitError(
   return err;
 }
 
+/**
+ * Mark a broadcast failure whose signed bytes MAY ALREADY BE ON THE NETWORK.
+ *
+ * `transient` is NOT a decline. It is returned in four places, and in every one
+ * the signed bytes had already been handed to `fetch`: a throwing fetch, a
+ * non-OK response, an unparseable body, and a bare (non-mempool) error body. The
+ * last three prove the request reached the operator and a response came back —
+ * an admission followed by a proxy error looks exactly like this.
+ *
+ * `reject` and `mailbox-full` ARE declines: the operator said it did not take
+ * this transaction. Only `transient` is an absence of information, and absence
+ * of information is not evidence of non-admission.
+ *
+ * WHY THIS EXISTS. A caller that discards a signed transaction on failure must
+ * not discard it here. One operator admitting is enough for the transaction to
+ * be live and gossiping, so a later attempt that signs afresh at the next nonce
+ * is a SECOND transaction — the funds move twice.
+ *
+ * Like `markPostVerificationFailure`, this is a POSITIVE signal tied to the
+ * raise site rather than a message match: the property is true because of WHERE
+ * it is raised, which no message can capture.
+ *
+ * It carries a BOOLEAN and nothing else — no wire bytes, no hash, no operator
+ * payload. Handlers surface `(e as Error).message` only, so it never crosses the
+ * IPC boundary.
+ */
+export function markBytesMayBeLive(err: unknown): unknown {
+  if (err && typeof err === "object") {
+    (err as { bytesMayBeLive?: boolean }).bytesMayBeLive = true;
+  }
+  return err;
+}
+
+/** True when a failed broadcast may already have reached an operator, so its
+ *  signed bytes must be kept rather than discarded. */
+export function bytesMayBeLive(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as { bytesMayBeLive?: boolean }).bytesMayBeLive === true
+  );
+}
+
 /** Submit the SAME signed bytes to ONE operator and classify the response. Never
  *  throws (all faults become an outcome) so the parallel fan-out can aggregate.
  *  The echoed canonical hash is validated per operator — a wallet never trusts a
@@ -1113,9 +1164,18 @@ export async function broadcastPlaintextTransaction(
     (o): o is Extract<FanoutOutcome, { kind: "reject" }> => o.kind === "reject",
   );
   if (rejects.length === targets.length) {
+    // Every operator refused ADMISSION of this exact tx. Nothing was taken, so
+    // the bytes are genuinely dead and a caller may discard them.
     throw rejects[0]!.err;
   }
-  throw new Error("no Monolythium Testnet operator accepted the broadcast");
+  // Reached when at least one outcome was not a reject — i.e. `transient` or
+  // `mailbox-full`. Only `transient` means the bytes may have been admitted
+  // without us learning; `mailbox-full` is the operator saying it did not take
+  // them, so a set of rejects + mailbox-full is still genuinely dead.
+  const err = new Error("no Monolythium Testnet operator accepted the broadcast");
+  throw settled.some((o) => o.kind === "transient")
+    ? markBytesMayBeLive(err)
+    : err;
 }
 
 /** One-shot PLAINTEXT helper used by the service worker — the tx path on the
@@ -1150,9 +1210,45 @@ export async function submitMlDsaTx(
   via: string;
   innerSighashHex: string;
 }> {
+  return submitMlDsaTxWithHooks(req, boundVaultId);
+}
+
+/**
+ * `submitMlDsaTx` with a hook between SIGNING and BROADCAST.
+ *
+ * The hook exists so a caller can persist the signed bytes BEFORE they reach
+ * the chain. That ordering is the whole point: if the worker dies at any moment
+ * from here on, the bytes are already recoverable, and a retry re-broadcasts
+ * THEM rather than deriving a new nonce and signing a second transaction.
+ *
+ * Identical to `submitMlDsaTx` when no hook is passed — same front-door guard,
+ * same build, same broadcast, same return — so the unhooked path is unchanged.
+ *
+ * The hook must not mutate `built`; it is handed the bytes that are about to be
+ * broadcast, not a chance to alter them. If it throws, the broadcast never
+ * happens, which is the safe direction: no transaction exists to be orphaned.
+ */
+export async function submitMlDsaTxWithHooks(
+  req: EthSendTxFields,
+  boundVaultId: string,
+  onBuilt?: (built: {
+    signedTxWireHex: string;
+    innerTxHashHex: string;
+  }) => Promise<void>,
+): Promise<{
+  txHash: string;
+  via: string;
+  innerSighashHex: string;
+}> {
   // Front-door guard (defense in depth; also enforced at the sign point in
   // buildPlaintextSubmission): a native multisig (0x40) tx must never reach the
   // full-sighash single-key path — it would be chain-rejected.
   assertNoMultisigExtension(req);
-  return submitPlaintextMlDsaTx(req, boundVaultId);
+  const built = await buildPlaintextSubmission({ txReq: req, boundVaultId });
+  if (onBuilt !== undefined) await onBuilt(built);
+  const { txHash, via } = await broadcastPlaintextTransaction(
+    built.signedTxWireHex,
+    built.innerTxHashHex,
+  );
+  return { txHash, via, innerSighashHex: built.innerSighashHex };
 }

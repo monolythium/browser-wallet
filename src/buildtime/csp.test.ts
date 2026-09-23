@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { getRpcEndpoints } from "@monolythium/core-sdk";
 
-import { buildExtensionCsp, applyHardenedCsp } from "./csp.js";
+import { buildExtensionCsp, applyHardenedCsp, LOOPBACK_SOURCES } from "./csp.js";
+
+/** The `connect-src` source expressions of a CSP string. */
+function connectTokens(csp: string): string[] {
+  return (csp.split("connect-src ")[1] ?? "")
+    .split(";")[0]!
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+}
 
 describe("buildExtensionCsp — strict prod connect-src (P6-001 drift guard)", () => {
   const endpoints = getRpcEndpoints("testnet-69420");
@@ -39,12 +47,38 @@ describe("buildExtensionCsp — strict prod connect-src (P6-001 drift guard)", (
         ws_url: "wss://rpc.monolythium.com/ws",
       }),
     ]);
-    expect(csp).not.toMatch(/connect-src[^;]*(?:http:\/\/|ws:\/\/)/);
+    // Was: no `http://` or `ws://` anywhere in connect-src. The directive now
+    // carries loopback plaintext by design (a local node serves no TLS), so the
+    // assertion narrows to what it was always about — no plaintext origin
+    // reachable OFF this machine. Strictly stronger than a substring ban:
+    // every plaintext token must be an approved loopback source.
+    for (const token of connectTokens(csp)) {
+      if (!/^(http|ws):\/\//.test(token)) continue;
+      expect(LOOPBACK_SOURCES).toContain(token);
+    }
   });
 
-  it("contains NO wildcard and no bare scheme-source (containment intact)", () => {
+  it("permits the approved loopback sources, and only those", () => {
+    for (const source of LOOPBACK_SOURCES) expect(csp).toContain(source);
+    // No TLS form: a node on this machine does not serve https/wss, so those
+    // were not approved and must not appear.
+    expect(csp).not.toContain("https://localhost");
+    expect(csp).not.toContain("wss://localhost");
+    expect(csp).not.toContain("https://127.0.0.1");
+  });
+
+  it("contains no wildcard HOST and no bare scheme-source (containment intact)", () => {
     const connect = csp.split("connect-src ")[1] ?? "";
-    expect(connect).not.toContain("*");
+    // Was: no "*" at all. The approved loopback sources carry a PORT wildcard
+    // (a node runs where its owner puts it), so the ban narrows to a wildcard
+    // HOST — `http://*` / `http://*:8545` — which is the form that would match
+    // arbitrary hosts and void the containment. A port wildcard on a fixed
+    // loopback host matches nothing off this machine.
+    expect(connect).not.toMatch(/(^|\s)[a-z]+:\/\/\*/);
+    for (const token of connectTokens(csp)) {
+      if (!token.includes("*")) continue;
+      expect(LOOPBACK_SOURCES).toContain(token);
+    }
     expect(connect).not.toMatch(/(^|\s)https?:(\s|$)/);
     expect(connect).not.toMatch(/(^|\s)wss?:(\s|$)/);
   });

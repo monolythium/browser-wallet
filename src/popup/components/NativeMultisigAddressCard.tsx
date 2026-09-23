@@ -23,9 +23,15 @@ import type { CSSProperties } from "react";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes, bytesToHex } from "@monolythium/core-sdk/crypto";
 
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
 import { deriveNativeMultisigAddress } from "../../shared/native-multisig.js";
 import type { MultisigVaultMeta } from "../../shared/multisig.js";
 import { bech32mDisplay } from "../../shared/bech32m.js";
+import { DevBadge } from "./DevBadge.js";
 import { parseHexQuantity, lythoshiToLythDecimal } from "../../shared/native-amount.js";
 import { formatLythDecimalDisplay } from "../../shared/lyth-units.js";
 import { lythToLythoshi } from "../../shared/spending-policy-tx.js";
@@ -134,7 +140,13 @@ export function NativeMultisigAddressCardView({
 }) {
   return (
     <div style={cardStyle}>
-      <div style={sectionLabelStyle}>{NATIVE_MULTISIG_HEADING}</div>
+      {/* The only in-app mount of this view is behind the wrapper's
+          `if (!devMode) return null`, so the marker cannot reach a user who
+          has developer mode off. */}
+      <div style={sectionLabelStyle}>
+        {NATIVE_MULTISIG_HEADING}
+        <DevBadge />
+      </div>
       {!result.ok ? (
         <div style={cannotDeriveStyle}>{NATIVE_MULTISIG_CANNOT_DERIVE_COPY}</div>
       ) : (
@@ -247,7 +259,9 @@ function NativeMultisigSendForm({
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [result, setResult] = useState<
+    { ok: true; text: string } | { ok: false; failure: SubmitFailure } | null
+  >(null);
 
   const submit = () => {
     setBusy(true);
@@ -257,18 +271,31 @@ function NativeMultisigSendForm({
       try {
         valueWeiHex = "0x" + lythToLythoshi(amount.trim() || "0").toString(16);
       } catch {
-        setResult({ ok: false, text: "Invalid amount." });
+        setResult({ ok: false, failure: verbatimFailure(undefined, "Invalid amount.") });
         setBusy(false);
         return;
       }
-      const r = await bgNativeMultisigSend({
-        vaultId,
-        to: to.trim(),
-        valueWeiHex,
-        chainIdHex: chainId,
-      });
-      setResult(r.ok ? { ok: true, text: `Broadcast: ${r.txHash}` } : { ok: false, text: r.reason ?? "Send failed." });
-      setBusy(false);
+      try {
+        const r = await bgNativeMultisigSend({
+          vaultId,
+          to: to.trim(),
+          valueWeiHex,
+          chainIdHex: chainId,
+        });
+        setResult(
+          r.ok
+            ? { ok: true, text: `Broadcast: ${r.txHash}` }
+            : { ok: false, failure: verbatimFailure(r.reason, "Send failed.") },
+        );
+      } catch (e) {
+        // Previously uncaught: neither setResult nor setBusy ran, so the button
+        // stayed disabled on "Broadcasting…" for good with both inputs frozen and
+        // no error anywhere. This op moves value, so a stuck form with no
+        // explanation is the worst combination on this card.
+        setResult({ ok: false, failure: submitThrowFailure(e) });
+      } finally {
+        setBusy(false);
+      }
     })();
   };
 
@@ -310,7 +337,18 @@ function NativeMultisigSendForm({
             color: result.ok ? "var(--fg-200)" : "var(--err)",
           }}
         >
-          {result.text}
+          {result.ok ? (
+            result.text
+          ) : (
+            <>
+              {result.failure.headline !== null && (
+                <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                  {result.failure.headline}
+                </div>
+              )}
+              {result.failure.body}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -421,8 +459,8 @@ const sendFormStyle: CSSProperties = {
   marginTop: 10,
   padding: 10,
   borderRadius: 8,
-  border: "1px dashed rgba(220,80,80,0.4)",
-  background: "rgba(220,80,80,0.05)",
+  border: "1px dashed rgba(var(--err-glow), 0.4)",
+  background: "rgba(var(--err-glow), 0.05)",
 };
 const sendUnverifiedStyle: CSSProperties = {
   fontSize: 10.5,

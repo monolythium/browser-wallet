@@ -25,6 +25,7 @@
 
 import { useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { DevBadge } from "../components/DevBadge";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgBuildSpendingPolicyClaim,
@@ -481,6 +482,7 @@ export function AgentPolicy({
                   : step === "success"
                     ? "Done"
                     : "Error"}
+          <DevBadge />
         </div>
         <div style={{ width: 36 }} />
       </div>

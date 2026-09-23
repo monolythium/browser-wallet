@@ -25,6 +25,12 @@ import {
   bgMultisigSign,
   bgVaultMultisigMeta,
 } from "../bg";
+import { multisigExecuteKeyParams, nextSendKey, type SendKeyState } from "../send-key";
+import {
+  submitThrowFailure,
+  verbatimFailure,
+  type SubmitFailure,
+} from "../submit-failure";
 
 export interface PendingProps {
   /** The multisig vault whose proposal queue this page renders. */
@@ -39,7 +45,18 @@ export function Pending({ vaultId, onBack }: PendingProps) {
   const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SubmitFailure | null>(null);
+  // The key in flight for the CURRENT execute, and the proposal it was minted
+  // against. Execute is the only op here that moves funds; sign and reject write
+  // local metadata and never reach a submit.
+  const [sendKey, setSendKey] = useState<SendKeyState>(null);
+  // Which proposal's EXECUTE produced the error on screen, if any.
+  //
+  // Without this, an export or sign failure occurring while an execute key is
+  // still held would render a "Try again" button that EXECUTES the proposal —
+  // an affordance describing one failure and performing a different, funds-
+  // moving operation. Cleared at the start of every action.
+  const [failedExecuteId, setFailedExecuteId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [exportBlob, setExportBlob] = useState<{
     id: string;
@@ -62,25 +79,59 @@ export function Pending({ vaultId, onBack }: PendingProps) {
     return () => clearInterval(t);
   }, []);
 
+  // `opts.retry` is a PARAMETER rather than state: the Try-again button calls
+  // straight back into this, and a `setState` immediately before a synchronous
+  // call is still unapplied when the handler reads it — which would silently
+  // mint a fresh key and defeat the mechanism.
   const handleAction = async (
     proposalId: string,
     op: "sign" | "reject" | "execute",
+    opts?: { retry?: boolean },
   ) => {
     if (busyId !== null) return;
     setBusyId(proposalId);
     setError(null);
+    setFailedExecuteId(null);
     try {
-      const r =
-        op === "sign"
-          ? await bgMultisigSign({ vaultId, proposalId })
-          : op === "reject"
-            ? await bgMultisigReject({ vaultId, proposalId })
-            : await bgMultisigExecute({ vaultId, proposalId });
+      if (op === "sign" || op === "reject") {
+        // Local metadata only — no submit, so no key.
+        const r =
+          op === "sign"
+            ? await bgMultisigSign({ vaultId, proposalId })
+            : await bgMultisigReject({ vaultId, proposalId });
+        if (!r.ok) setError(verbatimFailure(r.reason, `${op} failed`));
+        return;
+      }
+      const keyParams = multisigExecuteKeyParams(vaultId, proposalId);
+      const keyDecision = nextSendKey(
+        sendKey,
+        opts?.retry === true ? "retry" : "submit",
+        keyParams,
+        () => crypto.randomUUID(),
+      );
+      setSendKey(keyDecision.next);
+      const r = await bgMultisigExecute({
+        vaultId,
+        proposalId,
+        ...(keyDecision.use !== null
+          ? { idempotencyKey: keyDecision.use }
+          : {}),
+      });
       if (!r.ok) {
-        setError(r.reason ?? `${op} failed`);
+        setError(verbatimFailure(r.reason, "execute failed"));
+        setFailedExecuteId(proposalId);
+      } else {
+        // Released, so a genuine later execute of another proposal is
+        // independent rather than replaying this one.
+        setSendKey(null);
       }
     } catch (e) {
-      setError((e as Error).message ?? `${op} failed`);
+      // The call THREW, so nothing replied. `submitThrowFailure` separates a
+      // chain refusal from an MV3 channel drop, where the transaction may
+      // already have been broadcast — the one case where a retry can spend
+      // twice, and the reason the key above matters most here.
+      setError(submitThrowFailure(e));
+      if (op === "execute") setFailedExecuteId(proposalId);
     } finally {
       setBusyId(null);
       await refresh();
@@ -98,10 +149,10 @@ export function Pending({ vaultId, onBack }: PendingProps) {
       if (r.ok) {
         setExportBlob({ id: proposalId, blob: r.blob });
       } else {
-        setError(r.reason ?? "export failed");
+        setError(verbatimFailure(r.reason, "export failed"));
       }
     } catch (e) {
-      setError((e as Error).message ?? "export failed");
+      setError(submitThrowFailure(e));
     }
   };
 
@@ -110,17 +161,34 @@ export function Pending({ vaultId, onBack }: PendingProps) {
     try {
       const r = await bgMultisigImportProposal({ vaultId, blob });
       if (!r.ok) {
-        setError(r.reason ?? "import failed");
+        setError(verbatimFailure(r.reason, "import failed"));
         return false;
       }
       setImportOpen(false);
       await refresh();
       return true;
     } catch (e) {
-      setError((e as Error).message ?? "import failed");
+      setError(submitThrowFailure(e));
       return false;
     }
   };
+
+  // The proposal a Try-again would execute, or null for no affordance. Three
+  // conditions, all required:
+  //   - the error on screen came from an EXECUTE (not a sign/export/import),
+  //   - a key is still held, so the retry actually replays rather than minting,
+  //   - the key was minted against a proposal STILL in the list.
+  // The last is checked by the same params comparison `nextSendKey` makes, so a
+  // key that no longer matches anything offers nothing rather than retrying the
+  // wrong proposal.
+  const retryTargetId =
+    failedExecuteId === null || sendKey === null
+      ? null
+      : (meta?.proposals.find(
+          (p) =>
+            p.id === failedExecuteId &&
+            multisigExecuteKeyParams(vaultId, p.id) === sendKey.params,
+        )?.id ?? null);
 
   return (
     <>
@@ -171,6 +239,16 @@ export function Pending({ vaultId, onBack }: PendingProps) {
             error={error}
             onAction={(id, op) => void handleAction(id, op)}
             onExport={(id) => void handleExport(id)}
+            // Only an execute is retryable through the mechanism, and only while
+            // a key is held — after a popup restart `sendKey` is null, so this
+            // is absent and the failure renders without an affordance the
+            // mechanism could not honour.
+            onRetryExecute={
+              retryTargetId !== null
+                ? (id: string) => void handleAction(id, "execute", { retry: true })
+                : undefined
+            }
+            retryTargetId={retryTargetId}
           />
         )}
         {importOpen && (
@@ -269,7 +347,7 @@ function ExportBlobModal({ blob, onClose }: ExportBlobModalProps) {
 interface ImportBlobModalProps {
   onCancel: () => void;
   onImport: (blob: string) => Promise<boolean>;
-  error: string | null;
+  error: SubmitFailure | null;
 }
 
 function ImportBlobModal({ onCancel, onImport, error }: ImportBlobModalProps) {
@@ -327,20 +405,7 @@ function ImportBlobModal({ onCancel, onImport, error }: ImportBlobModalProps) {
             boxSizing: "border-box",
           }}
         />
-        {error && (
-          <div
-            style={{
-              padding: "8px 10px",
-              borderRadius: 8,
-              background: "rgba(255,90,95,0.08)",
-              border: "1px solid rgba(255,90,95,0.4)",
-              color: "var(--err)",
-              fontSize: 11.5,
-            }}
-          >
-            {error}
-          </div>
-        )}
+        {error && <FailureBox failure={error} />}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button
             type="button"
@@ -391,13 +456,59 @@ const modalStyle: CSSProperties = {
   gap: 10,
 };
 
+/** The page's existing error box, given the two-line shape `SubmitFailure` uses
+ *  (optional bold lead + detail). A `{ ok: false }` reply has no headline and
+ *  renders exactly as it did before; a classified throw adds one. */
+function FailureBox({
+  failure,
+  onRetry,
+}: {
+  failure: SubmitFailure;
+  /** Adds the retry affordance — the same "Try again" control the other
+   *  converted surfaces use. Its press is what tells the mechanism this is a
+   *  retry of the attempt described above, rather than a fresh confirmation it
+   *  cannot distinguish. */
+  onRetry?: () => void;
+}) {
+  return (
+    <div
+      style={{
+        padding: "8px 10px",
+        borderRadius: 8,
+        background: "rgba(255,90,95,0.08)",
+        border: "1px solid rgba(255,90,95,0.4)",
+        color: "var(--err)",
+        fontSize: 11.5,
+      }}
+    >
+      {failure.headline !== null && (
+        <div style={{ fontWeight: 600, marginBottom: 3 }}>{failure.headline}</div>
+      )}
+      {failure.body}
+      {onRetry !== undefined && (
+        <button
+          onClick={onRetry}
+          className="ext-act prim-soft"
+          style={{ marginTop: 8, padding: 8, width: "100%" }}
+        >
+          Try again
+        </button>
+      )}
+    </div>
+  );
+}
+
 interface ProposalListProps {
   meta: MultisigVaultMeta;
   now: number;
   busyId: string | null;
-  error: string | null;
+  error: SubmitFailure | null;
   onAction: (id: string, op: "sign" | "reject" | "execute") => void;
   onExport: (id: string) => void;
+  /** Present only while a key is held for an execute that failed. */
+  onRetryExecute?: ((id: string) => void) | undefined;
+  /** The proposal that key belongs to, or null when it matches none. */
+  retryTargetId?: string | null;
 }
 
 function ProposalList({
@@ -407,6 +518,8 @@ function ProposalList({
   error,
   onAction,
   onExport,
+  onRetryExecute,
+  retryTargetId,
 }: ProposalListProps) {
   const sorted = [...meta.proposals].sort((a, b) => {
     const ba = bucket(a, meta.threshold, now);
@@ -418,18 +531,12 @@ function ProposalList({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {error && (
-        <div
-          style={{
-            padding: "8px 10px",
-            borderRadius: 8,
-            background: "rgba(255,90,95,0.08)",
-            border: "1px solid rgba(255,90,95,0.4)",
-            color: "var(--err)",
-            fontSize: 11.5,
-          }}
-        >
-          {error}
-        </div>
+        <FailureBox
+          failure={error}
+          {...(onRetryExecute !== undefined && retryTargetId !== null && retryTargetId !== undefined
+            ? { onRetry: () => onRetryExecute(retryTargetId) }
+            : {})}
+        />
       )}
       {sorted.map((p) => (
         <ProposalCard
