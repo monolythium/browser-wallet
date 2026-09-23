@@ -155,6 +155,37 @@ describe("storage wrappers", () => {
     expect(await readSendBinding("k1", T0 + 1)).toEqual(bindingAt(T0));
   });
 
+  it("preserves both bindings when different confirmations write concurrently", async () => {
+    await Promise.all([
+      writeSendBinding("k1", bindingAt(T0)),
+      writeSendBinding("k2", bindingAt(T0)),
+    ]);
+    expect(Object.keys(local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap).sort()).toEqual(["k1", "k2"]);
+  });
+
+  it("refuses a failed storage read instead of treating it as an absent binding", async () => {
+    const runtime: { lastError?: { message: string } } = {};
+    chrome.runtime = runtime as typeof chrome.runtime;
+    chrome.storage.local.get = ((_keys: string[], cb: (r: Record<string, unknown>) => void) => {
+      runtime.lastError = { message: "read failed" };
+      cb({});
+      delete runtime.lastError;
+    }) as typeof chrome.storage.local.get;
+    await expect(readSendBinding("k1", T0)).rejects.toThrow("failed to read send bindings");
+  });
+
+  it("refuses a failed storage write instead of claiming the signed bytes were saved", async () => {
+    const runtime: { lastError?: { message: string } } = {};
+    chrome.runtime = runtime as typeof chrome.runtime;
+    chrome.storage.local.set = ((_items: Record<string, unknown>, cb: () => void) => {
+      runtime.lastError = { message: "write failed" };
+      cb();
+      delete runtime.lastError;
+    }) as typeof chrome.storage.local.set;
+    await expect(writeSendBinding("k1", bindingAt(T0))).rejects.toThrow("failed to persist send bindings");
+    expect(local[STORAGE_KEY_SEND_BINDINGS]).toBeUndefined();
+  });
+
   it("stores ONLY signed-transaction fields — never a password or mnemonic", async () => {
     // The binding is written to DISK. Pin its shape so no future field can
     // smuggle a secret into local storage. Every key here is a public chain
@@ -392,6 +423,50 @@ describe("withSendBinding — never re-signs when a binding already exists", () 
     expect(stored.wireHex).toBe("");
     expect(stored.txHashHex).toBe("0xfresh");
     expect(stored.from).toBe("0xsender");
+  });
+
+  it("keeps signed bytes if completion storage fails after broadcast", async () => {
+    const runtime: { lastError?: { message: string } } = {};
+    chrome.runtime = runtime as typeof chrome.runtime;
+    let writes = 0;
+    chrome.storage.local.set = ((items: Record<string, unknown>, cb: () => void) => {
+      writes += 1;
+      if (writes === 2) runtime.lastError = { message: "completion failed" };
+      else Object.assign(local, items);
+      cb();
+      delete runtime.lastError;
+    }) as typeof chrome.storage.local.set;
+
+    await expect(withSendBinding({
+      key: KEY,
+      expectedDigest: DIGEST_A,
+      now: () => T0,
+      rebroadcast: vi.fn(),
+      bytesMayBeLive,
+      submit: submitter(),
+    })).rejects.toThrow("failed to persist send bindings");
+    expect(writes).toBe(2);
+    expect((local[STORAGE_KEY_SEND_BINDINGS] as SendBindingMap)[KEY]?.wireHex).toBe(WIRE_PAYING_A);
+  });
+
+  it("serializes duplicate confirmations so only one transaction is signed", async () => {
+    let finish!: () => void;
+    const broadcasting = new Promise<void>((resolve) => { finish = resolve; });
+    const submit = vi.fn(async (bind: (f: typeof fields) => Promise<void>) => {
+      await bind(fields);
+      await broadcasting;
+      return { txHash: "0xfresh", via: "op-1", nonceHex: fields.nonceHex };
+    });
+    const args = { key: KEY, expectedDigest: DIGEST_A, now: () => T0, rebroadcast: vi.fn(), bytesMayBeLive, submit };
+    const first = withSendBinding(args);
+    const second = withSendBinding(args);
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    finish();
+    expect(await Promise.all([first, second])).toEqual([
+      { txHash: "0xfresh", via: "op-1", nonceHex: fields.nonceHex },
+      { txHash: "0xfresh", via: "op-1", nonceHex: fields.nonceHex },
+    ]);
+    expect(submit).toHaveBeenCalledTimes(1);
   });
 
   it("REPLAYS stored bytes without calling submit — nothing is signed again", async () => {

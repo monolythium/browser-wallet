@@ -112,6 +112,37 @@ export class SendBindingMismatchError extends Error {
 
 export type SendBindingMap = Record<string, SendBinding>;
 
+// Storage holds one map, so every read-modify-write must be serialized. Two
+// different confirmations otherwise can each read the old map and the later
+// write can erase the first confirmation's signed bytes.
+let storeTail: Promise<void> = Promise.resolve();
+function withStoreLock<T>(work: () => Promise<T>): Promise<T> {
+  const result = storeTail.then(work);
+  storeTail = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+// A duplicate message for the same confirmation must wait through the first
+// submit, not merely through its storage write. Otherwise both can see no
+// binding and both can sign before either reaches the bind hook.
+const confirmationTails = new Map<string, Promise<void>>();
+async function withConfirmationLock<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const previous = confirmationTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => gate);
+  confirmationTails.set(key, tail);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (confirmationTails.get(key) === tail) confirmationTails.delete(key);
+  }
+}
+
 /** True only for a fully-formed binding. A truncated or partially-written entry
  *  must never be handed back — re-broadcasting an incomplete transaction is
  *  worse than taking the normal path. */
@@ -173,8 +204,13 @@ export function pruneExpired(map: SendBindingMap, now: number): SendBindingMap {
 }
 
 async function loadMap(): Promise<SendBindingMap> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     chrome.storage.local.get([STORAGE_KEY_SEND_BINDINGS], (res) => {
+      const error = chrome.runtime?.lastError;
+      if (error) {
+        reject(new Error(`failed to read send bindings: ${error.message}`));
+        return;
+      }
       const raw = res?.[STORAGE_KEY_SEND_BINDINGS];
       resolve(raw && typeof raw === "object" ? (raw as SendBindingMap) : {});
     });
@@ -182,8 +218,15 @@ async function loadMap(): Promise<SendBindingMap> {
 }
 
 async function saveMap(map: SendBindingMap): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ [STORAGE_KEY_SEND_BINDINGS]: map }, () => resolve());
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [STORAGE_KEY_SEND_BINDINGS]: map }, () => {
+      const error = chrome.runtime?.lastError;
+      if (error) {
+        reject(new Error(`failed to persist send bindings: ${error.message}`));
+        return;
+      }
+      resolve();
+    });
   });
 }
 
@@ -200,17 +243,21 @@ export async function writeSendBinding(
   key: string,
   binding: SendBinding,
 ): Promise<void> {
-  const map = await loadMap();
-  await saveMap(withBinding(pruneExpired(map, binding.ts), key, binding));
+  await withStoreLock(async () => {
+    const map = await loadMap();
+    await saveMap(withBinding(pruneExpired(map, binding.ts), key, binding));
+  });
 }
 
 /** Drop `key` — used when a send FAILED to broadcast, so the signed bytes do
  *  not sit on disk waiting for the TTL. On the success path use
  *  {@link completeSendBinding} instead; see the note there. */
 export async function deleteSendBinding(key: string): Promise<void> {
-  const map = await loadMap();
-  if (!(key in map)) return;
-  await saveMap(withoutBinding(map, key));
+  await withStoreLock(async () => {
+    const map = await loadMap();
+    if (!(key in map)) return;
+    await saveMap(withoutBinding(map, key));
+  });
 }
 
 /**
@@ -235,24 +282,26 @@ export async function completeSendBinding(
   via: string,
   now: number,
 ): Promise<void> {
-  const map = await loadMap();
-  const existing = map[key];
-  if (existing === undefined) return;
-  // PRESERVE the record and override only what completion changes. This was a
-  // field-by-field rebuild, which silently dropped anything not named here — so
-  // a field could survive the bind and vanish at completion, and the completed
-  // stub is exactly what an account-level lookup reads ("did my send land?").
-  // The spread fixes the PATTERN: every future field is carried without anyone
-  // having to remember to add it.
-  await saveMap(
-    withBinding(map, key, {
-      ...existing,
-      wireHex: "",
-      txHashHex,
-      via,
-      ts: now,
-    }),
-  );
+  await withStoreLock(async () => {
+    const map = await loadMap();
+    const existing = map[key];
+    if (existing === undefined) return;
+    // PRESERVE the record and override only what completion changes. This was a
+    // field-by-field rebuild, which silently dropped anything not named here — so
+    // a field could survive the bind and vanish at completion, and the completed
+    // stub is exactly what an account-level lookup reads ("did my send land?").
+    // The spread fixes the PATTERN: every future field is carried without anyone
+    // having to remember to add it.
+    await saveMap(
+      withBinding(map, key, {
+        ...existing,
+        wireHex: "",
+        txHashHex,
+        via,
+        ts: now,
+      }),
+    );
+  });
 }
 
 /** True once the send behind this binding has landed — the bytes are gone and
@@ -305,7 +354,7 @@ export interface SendBindingResult {
  *
  * NEVER RE-SIGNS: `submit` is invoked only when no live binding was found.
  */
-export async function withSendBinding(args: {
+async function runWithSendBinding(args: {
   key: string;
   /** Digest of the transaction the caller is about to submit, from
    *  `sendIntentDigest`. Compared against the stored one before anything is
@@ -418,10 +467,12 @@ export async function withSendBinding(args: {
     return { ...replay, nonceHex: bound.nonceHex };
   }
 
+  let accepted = false;
   try {
     const result = await submit(async (fields) => {
       await writeSendBinding(key, { ...fields, via: "", ts: now() });
     });
+    accepted = true;
     // Drop the wire bytes, keep the hash — see completeSendBinding.
     await completeSendBinding(key, result.txHash, result.via, now());
     return result;
@@ -440,7 +491,15 @@ export async function withSendBinding(args: {
     // been kept only means the retry re-broadcasts bytes the chain never saw,
     // which is exactly what a fresh sign would have done. Keeping is harmless;
     // deleting is not.
-    if (!bytesMayBeLive(e)) await deleteSendBinding(key);
+    // A successful submit may already be live even if retiring its binding
+    // fails. Preserve the original signed bytes for a later replay.
+    if (!accepted && !bytesMayBeLive(e)) await deleteSendBinding(key);
     throw e;
   }
+}
+
+export async function withSendBinding(
+  args: Parameters<typeof runWithSendBinding>[0],
+): Promise<SendBindingResult> {
+  return withConfirmationLock(args.key, () => runWithSendBinding(args));
 }
